@@ -565,6 +565,25 @@ tr:hover { background: var(--bg-hover); }
   margin-bottom: 4px;
 }
 
+/* Summary audit cards */
+.summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.summary-category { background: var(--bg-card); border-radius: var(--radius); padding: 20px; border-left: 5px solid var(--border); }
+.summary-category h3 { font-size: 15px; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+.summary-category .cat-icon { font-size: 20px; }
+.summary-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 13px; }
+.summary-row:last-child { border-bottom: none; }
+.summary-row .label { color: var(--text-muted); }
+.summary-row .value { font-weight: 700; font-size: 15px; }
+.summary-row .value.ok { color: var(--success); }
+.summary-row .value.warn { color: var(--warning); }
+.summary-row .value.bad { color: var(--danger); }
+.summary-row .value.neutral { color: var(--text); }
+.summary-score { text-align: center; padding: 30px; background: var(--bg-card); border-radius: var(--radius); margin-bottom: 24px; }
+.summary-score .score-num { font-size: 72px; font-weight: 800; line-height: 1; }
+.summary-score .score-label { font-size: 14px; color: var(--text-muted); margin-top: 8px; }
+.summary-score .score-bar { width: 100%; height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; margin-top: 16px; overflow: hidden; }
+.summary-score .score-fill { height: 100%; border-radius: 5px; transition: width 0.5s ease; }
+
 /* Bar charts */
 .bar-chart { margin: 16px 0; }
 .bar-item {

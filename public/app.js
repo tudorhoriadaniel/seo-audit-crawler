@@ -91,6 +91,7 @@ function renderAll(analysis) {
   renderAnchors(analysis);
   renderMetaTitles(analysis);
   renderMetaDescriptions(analysis);
+  renderSummary(analysis);
 }
 
 async function startCrawl() {
@@ -226,6 +227,7 @@ socket.on('complete', (data) => {
   renderAnchors(data.analysis);
   renderMetaTitles(data.analysis);
   renderMetaDescriptions(data.analysis);
+  renderSummary(data.analysis);
   $('#saveProject').style.display = '';
 });
 
@@ -790,6 +792,7 @@ window.loadCrawl = async function(id) {
   renderAnchors(analysis);
   renderMetaTitles(analysis);
   renderMetaDescriptions(analysis);
+  renderSummary(analysis);
 
   $('#emptyState').classList.add('hidden');
   $('#dashboardContent').classList.remove('hidden');
@@ -1213,6 +1216,153 @@ function renderAiBots(analysis) {
 }
 
 // ── Helpers ──
+// ── Summary ──
+function renderSummary(analysis) {
+  if (!analysis) { $('#summaryContent').innerHTML = '<p style="color:var(--text-muted)">Run a crawl first.</p>'; return; }
+
+  // Gather all metrics
+  const sc = analysis.statusCodesReport || {};
+  const mt = analysis.metaTitlesReport || {};
+  const md = analysis.metaDescriptionsReport || {};
+  const img = analysis.imageAnalysis || {};
+  const anch = analysis.anchorsReport || {};
+  const sm = analysis.sitemapReport || {};
+  const hvc = analysis.hreflangCanonicalReport || {};
+  const sec = analysis.securityReport || {};
+  const sd = analysis.structuredDataReport || {};
+  const cnt = analysis.contentReport || {};
+  const lnk = analysis.internalLinksReport || {};
+  const iss = analysis.issues || [];
+
+  const criticals = iss.filter(i => i.severity === 'critical').length;
+  const warnings = iss.filter(i => i.severity === 'warning').length;
+  const infos = iss.filter(i => i.severity === 'info').length;
+  const totalIssues = criticals + warnings;
+
+  // Calculate score (0-100)
+  const totalPages = sc.total || 1;
+  let deductions = 0;
+  deductions += Math.min(30, criticals * 2);
+  deductions += Math.min(20, warnings * 0.5);
+  if ((mt.missing?.length || 0) > 0) deductions += 10;
+  if ((md.missing?.length || 0) > 0) deductions += 5;
+  if ((sc.groups?.['4xx']?.urls?.length || 0) > 0) deductions += 10;
+  if ((sc.groups?.['5xx']?.urls?.length || 0) > 0) deductions += 15;
+  if (!sm.found) deductions += 5;
+  if ((hvc.conflicts?.length || 0) > 0) deductions += 10;
+  const score = Math.max(0, Math.min(100, Math.round(100 - deductions)));
+  const scoreColor = score >= 80 ? '#22c55e' : score >= 50 ? '#f59e0b' : '#ef4444';
+  const scoreLabel = score >= 80 ? 'Good' : score >= 50 ? 'Needs Work' : 'Critical Issues';
+
+  const row = (label, value, threshold) => {
+    let cls = 'neutral';
+    if (typeof threshold === 'function') cls = threshold(value);
+    else if (value === 0) cls = 'ok';
+    else if (value > 0) cls = 'bad';
+    return `<div class="summary-row"><span class="label">${label}</span><span class="value ${cls}">${value}</span></div>`;
+  };
+
+  let html = `
+    <div class="summary-score">
+      <div class="score-num" style="color:${scoreColor}">${score}</div>
+      <div class="score-label">${scoreLabel} — SEO Health Score</div>
+      <div class="score-bar"><div class="score-fill" style="width:${score}%;background:${scoreColor}"></div></div>
+    </div>
+
+    <div class="stats-grid" style="margin-bottom:24px">
+      ${statCard('Total Pages Crawled', totalPages, '')}
+      ${statCard('Critical Issues', criticals, criticals > 0 ? 'danger' : 'success')}
+      ${statCard('Warnings', warnings, warnings > 0 ? 'warning' : 'success')}
+      ${statCard('Info', infos, 'info')}
+    </div>
+
+    <div class="summary-grid">
+
+      <div class="summary-category" style="border-left-color:#ef4444">
+        <h3><span class="cat-icon">🔗</span> Status Codes</h3>
+        ${row('2xx (Success)', sc.groups?.['2xx']?.urls?.length || 0, v => 'ok')}
+        ${row('3xx (Redirects)', sc.groups?.['3xx']?.urls?.length || 0, v => v > 0 ? 'warn' : 'ok')}
+        ${row('4xx (Not Found)', sc.groups?.['4xx']?.urls?.length || 0)}
+        ${row('5xx (Server Error)', sc.groups?.['5xx']?.urls?.length || 0)}
+      </div>
+
+      <div class="summary-category" style="border-left-color:#8b5cf6">
+        <h3><span class="cat-icon">📝</span> Meta Titles</h3>
+        ${row('Missing', mt.missing?.length || 0)}
+        ${row('Duplicates', mt.duplicates?.length || 0)}
+        ${row('Too Short (<30 chars)', mt.tooShort?.length || 0)}
+        ${row('Too Long (>60 chars)', mt.tooLong?.length || 0)}
+        ${row('Optimal', mt.optimal || 0, v => 'ok')}
+      </div>
+
+      <div class="summary-category" style="border-left-color:#3b82f6">
+        <h3><span class="cat-icon">📄</span> Meta Descriptions</h3>
+        ${row('Missing', md.missing?.length || 0)}
+        ${row('Duplicates', md.duplicates?.length || 0)}
+        ${row('Too Short (<70 chars)', md.tooShort?.length || 0)}
+        ${row('Too Long (>160 chars)', md.tooLong?.length || 0)}
+        ${row('Optimal', md.optimal || 0, v => 'ok')}
+      </div>
+
+      <div class="summary-category" style="border-left-color:#f59e0b">
+        <h3><span class="cat-icon">🖼️</span> Images</h3>
+        ${row('Total Images', img.totalImages || 0, v => 'neutral')}
+        ${row('Missing Alt Attribute', img.missingAlt || 0)}
+        ${row('Empty Alt Text', img.emptyAlt || 0)}
+        ${row('Unique Images with Issues', img.uniqueIssueImages || 0)}
+      </div>
+
+      <div class="summary-category" style="border-left-color:#22c55e">
+        <h3><span class="cat-icon">🔗</span> Internal Links</h3>
+        ${row('Orphan Pages', lnk.orphanPages?.length || 0)}
+        ${row('Links Without Anchor Text', anch.totalEmptyAnchors || 0)}
+      </div>
+
+      <div class="summary-category" style="border-left-color:#ec4899">
+        <h3><span class="cat-icon">🌍</span> Hreflang & Canonical</h3>
+        ${row('Hreflang/Canonical Conflicts', hvc.conflicts?.length || 0)}
+        ${row('Missing Return Tags', hvc.missingReturnTags || 0, v => v > 0 ? 'warn' : 'ok')}
+        ${row('Missing x-default', hvc.missingXDefault || 0, v => v > 0 ? 'warn' : 'ok')}
+      </div>
+
+      <div class="summary-category" style="border-left-color:#06b6d4">
+        <h3><span class="cat-icon">🗺️</span> Sitemaps</h3>
+        ${row('Sitemap Found', sm.found ? 'Yes' : 'No', v => v === 'Yes' ? 'ok' : 'bad')}
+        ${row('URLs in Sitemap', sm.totalUrls || 0, v => 'neutral')}
+        ${row('Crawled but NOT in Sitemap', sm.notInSitemap?.length || 0, v => v > 0 ? 'warn' : 'ok')}
+        ${row('In Sitemap but NOT Crawled', sm.inSitemapNotCrawled?.length || 0, v => v > 0 ? 'warn' : 'ok')}
+      </div>
+
+      <div class="summary-category" style="border-left-color:#14b8a6">
+        <h3><span class="cat-icon">📊</span> Structured Data</h3>
+        ${row('Pages with Schema', sd.pagesWithSchema || 0, v => 'neutral')}
+        ${row('Pages without Schema', sd.pagesWithoutSchema || 0, v => v > 0 ? 'warn' : 'ok')}
+        ${row('Schema Types Found', Object.keys(sd.typeCounts || {}).length, v => 'neutral')}
+      </div>
+
+      <div class="summary-category" style="border-left-color:#f97316">
+        <h3><span class="cat-icon">🔒</span> Security</h3>
+        ${row('Missing HTTPS', sec.httpPages || 0)}
+        ${row('Mixed Content', sec.mixedContent || 0)}
+        ${row('Missing HSTS Header', sec.missingHSTS || 0, v => v > 0 ? 'warn' : 'ok')}
+        ${row('Missing X-Frame-Options', sec.missingXFrame || 0, v => v > 0 ? 'warn' : 'ok')}
+      </div>
+
+      <div class="summary-category" style="border-left-color:#a855f7">
+        <h3><span class="cat-icon">📏</span> Content Quality</h3>
+        ${row('Thin Content (<300 words)', cnt.thinContent?.length || 0)}
+        ${row('Duplicate Content', cnt.duplicateContent?.length || 0)}
+        ${row('Missing H1', cnt.missingH1?.length || 0)}
+        ${row('Multiple H1s', cnt.multipleH1?.length || 0)}
+        ${row('Slow Pages (>3s)', cnt.slowPages?.length || 0)}
+      </div>
+
+    </div>
+  `;
+
+  $('#summaryContent').innerHTML = html;
+}
+
 function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function truncate(s, len) { s = s || ''; return s.length > len ? s.substring(0, len) + '...' : s; }
 function urlLink(url, maxLen) {
