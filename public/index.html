@@ -42,6 +42,10 @@
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9h12M11 5l4 4-4 4"/></svg>
         Redirects
       </a>
+      <a href="#" class="nav-link" data-view="statuscodes">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="7"/><path d="M9 5v4h3"/></svg>
+        Status Codes
+      </a>
       <a href="#" class="nav-link" data-view="sitemaps">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h12v2H3zM3 8h12v2H3zM3 13h8v2H3z"/></svg>
         Sitemaps
@@ -53,6 +57,10 @@
       <a href="#" class="nav-link" data-view="images">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="14" height="14" rx="2"/><circle cx="7" cy="7" r="2"/><path d="M16 12l-4-4-8 8"/></svg>
         Images
+      </a>
+      <a href="#" class="nav-link" data-view="anchors">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3v12M5 7l4-4 4 4M4 15h10"/></svg>
+        Anchors
       </a>
       <a href="#" class="nav-link" data-view="structured">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h4v4H3zM11 3h4v4h-4zM7 11h4v4H7z"/></svg>
@@ -253,6 +261,12 @@
         <div id="redirectsContent"></div>
       </div>
 
+      <!-- Status Codes view -->
+      <div class="view" id="view-statuscodes">
+        <div class="view-header"><h2>Status Codes</h2></div>
+        <div id="statuscodesContent"></div>
+      </div>
+
       <!-- Content view -->
       <div class="view" id="view-content">
         <div class="view-header"><h2>Content Analysis</h2></div>
@@ -263,6 +277,12 @@
       <div class="view" id="view-images">
         <div class="view-header"><h2>Image Analysis</h2></div>
         <div id="imagesContent"></div>
+      </div>
+
+      <!-- Anchors view -->
+      <div class="view" id="view-anchors">
+        <div class="view-header"><h2>Empty Anchor Text Links</h2></div>
+        <div id="anchorsContent"></div>
       </div>
 
       <!-- Structured Data view -->

@@ -176,6 +176,8 @@ socket.on('complete', (data) => {
   renderLinks(data.analysis);
   renderAiBots(data.analysis);
   renderSitemaps(data.analysis);
+  renderStatusCodes(data.analysis);
+  renderAnchors(data.analysis);
 });
 
 socket.on('error', (data) => {
@@ -570,21 +572,27 @@ function renderImages(analysis) {
   const r = analysis.imageAnalysis;
   let html = `<div class="stats-grid">
     ${statCard('Total Images', r.totalImages, '')}
-    ${statCard('Missing Alt', r.missingAlt, r.missingAlt > 0 ? 'danger' : 'success')}
-    ${statCard('Empty Alt', r.emptyAlt, r.emptyAlt > 0 ? 'warning' : 'success')}
-    ${statCard('Missing Dimensions', r.missingDimensions, r.missingDimensions > 0 ? 'warning' : 'success')}
-    ${statCard('With Lazy Loading', r.withLazyLoading, 'info')}
+    ${statCard('Missing Alt Attr', r.missingAlt, r.missingAlt > 0 ? 'danger' : 'success')}
+    ${statCard('Empty Alt Text', r.emptyAlt, r.emptyAlt > 0 ? 'warning' : 'success')}
+    ${statCard('Unique Images with Issues', r.uniqueIssueImages || 0, r.uniqueIssueImages > 0 ? 'danger' : 'success')}
   </div>`;
 
-  const badImages = r.images.filter(i => !i.hasAlt || i.altEmpty);
-  if (badImages.length > 0) {
-    html += `<div class="section-card"><h3>Images with Alt Issues (${badImages.length})</h3>
-      <table><thead><tr><th>Page</th><th>Image Src</th><th>Issue</th></tr></thead>
-      <tbody>${badImages.slice(0, 100).map(i => `<tr>
-        <td class="url-cell" title="${esc(i.pageUrl)}">${truncate(i.pageUrl, 40)}</td>
-        <td title="${esc(i.src || '')}">${truncate(i.src || 'N/A', 40)}</td>
-        <td>${!i.hasAlt ? '<span class="badge badge-danger">Missing Alt</span>' : '<span class="badge badge-warning">Empty Alt</span>'}</td>
+  const issues = r.issueImages || [];
+  if (issues.length > 0) {
+    html += `<div class="section-card"><h3>Images with Alt Issues (${issues.length} unique images)</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Each image URL is shown once with one example origin page. "Occurrences" shows how many times this image appears across the site.</p>
+      <table><thead><tr><th>Image URL</th><th>Found On</th><th>Issue</th><th>Occurrences</th></tr></thead>
+      <tbody>${issues.slice(0, 500).map(i => `<tr>
+        <td>${i.src ? urlLink(i.src, 50) : '<span style="color:var(--text-muted)">No src</span>'}</td>
+        <td>${urlLink(i.pageUrl, 45)}</td>
+        <td>${i.issue === 'Missing alt attribute' ? '<span class="badge badge-danger">Missing alt attr</span>' : '<span class="badge badge-warning">Empty alt text</span>'}</td>
+        <td>${i.occurrences}</td>
       </tr>`).join('')}</tbody></table></div>`;
+  } else {
+    html += `<div class="section-card" style="text-align:center;padding:40px">
+      <div style="font-size:48px;margin-bottom:16px">✅</div>
+      <h3>All Images Have Alt Text</h3>
+    </div>`;
   }
 
   $('#imagesContent').innerHTML = html;
@@ -713,6 +721,8 @@ window.loadCrawl = async function(id) {
   renderLinks(analysis);
   renderAiBots(analysis);
   renderSitemaps(analysis);
+  renderStatusCodes(analysis);
+  renderAnchors(analysis);
 
   $('#emptyState').classList.add('hidden');
   $('#dashboardContent').classList.remove('hidden');
@@ -728,6 +738,85 @@ window.deleteCrawl = async function(id) {
   await fetch(`/api/crawls/${id}`, { method: 'DELETE' });
   loadHistory();
 };
+
+// ── Status Codes ──
+function renderStatusCodes(analysis) {
+  const r = analysis.statusCodesReport;
+  if (!r) { $('#statuscodesContent').innerHTML = '<p style="color:var(--text-muted)">No data.</p>'; return; }
+
+  let html = `<div class="stats-grid">
+    ${statCard('Total URLs', r.total, '')}
+    ${statCard('2xx Success', r.groups['2xx'].urls.length, 'success')}
+    ${statCard('3xx Redirect', r.groups['3xx'].urls.length, r.groups['3xx'].urls.length > 0 ? 'warning' : '')}
+    ${statCard('4xx Client Error', r.groups['4xx'].urls.length, r.groups['4xx'].urls.length > 0 ? 'danger' : 'success')}
+    ${statCard('5xx Server Error', r.groups['5xx'].urls.length, r.groups['5xx'].urls.length > 0 ? 'danger' : 'success')}
+    ${statCard('Conn Errors', r.groups['error'].urls.length, r.groups['error'].urls.length > 0 ? 'danger' : '')}
+  </div>`;
+
+  // Pie chart
+  if (r.pieChart.length > 0) {
+    html += `<div class="section-card"><h3>Status Code Distribution</h3>
+      <div class="pie-chart-container">
+        ${renderPieChart(r.pieChart, 200)}
+        <div class="pie-legend">
+          ${r.pieChart.map(s => `<div class="pie-legend-item">
+            <div class="pie-legend-dot" style="background:${s.color}"></div>
+            <span class="pie-legend-label">${esc(s.label)}</span>
+            <span class="pie-legend-count">${s.count} (${s.percentage}%)</span>
+          </div>`).join('')}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // Tables for each group
+  const groupOrder = ['2xx', '3xx', '4xx', '5xx', 'error'];
+  const groupColors = { '2xx': 'success', '3xx': 'warning', '4xx': 'danger', '5xx': 'danger', 'error': 'muted' };
+  for (const key of groupOrder) {
+    const g = r.groups[key];
+    if (g.urls.length === 0) continue;
+    html += `<div class="section-card" style="border-left:4px solid ${g.color}">
+      <h3>${esc(g.label)} (${g.urls.length})</h3>
+      <table><thead><tr><th>URL</th><th>Status</th>${key === '3xx' ? '<th>Redirects To</th>' : ''}${key === 'error' ? '<th>Error</th>' : ''}</tr></thead>
+      <tbody>${g.urls.slice(0, 500).map(u => `<tr>
+        <td>${urlLink(u.url, 70)}</td>
+        <td>${u.statusCode ? statusBadge(u.statusCode) : '<span class="badge badge-danger">Error</span>'}</td>
+        ${key === '3xx' ? `<td>${u.finalUrl ? urlLink(u.finalUrl, 50) : '-'}</td>` : ''}
+        ${key === 'error' ? `<td style="font-size:12px;color:var(--text-muted)">${esc(u.error || '')}</td>` : ''}
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  $('#statuscodesContent').innerHTML = html;
+}
+
+// ── Anchors ──
+function renderAnchors(analysis) {
+  const r = analysis.anchorsReport;
+  if (!r) { $('#anchorsContent').innerHTML = '<p style="color:var(--text-muted)">No data.</p>'; return; }
+
+  let html = `<div class="stats-grid">
+    ${statCard('Links Without Anchor Text', r.totalEmptyAnchors, r.totalEmptyAnchors > 0 ? 'warning' : 'success')}
+  </div>`;
+
+  if (r.totalEmptyAnchors === 0) {
+    html += `<div class="section-card" style="text-align:center;padding:40px">
+      <div style="font-size:48px;margin-bottom:16px">✅</div>
+      <h3>All Internal Links Have Anchor Text</h3>
+    </div>`;
+  } else {
+    html += `<div class="section-card">
+      <h3>Internal Links Missing Anchor Text (${r.totalEmptyAnchors})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These internal links have no visible anchor text, which reduces their SEO value and accessibility.</p>
+      <table><thead><tr><th>Origin Page</th><th>Destination URL</th><th>Nofollow</th></tr></thead>
+      <tbody>${r.emptyAnchors.slice(0, 500).map(a => `<tr>
+        <td>${urlLink(a.from, 50)}</td>
+        <td>${urlLink(a.to, 50)}</td>
+        <td>${a.isNofollow ? '<span class="badge badge-warning">Yes</span>' : 'No'}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  $('#anchorsContent').innerHTML = html;
+}
 
 // ── Sitemaps ──
 function renderSitemaps(analysis) {
@@ -955,6 +1044,11 @@ function renderAiBots(analysis) {
 // ── Helpers ──
 function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function truncate(s, len) { s = s || ''; return s.length > len ? s.substring(0, len) + '...' : s; }
+function urlLink(url, maxLen) {
+  if (!url) return '-';
+  const display = maxLen ? truncate(url, maxLen) : esc(url);
+  return `<a href="${esc(url)}" target="_blank" rel="noopener" class="url-cell" title="${esc(url)}">${display}</a>`;
+}
 function formatBytes(b) { if (b < 1024) return b + ' B'; if (b < 1048576) return (b/1024).toFixed(1) + ' KB'; return (b/1048576).toFixed(1) + ' MB'; }
 function statusBadge(code) {
   if (!code || code === 0) return '<span class="badge badge-danger">Error</span>';
