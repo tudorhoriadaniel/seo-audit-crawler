@@ -305,9 +305,11 @@ body {
 /* Tables */
 .table-container { overflow-x: auto; }
 table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  table-layout: fixed;
 }
 th {
   background: var(--bg-card);
@@ -324,17 +326,159 @@ th {
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
+  position: relative;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 th:hover { color: var(--text); }
+/* Resizable column handle */
+th .col-resize {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 1;
+}
+th .col-resize:hover, th .col-resize.active { background: var(--primary); }
 td {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
-  max-width: 400px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 tr:hover { background: var(--bg-hover); }
+
+/* Live feed */
+.live-feed {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column-reverse;
+}
+.live-feed-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-card);
+  z-index: 1;
+}
+.live-feed-header .pulse {
+  width: 8px; height: 8px;
+  background: var(--success);
+  border-radius: 50%;
+  animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .3; }
+}
+.feed-item {
+  padding: 6px 16px;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(42,46,61,.4);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.feed-item:hover { background: var(--bg-hover); }
+.feed-url { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+.feed-status { min-width: 40px; text-align: center; }
+.feed-time { min-width: 60px; text-align: right; color: var(--text-muted); font-size: 11px; }
+
+/* Settings icon top-right */
+.topbar-settings {
+  position: relative;
+  margin-left: auto;
+}
+.settings-icon {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  transition: all .15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-icon span { font-size: 12px; font-weight: 600; }
+.settings-icon:hover { color: var(--text); border-color: var(--text-muted); }
+.settings-dropdown {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  min-width: 280px;
+  z-index: 60;
+  box-shadow: 0 8px 32px rgba(0,0,0,.4);
+}
+.settings-dropdown.open { display: block; }
+.settings-dropdown h4 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.setting-row:last-child { border-bottom: none; }
+/* Toggle switch */
+.toggle {
+  position: relative;
+  width: 40px;
+  height: 22px;
+}
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle .slider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  border-radius: 11px;
+  cursor: pointer;
+  transition: .2s;
+  border: 1px solid var(--border);
+}
+.toggle .slider::before {
+  content: '';
+  position: absolute;
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: .2s;
+}
+.toggle input:checked + .slider { background: var(--primary); border-color: var(--primary); }
+.toggle input:checked + .slider::before { transform: translateX(18px); background: #fff; }
 
 /* Status badges */
 .badge {

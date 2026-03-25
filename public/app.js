@@ -25,8 +25,15 @@ $('#menuToggle').addEventListener('click', () => {
   $('#sidebar').classList.toggle('open');
 });
 
-$('#optionsToggle').addEventListener('click', () => {
-  $('#optionsPanel').classList.toggle('hidden');
+// ── Settings dropdown ──
+$('#settingsToggle').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('#settingsDropdown').classList.toggle('open');
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.topbar-settings')) {
+    $('#settingsDropdown').classList.remove('open');
+  }
 });
 
 // ── Start Crawl ──
@@ -42,7 +49,7 @@ async function startCrawl() {
     maxPages: parseInt($('#optMaxPages').value) || 500,
     maxDepth: parseInt($('#optMaxDepth').value) || 10,
     concurrency: parseInt($('#optConcurrency').value) || 5,
-    respectRobots: $('#optRobots').value === 'true',
+    respectRobots: $('#optRobots').checked,
     userAgent: $('#optUserAgent').value || undefined
   };
 
@@ -66,6 +73,8 @@ async function startCrawl() {
     $('#stopCrawl').classList.remove('hidden');
     $('#pauseCrawl').classList.remove('hidden');
     $('#progressContainer').classList.remove('hidden');
+    $('#liveFeed').classList.remove('hidden');
+    $('#liveFeedItems').innerHTML = '';
     $('#emptyState').classList.add('hidden');
     $('#dashboardContent').classList.remove('hidden');
     $('#dashboardContent').innerHTML = '<p style="color:var(--text-muted)">Crawling in progress...</p>';
@@ -106,6 +115,7 @@ function resetCrawlUI() {
   $('#pauseCrawl').classList.add('hidden');
   $('#pauseCrawl').textContent = 'Pause';
   $('#progressContainer').classList.add('hidden');
+  $('#liveFeed').classList.add('hidden');
 }
 
 // ── Socket events ──
@@ -118,6 +128,20 @@ socket.on('progress', (data) => {
 
 socket.on('page', (page) => {
   pagesData.push(page);
+  // Live feed
+  const feed = $('#liveFeedItems');
+  if (feed) {
+    const item = document.createElement('div');
+    item.className = 'feed-item';
+    item.innerHTML = `
+      <span class="feed-status">${statusBadge(page.statusCode)}</span>
+      <span class="feed-url" title="${esc(page.url)}">${esc(page.url)}</span>
+      <span class="feed-time">${page.responseTime || 0}ms</span>
+    `;
+    feed.prepend(item);
+    // Keep max 100 items
+    while (feed.children.length > 100) feed.removeChild(feed.lastChild);
+  }
 });
 
 socket.on('complete', (data) => {
@@ -700,6 +724,61 @@ function severityBadge(s) {
   const map = { critical: 'danger', warning: 'warning', error: 'danger', info: 'info' };
   return `<span class="badge badge-${map[s] || 'muted'}">${s}</span>`;
 }
+
+// ── Resizable table columns ──
+function initResizableColumns(tableContainer) {
+  if (!tableContainer) return;
+  const table = tableContainer.querySelector('table');
+  if (!table) return;
+
+  const ths = table.querySelectorAll('th');
+  ths.forEach(th => {
+    // Set initial width from content
+    if (!th.style.width) {
+      th.style.width = th.offsetWidth + 'px';
+    }
+    // Add resize handle
+    const handle = document.createElement('div');
+    handle.className = 'col-resize';
+    th.appendChild(handle);
+
+    let startX, startW;
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      startX = e.pageX;
+      startW = th.offsetWidth;
+      handle.classList.add('active');
+
+      function onMove(e2) {
+        const diff = e2.pageX - startX;
+        const newW = Math.max(60, startW + diff);
+        th.style.width = newW + 'px';
+        th.style.minWidth = newW + 'px';
+      }
+      function onUp() {
+        handle.classList.remove('active');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+}
+
+// Observe table containers for new tables
+const tableObserver = new MutationObserver((mutations) => {
+  for (const m of mutations) {
+    if (m.type === 'childList') {
+      const container = m.target;
+      if (container.classList?.contains('table-container') || container.querySelector?.('.table-container')) {
+        document.querySelectorAll('.table-container').forEach(initResizableColumns);
+      }
+    }
+  }
+});
+tableObserver.observe(document.getElementById('viewsContainer'), { childList: true, subtree: true });
 
 // Load history on page load
 loadHistory();
