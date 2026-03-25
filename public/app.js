@@ -356,7 +356,7 @@ function renderPagesTable(pages) {
       <td>${p.depth || 0}</td>
     </tr>`).join('')}</tbody>
   </table>`;
-  $('#pagesTable').innerHTML = html;
+  $('#pagesTable').innerHTML = exportBtn('allpages') + html;
 
   // Click handler for page details
   $$('.page-row').forEach(row => {
@@ -451,7 +451,7 @@ function renderIssues(analysis) {
     `;
 
     $('#issuesTable').innerHTML = `
-      <div style="margin-bottom:12px"><button class="btn btn-sm" onclick="exportIssuesToCSV()">📥 Export Issues CSV</button></div>
+      ${exportBtn('issues')}
       <table>
       <thead><tr><th>Severity</th><th>Category</th><th>URL</th><th>Issue</th></tr></thead>
       <tbody>${filtered.map(i => `<tr>
@@ -508,7 +508,7 @@ function renderHreflang(analysis) {
       </tr>`).join('')}</tbody></table></div>`;
   }
 
-  $('#hreflangContent').innerHTML = html;
+  $('#hreflangContent').innerHTML = exportBtn('hreflang') + html;
 }
 
 // ── Canonicals ──
@@ -537,7 +537,7 @@ function renderCanonicals(analysis) {
       <tbody>${r.missingPages.map(u => `<tr><td class="url-cell" title="${esc(u)}">${truncate(u, 80)}</td></tr>`).join('')}</tbody></table></div>`;
   }
 
-  $('#canonicalsContent').innerHTML = html;
+  $('#canonicalsContent').innerHTML = exportBtn('canonicals') + html;
 }
 
 // ── Hreflang vs Canonical Conflicts ──
@@ -576,7 +576,7 @@ function renderConflicts(analysis) {
     </div>`;
   }
 
-  $('#conflictsContent').innerHTML = html;
+  $('#conflictsContent').innerHTML = exportBtn('hreflang-canonical') + html;
 }
 
 // ── Redirects ──
@@ -598,7 +598,7 @@ function renderRedirects(analysis) {
       </tr>`).join('')}</tbody></table></div>`;
   }
 
-  $('#redirectsContent').innerHTML = html;
+  $('#redirectsContent').innerHTML = exportBtn('redirects') + html;
 }
 
 // ── Content ──
@@ -631,7 +631,7 @@ function renderContent(analysis) {
     html += '</div>';
   }
 
-  $('#contentContent').innerHTML = html;
+  $('#contentContent').innerHTML = exportBtn('content') + html;
 }
 
 // ── Images ──
@@ -662,7 +662,7 @@ function renderImages(analysis) {
     </div>`;
   }
 
-  $('#imagesContent').innerHTML = html;
+  $('#imagesContent').innerHTML = exportBtn('images') + html;
 }
 
 // ── Structured Data ──
@@ -684,7 +684,7 @@ function renderStructuredData(analysis) {
       ).join('')}</div></div>`;
   }
 
-  $('#structuredContent').innerHTML = html;
+  $('#structuredContent').innerHTML = exportBtn('structured') + html;
 }
 
 // ── Security ──
@@ -707,7 +707,7 @@ function renderSecurity(analysis) {
     `<div class="bar-item"><span class="bar-label">${esc(name)}</span><div class="bar-track"><div class="bar-fill ${data.present > data.missing ? 'success' : 'danger'}" style="width:${(data.present/max*100).toFixed(0)}%">${data.present}/${max}</div></div></div>`
   ).join('') + '</div></div>';
 
-  $('#securityContent').innerHTML = html;
+  $('#securityContent').innerHTML = exportBtn('security') + html;
 }
 
 // ── Internal Links ──
@@ -733,7 +733,7 @@ function renderLinks(analysis) {
       ).join('')}</tbody></table></div>`;
   }
 
-  $('#linksContent').innerHTML = html;
+  $('#linksContent').innerHTML = exportBtn('links') + html;
 }
 
 // ── History ──
@@ -871,7 +871,7 @@ function _renderStatusCodesUI() {
       </tr>`).join('')}</tbody></table></div>`;
   }
 
-  $('#statuscodesContent').innerHTML = html;
+  $('#statuscodesContent').innerHTML = exportBtn('statuscodes') + html;
 }
 
 function filterStatusCodes(key) {
@@ -909,7 +909,7 @@ function renderAnchors(analysis) {
       </tr>`).join('')}</tbody></table></div>`;
   }
 
-  $('#anchorsContent').innerHTML = html;
+  $('#anchorsContent').innerHTML = exportBtn('anchors') + html;
 }
 
 // ── Meta Titles ──
@@ -949,7 +949,7 @@ function _renderMT() {
   if (f === 'all' || f === 'long') {
     if (r.tooLong.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Long (${r.tooLong.length})</h3><table><thead><tr><th>URL</th><th>Title</th><th>Len</th></tr></thead><tbody>${r.tooLong.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${esc(p.title)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
   }
-  $('#metatitlesContent').innerHTML = html;
+  $('#metatitlesContent').innerHTML = exportBtn('metatitles') + html;
 }
 
 // ── Meta Descriptions ──
@@ -989,7 +989,7 @@ function _renderMD() {
   if (f === 'all' || f === 'long') {
     if (r.tooLong.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Long (${r.tooLong.length})</h3><table><thead><tr><th>URL</th><th>Description</th><th>Len</th></tr></thead><tbody>${r.tooLong.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${esc(p.metaDescription)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
   }
-  $('#metadescriptionsContent').innerHTML = html;
+  $('#metadescriptionsContent').innerHTML = exportBtn('metadescriptions') + html;
 }
 
 // ── Sitemaps ──
@@ -1016,7 +1016,7 @@ function renderSitemaps(analysis) {
       </div>`;
     }
 
-    $('#sitemapsContent').innerHTML = html;
+    $('#sitemapsContent').innerHTML = exportBtn('sitemaps') + html;
     return;
   }
 
@@ -1094,7 +1094,7 @@ function renderSitemaps(analysis) {
       <tbody>${r.inSitemapNotCrawled.slice(0, 200).map(u => `<tr><td class="url-cell" title="${esc(u)}">${esc(u)}</td></tr>`).join('')}</tbody></table></div>`;
   }
 
-  $('#sitemapsContent').innerHTML = html;
+  $('#sitemapsContent').innerHTML = exportBtn('sitemaps') + html;
 }
 
 function renderPieChart(data, size) {
@@ -1360,11 +1360,19 @@ function renderSummary(analysis) {
     </div>
   `;
 
-  $('#summaryContent').innerHTML = html;
+  $('#summaryContent').innerHTML = exportBtn('summary') + html;
 }
 
 function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function truncate(s, len) { s = s || ''; return s.length > len ? s.substring(0, len) + '...' : s; }
+function exportBtn(section) {
+  if (!currentCrawlId) return '';
+  return `<div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button class="btn btn-sm btn-export" onclick="exportSection('${section}')" title="Export to Excel" style="background:var(--primary);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:6px">📥 Export XLSX</button></div>`;
+}
+function exportSection(section) {
+  if (!currentCrawlId) return;
+  window.open(`/api/crawls/${currentCrawlId}/export-section/${section}`, '_blank');
+}
 function urlLink(url, maxLen) {
   if (!url) return '-';
   const display = maxLen ? truncate(url, maxLen) : esc(url);

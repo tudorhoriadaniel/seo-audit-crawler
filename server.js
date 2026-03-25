@@ -297,6 +297,131 @@ app.get('/api/crawls/:id/export/:format', (req, res) => {
   }
 });
 
+// Per-section XLSX export
+app.get('/api/crawls/:id/export-section/:section', (req, res) => {
+  const crawl = db.getCrawl(req.params.id);
+  if (!crawl) return res.status(404).json({ error: 'Crawl not found' });
+  const pages = db.getPages(req.params.id);
+  const mapped = mapPagesForAnalysis(pages);
+  const Analyzer = require('./lib/analyzer');
+  const analysis = new Analyzer(mapped).analyze();
+  const XLSX = require('xlsx');
+  const section = req.params.section;
+
+  let data = [];
+  let sheetName = section;
+
+  switch (section) {
+    case 'issues':
+      data = (analysis.issues || []).map(i => ({ URL: i.url, Severity: i.severity, Category: i.category, Issue: i.issue }));
+      sheetName = 'Issues';
+      break;
+    case 'canonicals':
+      data = mapped.filter(p => p.statusCode < 300).map(p => ({ URL: p.url, Canonical: p.canonical || '', 'Self-Referencing': p.canonicalIsSelf ? 'Yes' : 'No' }));
+      sheetName = 'Canonicals';
+      break;
+    case 'hreflang':
+      data = mapped.filter(p => p.hreflangs?.length > 0).map(p => ({ URL: p.url, Hreflangs: p.hreflangs.map(h => `${h.lang}: ${h.url}`).join(' | ') }));
+      sheetName = 'Hreflang';
+      break;
+    case 'hreflang-canonical':
+      data = (analysis.hreflangCanonicalReport?.conflicts || []).map(c => ({ URL: c.url, Canonical: c.canonical, Type: c.type, Details: c.details }));
+      sheetName = 'Hreflang vs Canonical';
+      break;
+    case 'redirects':
+      data = (analysis.redirectReport?.chains || []).map(r => ({ 'Original URL': r.url, 'Final URL': r.finalUrl, Hops: r.hops, Chain: (r.chain || []).map(c => `${c.statusCode}: ${c.url}`).join(' → ') }));
+      sheetName = 'Redirects';
+      break;
+    case 'statuscodes':
+      data = mapped.map(p => ({ URL: p.url, Status: p.statusCode, 'Final URL': p.finalUrl || '' }));
+      sheetName = 'Status Codes';
+      break;
+    case 'metatitles':
+      data = mapped.filter(p => p.statusCode < 300).map(p => ({ URL: p.url, Title: p.title || '', Length: p.titleLength || 0 }));
+      sheetName = 'Meta Titles';
+      break;
+    case 'metadescriptions':
+      data = mapped.filter(p => p.statusCode < 300).map(p => ({ URL: p.url, 'Meta Description': p.metaDescription || '', Length: p.metaDescriptionLength || 0 }));
+      sheetName = 'Meta Descriptions';
+      break;
+    case 'images':
+      data = (analysis.imageAnalysis?.issueImages || []).map(i => ({ 'Image URL': i.src, 'Found On': i.pageUrl, Issue: i.issue, Occurrences: i.occurrences }));
+      sheetName = 'Image Issues';
+      break;
+    case 'anchors':
+      data = (analysis.anchorsReport?.emptyAnchors || []).map(a => ({ 'Origin Page': a.from, 'Destination URL': a.to, Nofollow: a.isNofollow ? 'Yes' : 'No' }));
+      sheetName = 'Empty Anchors';
+      break;
+    case 'sitemaps':
+      const sm = analysis.sitemapReport || {};
+      data = (sm.notInSitemap || []).map(u => ({ URL: u, Status: 'Crawled, not in sitemap' }));
+      (sm.inSitemapNotCrawled || []).forEach(u => data.push({ URL: u, Status: 'In sitemap, not crawled' }));
+      sheetName = 'Sitemap Analysis';
+      break;
+    case 'content':
+      data = mapped.filter(p => p.statusCode < 300).map(p => ({ URL: p.url, 'Word Count': p.wordCount || 0, 'H1 Count': p.h1Count || 0, 'H2 Count': p.h2Count || 0, 'Response Time (ms)': p.responseTime || 0 }));
+      sheetName = 'Content';
+      break;
+    case 'structured':
+      data = mapped.filter(p => p.statusCode < 300).map(p => ({ URL: p.url, 'Has Schema': p.hasStructuredData ? 'Yes' : 'No', Types: (p.structuredData || []).join(', ') }));
+      sheetName = 'Structured Data';
+      break;
+    case 'security':
+      data = mapped.filter(p => p.statusCode < 300).map(p => ({ URL: p.url, HTTPS: p.url.startsWith('https') ? 'Yes' : 'No', HSTS: p.securityHeaders?.['strict-transport-security'] ? 'Yes' : 'No', 'X-Frame-Options': p.securityHeaders?.['x-frame-options'] || 'Missing' }));
+      sheetName = 'Security';
+      break;
+    case 'links':
+      const lnk = analysis.internalLinksReport || {};
+      data = (lnk.mostLinked || []).map(l => ({ URL: l.url, 'Inbound Links': l.inboundLinks }));
+      sheetName = 'Internal Links';
+      break;
+    case 'allpages':
+      data = mapped.map(p => ({ URL: p.url, Status: p.statusCode, Title: p.title || '', 'Title Length': p.titleLength || 0, 'Meta Description': (p.metaDescription || '').substring(0, 200), 'Meta Desc Length': p.metaDescriptionLength || 0, 'Word Count': p.wordCount || 0, Canonical: p.canonical || '', 'Response Time': p.responseTime || 0 }));
+      sheetName = 'All Pages';
+      break;
+    case 'summary': {
+      const sc = analysis.statusCodesReport || {};
+      const mt = analysis.metaTitlesReport || {};
+      const md = analysis.metaDescriptionsReport || {};
+      data = [
+        { Category: 'Total Pages', Value: sc.total || 0 },
+        { Category: '2xx Pages', Value: sc.groups?.['2xx']?.urls?.length || 0 },
+        { Category: '3xx Redirects', Value: sc.groups?.['3xx']?.urls?.length || 0 },
+        { Category: '4xx Errors', Value: sc.groups?.['4xx']?.urls?.length || 0 },
+        { Category: '5xx Errors', Value: sc.groups?.['5xx']?.urls?.length || 0 },
+        { Category: 'Missing Titles', Value: mt.missing?.length || 0 },
+        { Category: 'Duplicate Titles', Value: mt.duplicates?.length || 0 },
+        { Category: 'Missing Descriptions', Value: md.missing?.length || 0 },
+        { Category: 'Duplicate Descriptions', Value: md.duplicates?.length || 0 },
+        { Category: 'Images Missing Alt', Value: analysis.imageAnalysis?.missingAlt || 0 },
+        { Category: 'Critical Issues', Value: (analysis.issues || []).filter(i => i.severity === 'critical').length },
+        { Category: 'Warnings', Value: (analysis.issues || []).filter(i => i.severity === 'warning').length },
+      ];
+      sheetName = 'Summary';
+      break;
+    }
+    default:
+      return res.status(400).json({ error: 'Unknown section' });
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(data);
+  // Auto-size columns
+  if (data.length > 0) {
+    const cols = Object.keys(data[0]).map(k => {
+      const maxLen = Math.max(k.length, ...data.slice(0, 100).map(r => String(r[k] || '').length));
+      return { wch: Math.min(80, maxLen + 2) };
+    });
+    ws['!cols'] = cols;
+  }
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename=${section}-export.xlsx`);
+  res.send(buf);
+});
+
 // Pause/Resume/Abort
 app.post('/api/crawls/:id/pause', (req, res) => {
   const crawler = activeCrawls.get(req.params.id);
