@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SEO Audit Crawler - Converta.ro</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🔍</text></svg>">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <h1>SEO Crawler</h1>
+      <span class="version">v2.0</span>
+    </div>
+    <div class="nav-links">
+      <a href="#" class="nav-link active" data-view="dashboard">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="7"/><path d="M9 5v4l2.5 2.5"/></svg>
+        Dashboard
+      </a>
+      <a href="#" class="nav-link" data-view="pages">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h12v12H3z"/><path d="M3 7h12M7 3v12"/></svg>
+        All Pages
+      </a>
+      <a href="#" class="nav-link" data-view="issues">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 1l8 14H1L9 1z"/><path d="M9 6v4M9 12v1"/></svg>
+        Issues
+      </a>
+      <a href="#" class="nav-link" data-view="hreflang">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="7"/><path d="M2 9h14M9 2c2 2.5 3 5 3 7s-1 4.5-3 7M9 2c-2 2.5-3 5-3 7s1 4.5 3 7"/></svg>
+        Hreflang
+      </a>
+      <a href="#" class="nav-link" data-view="canonicals">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h6v12H6z"/><path d="M3 6h12M3 12h12"/></svg>
+        Canonicals
+      </a>
+      <a href="#" class="nav-link" data-view="conflicts">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 9l7-7 7 7M2 9l7 7 7-7"/></svg>
+        Hreflang vs Canonical
+      </a>
+      <a href="#" class="nav-link" data-view="redirects">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9h12M11 5l4 4-4 4"/></svg>
+        Redirects
+      </a>
+      <a href="#" class="nav-link" data-view="content">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h12M3 7h8M3 11h10M3 15h6"/></svg>
+        Content
+      </a>
+      <a href="#" class="nav-link" data-view="images">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="14" height="14" rx="2"/><circle cx="7" cy="7" r="2"/><path d="M16 12l-4-4-8 8"/></svg>
+        Images
+      </a>
+      <a href="#" class="nav-link" data-view="structured">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h4v4H3zM11 3h4v4h-4zM7 11h4v4H7z"/></svg>
+        Structured Data
+      </a>
+      <a href="#" class="nav-link" data-view="security">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2l6 3v4c0 4-2.5 7-6 9-3.5-2-6-5-6-9V5l6-3z"/></svg>
+        Security
+      </a>
+      <a href="#" class="nav-link" data-view="links">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 11l4-4M5 9l-2 2a3 3 0 004 4l2-2M13 9l2-2a3 3 0 00-4-4l-2 2"/></svg>
+        Internal Links
+      </a>
+      <a href="#" class="nav-link" data-view="history">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v12h12"/><path d="M7 11l3-4 3 2 3-5"/></svg>
+        History
+      </a>
+    </div>
+  </nav>
+
+  <main class="main-content">
+    <!-- Top bar -->
+    <div class="topbar">
+      <button class="menu-toggle" id="menuToggle">☰</button>
+      <div class="crawl-input-bar" id="crawlBar">
+        <input type="url" id="urlInput" placeholder="Enter website URL to crawl (e.g., https://example.com)" autocomplete="url">
+        <div class="crawl-options-toggle" id="optionsToggle">Options ▾</div>
+        <button class="btn btn-primary" id="startCrawl">Start Crawl</button>
+        <button class="btn btn-danger hidden" id="stopCrawl">Stop</button>
+        <button class="btn btn-secondary hidden" id="pauseCrawl">Pause</button>
+      </div>
+    </div>
+
+    <!-- Options panel -->
+    <div class="options-panel hidden" id="optionsPanel">
+      <div class="options-grid">
+        <div class="option-group">
+          <label>Max Pages</label>
+          <input type="number" id="optMaxPages" value="500" min="1" max="10000">
+        </div>
+        <div class="option-group">
+          <label>Max Depth</label>
+          <input type="number" id="optMaxDepth" value="10" min="1" max="50">
+        </div>
+        <div class="option-group">
+          <label>Concurrency</label>
+          <input type="number" id="optConcurrency" value="5" min="1" max="20">
+        </div>
+        <div class="option-group">
+          <label>Respect robots.txt</label>
+          <select id="optRobots">
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </div>
+        <div class="option-group">
+          <label>User Agent</label>
+          <input type="text" id="optUserAgent" placeholder="Default crawler UA">
+        </div>
+      </div>
+    </div>
+
+    <!-- Progress bar -->
+    <div class="progress-bar-container hidden" id="progressContainer">
+      <div class="progress-info">
+        <span id="progressText">Crawling...</span>
+        <span id="progressStats"></span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+    </div>
+
+    <!-- Views container -->
+    <div class="views-container" id="viewsContainer">
+      <!-- Dashboard view -->
+      <div class="view active" id="view-dashboard">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-icon">🔍</div>
+          <h2>Start an SEO Audit</h2>
+          <p>Enter a URL above to begin crawling and analyzing your website for SEO issues.</p>
+          <div class="features-grid">
+            <div class="feature">
+              <strong>Complete Crawl</strong>
+              <span>All pages, status codes, redirects</span>
+            </div>
+            <div class="feature">
+              <strong>On-Page SEO</strong>
+              <span>Titles, descriptions, headings, content</span>
+            </div>
+            <div class="feature">
+              <strong>Hreflang Analysis</strong>
+              <span>Language tags, return links, x-default</span>
+            </div>
+            <div class="feature">
+              <strong>Canonical Tags</strong>
+              <span>Self-ref, canonicalized, missing</span>
+            </div>
+            <div class="feature">
+              <strong>Hreflang vs Canonical</strong>
+              <span>Conflict detection between both</span>
+            </div>
+            <div class="feature">
+              <strong>Structured Data</strong>
+              <span>JSON-LD detection and types</span>
+            </div>
+            <div class="feature">
+              <strong>Images</strong>
+              <span>Alt text, dimensions, lazy loading</span>
+            </div>
+            <div class="feature">
+              <strong>Security Headers</strong>
+              <span>HSTS, CSP, X-Frame-Options</span>
+            </div>
+          </div>
+        </div>
+        <div class="dashboard-content hidden" id="dashboardContent"></div>
+      </div>
+
+      <!-- Pages view -->
+      <div class="view" id="view-pages">
+        <div class="view-header">
+          <h2>All Crawled Pages</h2>
+          <div class="view-actions">
+            <input type="text" class="filter-input" id="pagesFilter" placeholder="Filter URLs...">
+            <select id="pagesStatusFilter">
+              <option value="">All Status Codes</option>
+              <option value="200">200 OK</option>
+              <option value="301">301 Redirect</option>
+              <option value="302">302 Redirect</option>
+              <option value="404">404 Not Found</option>
+              <option value="500">500 Server Error</option>
+            </select>
+            <div class="export-dropdown">
+              <button class="btn btn-secondary export-btn">Export ▾</button>
+              <div class="export-menu">
+                <a href="#" data-format="csv">CSV</a>
+                <a href="#" data-format="xlsx">XLSX</a>
+                <a href="#" data-format="json">JSON</a>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="table-container" id="pagesTable"></div>
+      </div>
+
+      <!-- Issues view -->
+      <div class="view" id="view-issues">
+        <div class="view-header">
+          <h2>SEO Issues</h2>
+          <div class="view-actions">
+            <select id="issuesSeverity">
+              <option value="">All Severities</option>
+              <option value="critical">Critical</option>
+              <option value="warning">Warning</option>
+              <option value="info">Info</option>
+            </select>
+            <select id="issuesCategory">
+              <option value="">All Categories</option>
+            </select>
+          </div>
+        </div>
+        <div class="issues-summary" id="issuesSummary"></div>
+        <div class="table-container" id="issuesTable"></div>
+      </div>
+
+      <!-- Hreflang view -->
+      <div class="view" id="view-hreflang">
+        <div class="view-header"><h2>Hreflang Analysis</h2></div>
+        <div id="hreflangContent"></div>
+      </div>
+
+      <!-- Canonicals view -->
+      <div class="view" id="view-canonicals">
+        <div class="view-header"><h2>Canonical Tags Analysis</h2></div>
+        <div id="canonicalsContent"></div>
+      </div>
+
+      <!-- Conflicts view -->
+      <div class="view" id="view-conflicts">
+        <div class="view-header"><h2>Hreflang vs Canonical Conflicts</h2></div>
+        <div id="conflictsContent"></div>
+      </div>
+
+      <!-- Redirects view -->
+      <div class="view" id="view-redirects">
+        <div class="view-header"><h2>Redirect Chains</h2></div>
+        <div id="redirectsContent"></div>
+      </div>
+
+      <!-- Content view -->
+      <div class="view" id="view-content">
+        <div class="view-header"><h2>Content Analysis</h2></div>
+        <div id="contentContent"></div>
+      </div>
+
+      <!-- Images view -->
+      <div class="view" id="view-images">
+        <div class="view-header"><h2>Image Analysis</h2></div>
+        <div id="imagesContent"></div>
+      </div>
+
+      <!-- Structured Data view -->
+      <div class="view" id="view-structured">
+        <div class="view-header"><h2>Structured Data</h2></div>
+        <div id="structuredContent"></div>
+      </div>
+
+      <!-- Security view -->
+      <div class="view" id="view-security">
+        <div class="view-header"><h2>Security Headers</h2></div>
+        <div id="securityContent"></div>
+      </div>
+
+      <!-- Internal Links view -->
+      <div class="view" id="view-links">
+        <div class="view-header"><h2>Internal Link Analysis</h2></div>
+        <div id="linksContent"></div>
+      </div>
+
+      <!-- History view -->
+      <div class="view" id="view-history">
+        <div class="view-header"><h2>Crawl History</h2></div>
+        <div id="historyContent"></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+node_modules
+.git
+*.db
+data/
+venv/
+__pycache__/
+output/
+exports/
+*.pyc
+.DS_Store
+test*.db
+seo_crawler.db

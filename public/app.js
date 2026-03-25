@@ -1,0 +1,705 @@
+/* global io */
+const socket = io();
+let currentCrawlId = null;
+let analysisData = null;
+let pagesData = [];
+
+// ── DOM refs ──
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
+
+// ── Navigation ──
+$$('.nav-link').forEach(link => {
+  link.addEventListener('click', (e) => {
+    e.preventDefault();
+    const view = link.dataset.view;
+    $$('.nav-link').forEach(l => l.classList.remove('active'));
+    link.classList.add('active');
+    $$('.view').forEach(v => v.classList.remove('active'));
+    $(`#view-${view}`).classList.add('active');
+    if (view === 'history') loadHistory();
+  });
+});
+
+$('#menuToggle').addEventListener('click', () => {
+  $('#sidebar').classList.toggle('open');
+});
+
+$('#optionsToggle').addEventListener('click', () => {
+  $('#optionsPanel').classList.toggle('hidden');
+});
+
+// ── Start Crawl ──
+$('#startCrawl').addEventListener('click', startCrawl);
+$('#urlInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') startCrawl(); });
+
+async function startCrawl() {
+  const url = $('#urlInput').value.trim();
+  if (!url) return;
+
+  const body = {
+    url,
+    maxPages: parseInt($('#optMaxPages').value) || 500,
+    maxDepth: parseInt($('#optMaxDepth').value) || 10,
+    concurrency: parseInt($('#optConcurrency').value) || 5,
+    respectRobots: $('#optRobots').value === 'true',
+    userAgent: $('#optUserAgent').value || undefined
+  };
+
+  try {
+    const res = await fetch('/api/crawls', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.error) return alert(data.error);
+
+    currentCrawlId = data.id;
+    pagesData = [];
+    analysisData = null;
+
+    socket.emit('join', currentCrawlId);
+
+    // UI state
+    $('#startCrawl').classList.add('hidden');
+    $('#stopCrawl').classList.remove('hidden');
+    $('#pauseCrawl').classList.remove('hidden');
+    $('#progressContainer').classList.remove('hidden');
+    $('#emptyState').classList.add('hidden');
+    $('#dashboardContent').classList.remove('hidden');
+    $('#dashboardContent').innerHTML = '<p style="color:var(--text-muted)">Crawling in progress...</p>';
+    $('#progressFill').style.width = '0%';
+
+    // Navigate to dashboard
+    $$('.nav-link').forEach(l => l.classList.remove('active'));
+    $('[data-view="dashboard"]').classList.add('active');
+    $$('.view').forEach(v => v.classList.remove('active'));
+    $('#view-dashboard').classList.add('active');
+  } catch (e) {
+    alert('Failed to start crawl: ' + e.message);
+  }
+}
+
+// Stop / Pause
+$('#stopCrawl').addEventListener('click', async () => {
+  if (!currentCrawlId) return;
+  await fetch(`/api/crawls/${currentCrawlId}/abort`, { method: 'POST' });
+  resetCrawlUI();
+});
+
+$('#pauseCrawl').addEventListener('click', async () => {
+  if (!currentCrawlId) return;
+  const btn = $('#pauseCrawl');
+  if (btn.textContent === 'Pause') {
+    await fetch(`/api/crawls/${currentCrawlId}/pause`, { method: 'POST' });
+    btn.textContent = 'Resume';
+  } else {
+    await fetch(`/api/crawls/${currentCrawlId}/resume`, { method: 'POST' });
+    btn.textContent = 'Pause';
+  }
+});
+
+function resetCrawlUI() {
+  $('#startCrawl').classList.remove('hidden');
+  $('#stopCrawl').classList.add('hidden');
+  $('#pauseCrawl').classList.add('hidden');
+  $('#pauseCrawl').textContent = 'Pause';
+  $('#progressContainer').classList.add('hidden');
+}
+
+// ── Socket events ──
+socket.on('progress', (data) => {
+  const pct = data.total > 0 ? ((data.crawled / Math.min(data.total, parseInt($('#optMaxPages').value) || 500)) * 100).toFixed(1) : 0;
+  $('#progressFill').style.width = `${Math.min(pct, 100)}%`;
+  $('#progressText').textContent = `Crawling... ${data.crawled} pages`;
+  $('#progressStats').textContent = `${data.pagesPerSecond.toFixed(1)} pages/s | Queue: ${data.queued} | Errors: ${data.errors} | Elapsed: ${(data.elapsed / 1000).toFixed(0)}s`;
+});
+
+socket.on('page', (page) => {
+  pagesData.push(page);
+});
+
+socket.on('complete', (data) => {
+  resetCrawlUI();
+  analysisData = data.analysis;
+  renderDashboard(data.stats, data.analysis);
+  loadPages();
+  renderIssues(data.analysis);
+  renderHreflang(data.analysis);
+  renderCanonicals(data.analysis);
+  renderConflicts(data.analysis);
+  renderRedirects(data.analysis);
+  renderContent(data.analysis);
+  renderImages(data.analysis);
+  renderStructuredData(data.analysis);
+  renderSecurity(data.analysis);
+  renderLinks(data.analysis);
+});
+
+socket.on('error', (data) => {
+  resetCrawlUI();
+  alert('Crawl error: ' + data.message);
+});
+
+// ── Export ──
+$$('.export-menu a').forEach(a => {
+  a.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (!currentCrawlId) return alert('No crawl data to export');
+    window.location.href = `/api/crawls/${currentCrawlId}/export/${a.dataset.format}`;
+  });
+});
+
+// ── Render Dashboard ──
+function renderDashboard(stats, analysis) {
+  const o = analysis.overview;
+  const html = `
+    <div class="stats-grid">
+      ${statCard('Pages Crawled', o.totalUrlsCrawled, '')}
+      ${statCard('HTML Pages', o.htmlPages, 'info')}
+      ${statCard('2xx Success', o.status2xx, 'success')}
+      ${statCard('3xx Redirects', o.status3xx, 'warning')}
+      ${statCard('4xx Errors', o.status4xx, 'danger')}
+      ${statCard('5xx Server Errors', o.status5xx, 'danger')}
+      ${statCard('Avg Response', o.avgResponseTime + 'ms', o.avgResponseTime > 2000 ? 'danger' : o.avgResponseTime > 1000 ? 'warning' : 'success')}
+      ${statCard('Avg Word Count', o.avgWordCount, o.avgWordCount < 300 ? 'warning' : '')}
+      ${statCard('With Hreflangs', o.pagesWithHreflangs, 'info')}
+      ${statCard('With Canonical', o.pagesWithCanonical, 'info')}
+      ${statCard('In Sitemap', o.pagesInSitemap, 'success')}
+      ${statCard('Not In Sitemap', o.pagesNotInSitemap, o.pagesNotInSitemap > 0 ? 'warning' : 'success')}
+      ${statCard('Structured Data', o.pagesWithStructuredData, 'info')}
+      ${statCard('Images Missing Alt', o.imagesWithoutAlt, o.imagesWithoutAlt > 0 ? 'warning' : 'success')}
+      ${statCard('Blocked by Robots', o.blockedByRobots, o.blockedByRobots > 0 ? 'warning' : '')}
+      ${statCard('Connection Errors', o.errors, o.errors > 0 ? 'danger' : 'success')}
+    </div>
+
+    <div class="section-card">
+      <h3>Issues Overview</h3>
+      <div class="issues-summary">
+        ${issueCountCard(analysis.issues.filter(i => i.severity === 'critical').length, 'Critical', 'danger')}
+        ${issueCountCard(analysis.issues.filter(i => i.severity === 'warning').length, 'Warnings', 'warning')}
+        ${issueCountCard(analysis.issues.filter(i => i.severity === 'error').length, 'Errors', 'danger')}
+        ${issueCountCard(analysis.issues.filter(i => i.severity === 'info').length, 'Info', 'info')}
+      </div>
+      ${renderIssueCategories(analysis.issues)}
+    </div>
+
+    ${analysis.hreflangCanonicalConflicts.totalConflicts > 0 ? `
+    <div class="section-card" style="border-left:4px solid var(--danger)">
+      <h3>Hreflang vs Canonical Conflicts: ${analysis.hreflangCanonicalConflicts.totalConflicts}</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px">${analysis.hreflangCanonicalConflicts.totalPagesWithConflicts} page(s) have conflicts between hreflang and canonical tags. See "Hreflang vs Canonical" tab for details.</p>
+    </div>
+    ` : ''}
+
+    <div class="section-card">
+      <h3>Status Code Distribution</h3>
+      ${renderStatusBars(analysis.statusCodeBreakdown)}
+    </div>
+  `;
+  $('#dashboardContent').innerHTML = html;
+}
+
+function statCard(label, value, colorClass) {
+  return `<div class="stat-card"><div class="label">${label}</div><div class="value ${colorClass}">${value}</div></div>`;
+}
+
+function issueCountCard(count, label, color) {
+  return `<div class="issue-count-card"><div class="count" style="color:var(--${color})">${count}</div><div class="label">${label}</div></div>`;
+}
+
+function renderIssueCategories(issues) {
+  const cats = {};
+  issues.forEach(i => { cats[i.category] = (cats[i.category] || 0) + 1; });
+  const sorted = Object.entries(cats).sort((a, b) => b[1] - a[1]);
+  const max = sorted[0]?.[1] || 1;
+  return '<div class="bar-chart">' + sorted.map(([cat, count]) =>
+    `<div class="bar-item"><span class="bar-label">${cat}</span><div class="bar-track"><div class="bar-fill warning" style="width:${(count/max*100).toFixed(0)}%">${count}</div></div></div>`
+  ).join('') + '</div>';
+}
+
+function renderStatusBars(breakdown) {
+  const entries = Object.entries(breakdown).sort((a, b) => a[0] - b[0]);
+  const max = Math.max(...entries.map(e => e[1].length));
+  return '<div class="bar-chart">' + entries.map(([code, urls]) => {
+    const color = code >= 500 ? 'danger' : code >= 400 ? 'danger' : code >= 300 ? 'warning' : code >= 200 ? 'success' : 'info';
+    return `<div class="bar-item"><span class="bar-label">${code} (${urls.length})</span><div class="bar-track"><div class="bar-fill ${color}" style="width:${(urls.length/max*100).toFixed(0)}%">${urls.length}</div></div></div>`;
+  }).join('') + '</div>';
+}
+
+// ── Pages table ──
+async function loadPages() {
+  if (!currentCrawlId) return;
+  const res = await fetch(`/api/crawls/${currentCrawlId}/pages?limit=5000`);
+  const pages = await res.json();
+  renderPagesTable(pages);
+}
+
+function renderPagesTable(pages) {
+  const filter = ($('#pagesFilter')?.value || '').toLowerCase();
+  const statusFilter = $('#pagesStatusFilter')?.value;
+  let filtered = pages;
+  if (filter) filtered = filtered.filter(p => (p.url || '').toLowerCase().includes(filter));
+  if (statusFilter) filtered = filtered.filter(p => String(p.status_code) === statusFilter);
+
+  const html = `<table>
+    <thead><tr>
+      <th>URL</th><th>Status</th><th>Title</th><th>Title Len</th>
+      <th>Meta Desc Len</th><th>H1 Count</th><th>Word Count</th>
+      <th>Canonical</th><th>Hreflangs</th><th>Response (ms)</th><th>Depth</th>
+    </tr></thead>
+    <tbody>${filtered.map(p => `<tr class="page-row" data-url="${esc(p.url)}">
+      <td class="url-cell" title="${esc(p.url)}">${truncate(p.url, 60)}</td>
+      <td>${statusBadge(p.status_code)}</td>
+      <td title="${esc(p.title || '')}">${truncate(p.title || '-', 40)}</td>
+      <td>${p.title_length || 0}</td>
+      <td>${p.meta_description_length || 0}</td>
+      <td>${p.h1_count || 0}</td>
+      <td>${p.word_count || 0}</td>
+      <td title="${esc(p.canonical || '')}">${p.canonical ? (p.canonical_is_self ? '<span class="badge badge-success">Self</span>' : truncate(p.canonical, 30)) : '<span class="badge badge-muted">None</span>'}</td>
+      <td>${JSON.parse(p.hreflangs || '[]').length || 0}</td>
+      <td>${p.response_time || 0}</td>
+      <td>${p.depth || 0}</td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+  $('#pagesTable').innerHTML = html;
+
+  // Click handler for page details
+  $$('.page-row').forEach(row => {
+    row.addEventListener('click', () => showPageDetail(row.dataset.url, pages));
+  });
+}
+
+$('#pagesFilter')?.addEventListener('input', () => { if (currentCrawlId) loadPages(); });
+$('#pagesStatusFilter')?.addEventListener('change', () => { if (currentCrawlId) loadPages(); });
+
+function showPageDetail(url, pages) {
+  const p = pages.find(pg => pg.url === url);
+  if (!p) return;
+  const hreflangs = JSON.parse(p.hreflangs || '[]');
+  const conflicts = JSON.parse(p.hreflang_canonical_conflicts || '[]');
+  const headings = JSON.parse(p.heading_structure || '[]');
+  const secHeaders = JSON.parse(p.security_headers || '{}');
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `<div class="modal">
+    <button class="modal-close">&times;</button>
+    <h3>${esc(p.url)}</h3>
+    <div class="detail-grid">
+      ${detailItem('Status', statusBadge(p.status_code))}
+      ${detailItem('Title', esc(p.title || 'None') + ` (${p.title_length || 0} chars)`)}
+      ${detailItem('Meta Description', esc(p.meta_description || 'None') + ` (${p.meta_description_length || 0} chars)`)}
+      ${detailItem('Canonical', p.canonical ? esc(p.canonical) + (p.canonical_is_self ? ' (Self)' : ' (Different)') : 'None')}
+      ${detailItem('H1', JSON.parse(p.h1 || '[]').join(', ') || 'None')}
+      ${detailItem('H1 Count', p.h1_count || 0)}
+      ${detailItem('H2 Count', p.h2_count || 0)}
+      ${detailItem('Word Count', p.word_count || 0)}
+      ${detailItem('Response Time', (p.response_time || 0) + 'ms')}
+      ${detailItem('Content Length', formatBytes(p.content_length || 0))}
+      ${detailItem('Internal Links', p.internal_links || 0)}
+      ${detailItem('External Links', p.external_links || 0)}
+      ${detailItem('Images', `${p.images_total || 0} total, ${p.images_without_alt || 0} missing alt`)}
+      ${detailItem('Meta Robots', p.meta_robots || 'None')}
+      ${detailItem('HTML Lang', p.html_lang || 'None')}
+      ${detailItem('In Sitemap', p.in_sitemap ? 'Yes' : 'No')}
+      ${detailItem('Structured Data', JSON.parse(p.structured_data_types || '[]').join(', ') || 'None')}
+      ${detailItem('OG Title', p.og_title || 'None')}
+      ${detailItem('OG Image', p.og_image || 'None')}
+      ${detailItem('Depth', p.depth || 0)}
+    </div>
+    ${hreflangs.length > 0 ? `<div class="section-card" style="margin-top:20px"><h3>Hreflangs (${hreflangs.length})</h3>
+      <table><thead><tr><th>Lang</th><th>URL</th></tr></thead><tbody>
+      ${hreflangs.map(h => `<tr><td>${esc(h.lang)}</td><td>${esc(h.href)}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+    ${conflicts.length > 0 ? `<div class="section-card" style="margin-top:20px;border-left:4px solid var(--danger)"><h3>Hreflang/Canonical Conflicts (${conflicts.length})</h3>
+      ${conflicts.map(c => `<div class="conflict-item"><div class="conflict-type" style="color:var(--${c.severity === 'critical' ? 'danger' : c.severity})">${esc(c.type)}</div>${esc(c.message)}</div>`).join('')}
+    </div>` : ''}
+    ${headings.length > 0 ? `<div class="section-card" style="margin-top:20px"><h3>Heading Structure</h3>
+      ${headings.map(h => `<div style="padding-left:${(h.level-1)*20}px;margin:4px 0;font-size:13px"><strong>${h.tag}:</strong> ${esc(h.text)}</div>`).join('')}
+    </div>` : ''}
+    <div class="section-card" style="margin-top:20px"><h3>Security Headers</h3>
+      <div class="detail-grid">
+        ${Object.entries(secHeaders).map(([k,v]) => detailItem(k, v ? `<span class="badge badge-success">${esc(String(v).substring(0,60))}</span>` : '<span class="badge badge-danger">Missing</span>')).join('')}
+      </div>
+    </div>
+  </div>`;
+
+  document.body.appendChild(modal);
+  modal.querySelector('.modal-close').addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+}
+
+function detailItem(label, value) {
+  return `<div class="detail-item"><div class="dlabel">${label}</div><div class="dvalue">${value}</div></div>`;
+}
+
+// ── Issues ──
+function renderIssues(analysis) {
+  const issues = analysis.issues;
+
+  // Populate categories
+  const cats = [...new Set(issues.map(i => i.category))].sort();
+  const catSelect = $('#issuesCategory');
+  catSelect.innerHTML = '<option value="">All Categories</option>' + cats.map(c => `<option value="${c}">${c}</option>`).join('');
+
+  function render() {
+    const sev = $('#issuesSeverity').value;
+    const cat = $('#issuesCategory').value;
+    let filtered = issues;
+    if (sev) filtered = filtered.filter(i => i.severity === sev);
+    if (cat) filtered = filtered.filter(i => i.category === cat);
+
+    $('#issuesSummary').innerHTML = `
+      ${issueCountCard(filtered.filter(i => i.severity === 'critical').length, 'Critical', 'danger')}
+      ${issueCountCard(filtered.filter(i => i.severity === 'warning').length, 'Warnings', 'warning')}
+      ${issueCountCard(filtered.filter(i => i.severity === 'info').length, 'Info', 'info')}
+    `;
+
+    $('#issuesTable').innerHTML = `<table>
+      <thead><tr><th>Severity</th><th>Category</th><th>URL</th><th>Issue</th></tr></thead>
+      <tbody>${filtered.map(i => `<tr>
+        <td>${severityBadge(i.severity)}</td>
+        <td>${esc(i.category)}</td>
+        <td class="url-cell" title="${esc(i.url)}">${truncate(i.url, 50)}</td>
+        <td>${esc(i.message)}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  }
+
+  $('#issuesSeverity').addEventListener('change', render);
+  $('#issuesCategory').addEventListener('change', render);
+  render();
+}
+
+// ── Hreflang ──
+function renderHreflang(analysis) {
+  const r = analysis.hreflangReport;
+  let html = `<div class="stats-grid">
+    ${statCard('Pages with Hreflangs', r.pagesWithHreflangs, 'info')}
+    ${statCard('Languages Found', r.languages.length, '')}
+    ${statCard('Return Link Issues', r.totalReturnLinkIssues, r.totalReturnLinkIssues > 0 ? 'danger' : 'success')}
+  </div>`;
+
+  if (r.languages.length > 0) {
+    html += `<div class="section-card"><h3>Languages</h3><div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${r.languages.map(l => `<span class="badge badge-info">${esc(l)}</span>`).join('')}
+    </div></div>`;
+  }
+
+  if (r.returnLinkIssues.length > 0) {
+    html += `<div class="section-card"><h3>Missing Return Links (${r.returnLinkIssues.length})</h3>
+      <table><thead><tr><th>From</th><th>To</th><th>Lang</th><th>Issue</th></tr></thead>
+      <tbody>${r.returnLinkIssues.map(i => `<tr>
+        <td class="url-cell" title="${esc(i.from)}">${truncate(i.from, 40)}</td>
+        <td class="url-cell" title="${esc(i.to)}">${truncate(i.to, 40)}</td>
+        <td>${esc(i.lang)}</td>
+        <td style="font-size:12px">${esc(i.message)}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  $('#hreflangContent').innerHTML = html;
+}
+
+// ── Canonicals ──
+function renderCanonicals(analysis) {
+  const r = analysis.canonicalReport;
+  let html = `<div class="stats-grid">
+    ${statCard('Total Pages', r.total, '')}
+    ${statCard('With Canonical', r.withCanonical, 'info')}
+    ${statCard('Self-Referencing', r.selfReferencing, 'success')}
+    ${statCard('Canonicalized (Other)', r.canonicalized, 'warning')}
+    ${statCard('Missing Canonical', r.missing, r.missing > 0 ? 'danger' : 'success')}
+  </div>`;
+
+  if (r.canonicalizedPages.length > 0) {
+    html += `<div class="section-card"><h3>Canonicalized to Other URLs (${r.canonicalizedPages.length})</h3>
+      <table><thead><tr><th>Page URL</th><th>Canonical Points To</th></tr></thead>
+      <tbody>${r.canonicalizedPages.map(p => `<tr>
+        <td class="url-cell" title="${esc(p.url)}">${truncate(p.url, 50)}</td>
+        <td title="${esc(p.canonical)}">${truncate(p.canonical, 50)}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  if (r.missingPages.length > 0) {
+    html += `<div class="section-card"><h3>Pages Missing Canonical (${r.missingPages.length})</h3>
+      <table><thead><tr><th>URL</th></tr></thead>
+      <tbody>${r.missingPages.map(u => `<tr><td class="url-cell" title="${esc(u)}">${truncate(u, 80)}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+
+  $('#canonicalsContent').innerHTML = html;
+}
+
+// ── Hreflang vs Canonical Conflicts ──
+function renderConflicts(analysis) {
+  const r = analysis.hreflangCanonicalConflicts;
+  if (r.totalConflicts === 0) {
+    $('#conflictsContent').innerHTML = `<div class="section-card" style="text-align:center;padding:40px">
+      <div style="font-size:48px;margin-bottom:16px">✅</div>
+      <h3>No Hreflang/Canonical Conflicts Found</h3>
+      <p style="color:var(--text-muted)">All pages with hreflang tags have consistent canonical tags.</p>
+    </div>`;
+    return;
+  }
+
+  let html = `<div class="stats-grid">
+    ${statCard('Pages with Conflicts', r.totalPagesWithConflicts, 'danger')}
+    ${statCard('Total Conflicts', r.totalConflicts, 'danger')}
+  </div>
+  <div class="section-card" style="border-left:4px solid var(--danger)">
+    <h3>Why This Matters</h3>
+    <p style="color:var(--text-muted);font-size:13px">When canonical tags and hreflang tags conflict, Google typically follows the canonical signal and may ignore hreflang annotations. This can cause the wrong language version to appear in search results for different regions.</p>
+  </div>`;
+
+  for (const page of r.pages) {
+    const hasCritical = page.conflicts.some(c => c.severity === 'critical');
+    html += `<div class="conflict-card ${hasCritical ? '' : 'warning'}">
+      <div class="conflict-url">${esc(page.url)}</div>
+      <div style="margin-bottom:12px;font-size:13px;color:var(--text-muted)">
+        Canonical: <strong>${esc(page.canonical || 'None')}</strong> |
+        Hreflangs: ${(page.hreflangs || []).map(h => `<span class="badge badge-info">${esc(h.lang)}</span>`).join(' ')}
+      </div>
+      ${page.conflicts.map(c => `<div class="conflict-item">
+        <div class="conflict-type" style="color:var(--${c.severity === 'critical' ? 'danger' : c.severity === 'warning' ? 'warning' : 'info'})">${severityBadge(c.severity)} ${esc(c.type)}</div>
+        <div style="margin-top:4px">${esc(c.message)}</div>
+      </div>`).join('')}
+    </div>`;
+  }
+
+  $('#conflictsContent').innerHTML = html;
+}
+
+// ── Redirects ──
+function renderRedirects(analysis) {
+  const r = analysis.redirectChains;
+  let html = `<div class="stats-grid">
+    ${statCard('Total Redirects', r.total, r.total > 0 ? 'warning' : 'success')}
+    ${statCard('Long Chains (3+)', r.longChains, r.longChains > 0 ? 'danger' : 'success')}
+  </div>`;
+
+  if (r.chains.length > 0) {
+    html += `<div class="section-card"><h3>Redirect Chains</h3>
+      <table><thead><tr><th>Original URL</th><th>Final URL</th><th>Hops</th><th>Chain</th></tr></thead>
+      <tbody>${r.chains.map(c => `<tr>
+        <td class="url-cell" title="${esc(c.originalUrl)}">${truncate(c.originalUrl, 40)}</td>
+        <td title="${esc(c.finalUrl)}">${truncate(c.finalUrl, 40)}</td>
+        <td>${c.hops} ${c.isLong ? '<span class="badge badge-danger">Long</span>' : ''}</td>
+        <td style="font-size:11px">${c.chain.map(s => `${s.statusCode}`).join(' → ')}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  $('#redirectsContent').innerHTML = html;
+}
+
+// ── Content ──
+function renderContent(analysis) {
+  const r = analysis.contentAnalysis;
+  const d = analysis.duplicates;
+
+  let html = `<div class="stats-grid">
+    ${statCard('Avg Word Count', r.avgWordCount, r.avgWordCount < 300 ? 'warning' : '')}
+    ${statCard('Avg Text Ratio', r.avgTextRatio + '%', '')}
+    ${statCard('Thin Pages (<300w)', r.thinPages.length, r.thinPages.length > 0 ? 'warning' : 'success')}
+    ${statCard('Duplicate Titles', d.duplicateTitles.length, d.duplicateTitles.length > 0 ? 'warning' : 'success')}
+    ${statCard('Duplicate Descriptions', d.duplicateDescriptions.length, d.duplicateDescriptions.length > 0 ? 'warning' : 'success')}
+    ${statCard('Duplicate Content', d.duplicateContent.length, d.duplicateContent.length > 0 ? 'warning' : 'success')}
+  </div>`;
+
+  if (r.thinPages.length > 0) {
+    html += `<div class="section-card"><h3>Thin Content Pages</h3>
+      <table><thead><tr><th>URL</th><th>Word Count</th></tr></thead>
+      <tbody>${r.thinPages.slice(0, 50).map(p => `<tr><td class="url-cell">${truncate(p.url, 60)}</td><td>${p.wordCount}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+
+  if (d.duplicateTitles.length > 0) {
+    html += `<div class="section-card"><h3>Duplicate Titles (${d.duplicateTitles.length} groups)</h3>`;
+    for (const group of d.duplicateTitles.slice(0, 20)) {
+      html += `<div style="margin-bottom:12px"><strong>${esc(group[0].title)}</strong><ul style="margin-top:4px;padding-left:20px">
+        ${group.map(p => `<li style="font-size:13px;color:var(--text-muted)">${esc(p.url)}</li>`).join('')}
+      </ul></div>`;
+    }
+    html += '</div>';
+  }
+
+  $('#contentContent').innerHTML = html;
+}
+
+// ── Images ──
+function renderImages(analysis) {
+  const r = analysis.imageAnalysis;
+  let html = `<div class="stats-grid">
+    ${statCard('Total Images', r.totalImages, '')}
+    ${statCard('Missing Alt', r.missingAlt, r.missingAlt > 0 ? 'danger' : 'success')}
+    ${statCard('Empty Alt', r.emptyAlt, r.emptyAlt > 0 ? 'warning' : 'success')}
+    ${statCard('Missing Dimensions', r.missingDimensions, r.missingDimensions > 0 ? 'warning' : 'success')}
+    ${statCard('With Lazy Loading', r.withLazyLoading, 'info')}
+  </div>`;
+
+  const badImages = r.images.filter(i => !i.hasAlt || i.altEmpty);
+  if (badImages.length > 0) {
+    html += `<div class="section-card"><h3>Images with Alt Issues (${badImages.length})</h3>
+      <table><thead><tr><th>Page</th><th>Image Src</th><th>Issue</th></tr></thead>
+      <tbody>${badImages.slice(0, 100).map(i => `<tr>
+        <td class="url-cell" title="${esc(i.pageUrl)}">${truncate(i.pageUrl, 40)}</td>
+        <td title="${esc(i.src || '')}">${truncate(i.src || 'N/A', 40)}</td>
+        <td>${!i.hasAlt ? '<span class="badge badge-danger">Missing Alt</span>' : '<span class="badge badge-warning">Empty Alt</span>'}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  $('#imagesContent').innerHTML = html;
+}
+
+// ── Structured Data ──
+function renderStructuredData(analysis) {
+  const r = analysis.structuredDataReport;
+  const types = Object.entries(r.typeCounts).sort((a, b) => b[1] - a[1]);
+  const max = types[0]?.[1] || 1;
+
+  let html = `<div class="stats-grid">
+    ${statCard('Pages With SD', r.pagesWithSD, 'success')}
+    ${statCard('Pages Without SD', r.pagesWithoutSD, r.pagesWithoutSD > 0 ? 'warning' : 'success')}
+    ${statCard('Schema Types', types.length, 'info')}
+  </div>`;
+
+  if (types.length > 0) {
+    html += `<div class="section-card"><h3>Schema Types Distribution</h3>
+      <div class="bar-chart">${types.map(([type, count]) =>
+        `<div class="bar-item"><span class="bar-label">${esc(type)}</span><div class="bar-track"><div class="bar-fill primary" style="width:${(count/max*100).toFixed(0)}%">${count}</div></div></div>`
+      ).join('')}</div></div>`;
+  }
+
+  $('#structuredContent').innerHTML = html;
+}
+
+// ── Security ──
+function renderSecurity(analysis) {
+  const r = analysis.securityReport;
+  if (!r.headers) {
+    $('#securityContent').innerHTML = '<p style="color:var(--text-muted)">No security data available.</p>';
+    return;
+  }
+
+  let html = `<div class="stats-grid">
+    ${statCard('HTTPS', r.isHttps ? 'Yes' : 'No', r.isHttps ? 'success' : 'danger')}
+    ${statCard('Pages Checked', r.checked, '')}
+  </div>
+  <div class="section-card"><h3>Security Headers Coverage</h3>`;
+
+  const headers = Object.entries(r.headers);
+  const max = r.checked;
+  html += '<div class="bar-chart">' + headers.map(([name, data]) =>
+    `<div class="bar-item"><span class="bar-label">${esc(name)}</span><div class="bar-track"><div class="bar-fill ${data.present > data.missing ? 'success' : 'danger'}" style="width:${(data.present/max*100).toFixed(0)}%">${data.present}/${max}</div></div></div>`
+  ).join('') + '</div></div>';
+
+  $('#securityContent').innerHTML = html;
+}
+
+// ── Internal Links ──
+function renderLinks(analysis) {
+  const r = analysis.internalLinkAnalysis;
+  let html = `<div class="stats-grid">
+    ${statCard('Orphan Pages', r.orphanCount, r.orphanCount > 0 ? 'warning' : 'success')}
+    ${statCard('Avg Internal Links', r.avgInternalLinks, '')}
+  </div>`;
+
+  if (r.orphanPages.length > 0) {
+    html += `<div class="section-card"><h3>Orphan Pages (${r.orphanCount})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Pages with no internal links pointing to them.</p>
+      <table><thead><tr><th>URL</th></tr></thead>
+      <tbody>${r.orphanPages.slice(0, 50).map(u => `<tr><td class="url-cell">${truncate(u, 80)}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+
+  if (r.topLinkedPages.length > 0) {
+    const max = r.topLinkedPages[0]?.inboundLinks || 1;
+    html += `<div class="section-card"><h3>Most Linked Pages (Top 50)</h3>
+      <div class="bar-chart">${r.topLinkedPages.map(p =>
+        `<div class="bar-item"><span class="bar-label" title="${esc(p.url)}">${truncate(p.url, 40)}</span><div class="bar-track"><div class="bar-fill primary" style="width:${(p.inboundLinks/max*100).toFixed(0)}%">${p.inboundLinks}</div></div></div>`
+      ).join('')}</div></div>`;
+  }
+
+  $('#linksContent').innerHTML = html;
+}
+
+// ── History ──
+async function loadHistory() {
+  const res = await fetch('/api/crawls');
+  const crawls = await res.json();
+  if (crawls.length === 0) {
+    $('#historyContent').innerHTML = '<p style="color:var(--text-muted)">No previous crawls.</p>';
+    return;
+  }
+
+  $('#historyContent').innerHTML = crawls.map(c => {
+    const stats = c.stats || {};
+    return `<div class="history-item" data-id="${c.id}">
+      <div>
+        <div class="history-url">${esc(c.url)}</div>
+        <div class="history-meta">${new Date(c.created_at).toLocaleString()} | ${stats.crawled || '?'} pages | ${((stats.duration || 0)/1000).toFixed(0)}s</div>
+      </div>
+      <div class="history-status">
+        ${c.status === 'completed' ? '<span class="badge badge-success">Completed</span>' :
+          c.status === 'running' ? '<span class="badge badge-info">Running</span>' :
+          c.status === 'error' ? '<span class="badge badge-danger">Error</span>' :
+          '<span class="badge badge-muted">' + esc(c.status) + '</span>'}
+        <button class="btn btn-sm btn-secondary" style="margin-left:8px" onclick="loadCrawl('${c.id}')">Load</button>
+        <button class="btn btn-sm btn-danger" style="margin-left:4px" onclick="deleteCrawl('${c.id}')">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+window.loadCrawl = async function(id) {
+  currentCrawlId = id;
+  const res = await fetch(`/api/crawls/${id}/analysis`);
+  if (!res.ok) return alert('Could not load analysis');
+  const analysis = await res.json();
+  analysisData = analysis;
+
+  const crawlRes = await fetch(`/api/crawls/${id}`);
+  const crawl = await crawlRes.json();
+
+  renderDashboard(crawl.stats, analysis);
+  loadPages();
+  renderIssues(analysis);
+  renderHreflang(analysis);
+  renderCanonicals(analysis);
+  renderConflicts(analysis);
+  renderRedirects(analysis);
+  renderContent(analysis);
+  renderImages(analysis);
+  renderStructuredData(analysis);
+  renderSecurity(analysis);
+  renderLinks(analysis);
+
+  $('#emptyState').classList.add('hidden');
+  $('#dashboardContent').classList.remove('hidden');
+
+  $$('.nav-link').forEach(l => l.classList.remove('active'));
+  $('[data-view="dashboard"]').classList.add('active');
+  $$('.view').forEach(v => v.classList.remove('active'));
+  $('#view-dashboard').classList.add('active');
+};
+
+window.deleteCrawl = async function(id) {
+  if (!confirm('Delete this crawl?')) return;
+  await fetch(`/api/crawls/${id}`, { method: 'DELETE' });
+  loadHistory();
+};
+
+// ── Helpers ──
+function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function truncate(s, len) { s = s || ''; return s.length > len ? s.substring(0, len) + '...' : s; }
+function formatBytes(b) { if (b < 1024) return b + ' B'; if (b < 1048576) return (b/1024).toFixed(1) + ' KB'; return (b/1048576).toFixed(1) + ' MB'; }
+function statusBadge(code) {
+  if (!code || code === 0) return '<span class="badge badge-danger">Error</span>';
+  if (code < 300) return `<span class="badge badge-success">${code}</span>`;
+  if (code < 400) return `<span class="badge badge-warning">${code}</span>`;
+  return `<span class="badge badge-danger">${code}</span>`;
+}
+function severityBadge(s) {
+  const map = { critical: 'danger', warning: 'warning', error: 'danger', info: 'info' };
+  return `<span class="badge badge-${map[s] || 'muted'}">${s}</span>`;
+}
+
+// Load history on page load
+loadHistory();
