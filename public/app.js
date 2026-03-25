@@ -169,6 +169,7 @@ socket.on('complete', (data) => {
   renderStructuredData(data.analysis);
   renderSecurity(data.analysis);
   renderLinks(data.analysis);
+  renderAiBots(data.analysis);
 });
 
 socket.on('error', (data) => {
@@ -704,6 +705,7 @@ window.loadCrawl = async function(id) {
   renderStructuredData(analysis);
   renderSecurity(analysis);
   renderLinks(analysis);
+  renderAiBots(analysis);
 
   $('#emptyState').classList.add('hidden');
   $('#dashboardContent').classList.remove('hidden');
@@ -719,6 +721,94 @@ window.deleteCrawl = async function(id) {
   await fetch(`/api/crawls/${id}`, { method: 'DELETE' });
   loadHistory();
 };
+
+// ── AI Bots ──
+function renderAiBots(analysis) {
+  const r = analysis.aiBotsReport;
+  if (!r || !r.hasRobotsTxt) {
+    $('#aibotsContent').innerHTML = `<div class="section-card" style="text-align:center;padding:40px">
+      <div style="font-size:48px;margin-bottom:16px">🤖</div>
+      <h3>No robots.txt Found</h3>
+      <p style="color:var(--text-muted)">This site does not have a robots.txt file. All AI bots are allowed by default.</p>
+    </div>`;
+    return;
+  }
+
+  const blocked = r.bots.filter(b => b.status === 'blocked');
+  const partial = r.bots.filter(b => b.status === 'partial');
+  const allowed = r.bots.filter(b => b.status === 'allowed');
+  const notMentioned = r.bots.filter(b => b.status === 'not_mentioned');
+
+  let html = `<div class="stats-grid">
+    ${statCard('AI Bots Checked', r.totalBots, '')}
+    ${statCard('Blocked', blocked.length, blocked.length > 0 ? 'danger' : '')}
+    ${statCard('Partially Blocked', partial.length, partial.length > 0 ? 'warning' : '')}
+    ${statCard('Allowed / Not Mentioned', allowed.length + notMentioned.length, 'success')}
+  </div>`;
+
+  // Blocked bots
+  if (blocked.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--danger)">
+      <h3 style="color:var(--danger)">Blocked AI Bots (${blocked.length})</h3>
+      <table><thead><tr><th>Bot</th><th>Owner</th><th>Description</th><th>Status</th><th>Rules</th></tr></thead>
+      <tbody>${blocked.map(b => `<tr>
+        <td><strong>${esc(b.name)}</strong></td>
+        <td>${esc(b.owner)}</td>
+        <td style="white-space:normal;max-width:300px">${esc(b.description)}</td>
+        <td><span class="badge badge-danger">${esc(b.statusLabel)}</span></td>
+        <td style="font-size:11px">${b.rules.map(r => `${r.type}: ${esc(r.path)}`).join('<br>')}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  // Partially blocked
+  if (partial.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--warning)">
+      <h3 style="color:var(--warning)">Partially Blocked AI Bots (${partial.length})</h3>
+      <table><thead><tr><th>Bot</th><th>Owner</th><th>Description</th><th>Status</th><th>Rules</th></tr></thead>
+      <tbody>${partial.map(b => `<tr>
+        <td><strong>${esc(b.name)}</strong></td>
+        <td>${esc(b.owner)}</td>
+        <td style="white-space:normal;max-width:300px">${esc(b.description)}</td>
+        <td><span class="badge badge-warning">${esc(b.statusLabel)}</span></td>
+        <td style="font-size:11px">${b.rules.map(r => `${r.type}: ${esc(r.path)}`).join('<br>')}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  // Allowed / explicitly mentioned
+  if (allowed.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--success)">
+      <h3 style="color:var(--success)">Explicitly Allowed AI Bots (${allowed.length})</h3>
+      <table><thead><tr><th>Bot</th><th>Owner</th><th>Description</th><th>Status</th></tr></thead>
+      <tbody>${allowed.map(b => `<tr>
+        <td><strong>${esc(b.name)}</strong></td>
+        <td>${esc(b.owner)}</td>
+        <td style="white-space:normal;max-width:300px">${esc(b.description)}</td>
+        <td><span class="badge badge-success">${esc(b.statusLabel)}</span></td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  // Not mentioned
+  if (notMentioned.length > 0) {
+    html += `<div class="section-card">
+      <h3>Not Mentioned in robots.txt (${notMentioned.length})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These bots are not specifically referenced in robots.txt and are allowed by default.</p>
+      <table><thead><tr><th>Bot</th><th>Owner</th><th>Description</th><th>Status</th></tr></thead>
+      <tbody>${notMentioned.map(b => `<tr>
+        <td><strong>${esc(b.name)}</strong></td>
+        <td>${esc(b.owner)}</td>
+        <td style="white-space:normal;max-width:300px">${esc(b.description)}</td>
+        <td><span class="badge badge-muted">${esc(b.statusLabel)}</span></td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  // Raw robots.txt
+  html += `<div class="section-card">
+    <h3>Raw robots.txt</h3>
+    <pre style="background:var(--bg);padding:16px;border-radius:8px;overflow-x:auto;font-size:12px;max-height:400px;overflow-y:auto;white-space:pre-wrap">${esc(r.rawRobotsTxt)}</pre>
+  </div>`;
+
+  $('#aibotsContent').innerHTML = html;
+}
 
 // ── Helpers ──
 function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }

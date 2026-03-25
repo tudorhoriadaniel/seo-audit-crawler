@@ -77,6 +77,49 @@ app.use((req, res, next) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ── Shared helper: map DB rows to analysis format ──
+function mapPagesForAnalysis(pages) {
+  return pages.map(p => ({
+    ...p,
+    statusCode: p.status_code,
+    titleLength: p.title_length,
+    metaDescriptionLength: p.meta_description_length,
+    metaRobots: p.meta_robots,
+    canonicalIsSelf: !!p.canonical_is_self,
+    h1: JSON.parse(p.h1 || '[]'),
+    h1Count: p.h1_count,
+    h2Count: p.h2_count,
+    wordCount: p.word_count,
+    textRatio: p.text_ratio,
+    responseTime: p.response_time,
+    contentLength: p.content_length,
+    internalLinks: p.internal_links,
+    externalLinks: p.external_links,
+    totalImages: p.images_total,
+    imagesWithoutAlt: p.images_without_alt,
+    hasStructuredData: !!p.has_structured_data,
+    structuredData: JSON.parse(p.structured_data_types || '[]'),
+    hasViewport: !!p.has_viewport,
+    htmlLang: p.html_lang,
+    ogTitle: p.og_title,
+    ogDescription: p.og_description,
+    ogImage: p.og_image,
+    inSitemap: !!p.in_sitemap,
+    hreflangs: JSON.parse(p.hreflangs || '[]'),
+    hreflangCanonicalConflicts: JSON.parse(p.hreflang_canonical_conflicts || '[]'),
+    redirectChain: JSON.parse(p.redirect_chain || '[]'),
+    securityHeaders: JSON.parse(p.security_headers || '{}'),
+    links: [],
+    isHtml: (p.content_type || '').includes('html'),
+    contentHash: p.content_hash,
+    titleHash: p.title_hash,
+    metaDescription: p.meta_description,
+    blockedByRobots: !!p.blocked_by_robots,
+    finalUrl: p.final_url,
+    headingStructure: JSON.parse(p.heading_structure || '[]')
+  }));
+}
+
 // ── API Routes ──
 
 // List crawls
@@ -133,52 +176,16 @@ app.post('/api/crawls', (req, res) => {
   };
 
   crawler.onComplete = (summary) => {
-    db.updateCrawlStatus(crawlId, 'completed', summary.stats);
+    // Store robotsTxt in stats for later retrieval
+    const statsWithRobots = { ...summary.stats, robotsTxt: summary.robotsTxt || null };
+    db.updateCrawlStatus(crawlId, 'completed', statsWithRobots);
     activeCrawls.delete(crawlId);
 
     // Run analysis
     const pages = db.getCrawlPages(crawlId);
-    const resultsForAnalysis = pages.map(p => ({
-      ...p,
-      statusCode: p.status_code,
-      titleLength: p.title_length,
-      metaDescriptionLength: p.meta_description_length,
-      metaRobots: p.meta_robots,
-      canonicalIsSelf: !!p.canonical_is_self,
-      h1: JSON.parse(p.h1 || '[]'),
-      h1Count: p.h1_count,
-      h2Count: p.h2_count,
-      wordCount: p.word_count,
-      textRatio: p.text_ratio,
-      responseTime: p.response_time,
-      contentLength: p.content_length,
-      internalLinks: p.internal_links,
-      externalLinks: p.external_links,
-      totalImages: p.images_total,
-      imagesWithoutAlt: p.images_without_alt,
-      hasStructuredData: !!p.has_structured_data,
-      structuredData: JSON.parse(p.structured_data_types || '[]'),
-      hasViewport: !!p.has_viewport,
-      htmlLang: p.html_lang,
-      ogTitle: p.og_title,
-      ogDescription: p.og_description,
-      ogImage: p.og_image,
-      inSitemap: !!p.in_sitemap,
-      hreflangs: JSON.parse(p.hreflangs || '[]'),
-      hreflangCanonicalConflicts: JSON.parse(p.hreflang_canonical_conflicts || '[]'),
-      redirectChain: JSON.parse(p.redirect_chain || '[]'),
-      securityHeaders: JSON.parse(p.security_headers || '{}'),
-      links: [],
-      isHtml: (p.content_type || '').includes('html'),
-      contentHash: p.content_hash,
-      titleHash: p.title_hash,
-      metaDescription: p.meta_description,
-      blockedByRobots: !!p.blocked_by_robots,
-      finalUrl: p.final_url,
-      headingStructure: JSON.parse(p.heading_structure || '[]')
-    }));
+    const resultsForAnalysis = mapPagesForAnalysis(pages);
 
-    const analyzer = new Analyzer(resultsForAnalysis);
+    const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: summary.robotsTxt });
     const analysis = analyzer.analyze();
 
     io.to(crawlId).emit('complete', { stats: summary.stats, analysis });
@@ -218,47 +225,10 @@ app.get('/api/crawls/:id/analysis', (req, res) => {
   const pages = db.getCrawlPages(req.params.id);
   if (pages.length === 0) return res.status(404).json({ error: 'No pages found' });
 
-  const resultsForAnalysis = pages.map(p => ({
-    ...p,
-    statusCode: p.status_code,
-    titleLength: p.title_length,
-    metaDescriptionLength: p.meta_description_length,
-    metaRobots: p.meta_robots,
-    canonicalIsSelf: !!p.canonical_is_self,
-    h1: JSON.parse(p.h1 || '[]'),
-    h1Count: p.h1_count,
-    h2Count: p.h2_count,
-    wordCount: p.word_count,
-    textRatio: p.text_ratio,
-    responseTime: p.response_time,
-    contentLength: p.content_length,
-    internalLinks: p.internal_links,
-    externalLinks: p.external_links,
-    totalImages: p.images_total,
-    imagesWithoutAlt: p.images_without_alt,
-    hasStructuredData: !!p.has_structured_data,
-    structuredData: JSON.parse(p.structured_data_types || '[]'),
-    hasViewport: !!p.has_viewport,
-    htmlLang: p.html_lang,
-    ogTitle: p.og_title,
-    ogDescription: p.og_description,
-    ogImage: p.og_image,
-    inSitemap: !!p.in_sitemap,
-    hreflangs: JSON.parse(p.hreflangs || '[]'),
-    hreflangCanonicalConflicts: JSON.parse(p.hreflang_canonical_conflicts || '[]'),
-    redirectChain: JSON.parse(p.redirect_chain || '[]'),
-    securityHeaders: JSON.parse(p.security_headers || '{}'),
-    links: [],
-    isHtml: (p.content_type || '').includes('html'),
-    contentHash: p.content_hash,
-    titleHash: p.title_hash,
-    metaDescription: p.meta_description,
-    blockedByRobots: !!p.blocked_by_robots,
-    finalUrl: p.final_url,
-    headingStructure: JSON.parse(p.heading_structure || '[]')
-  }));
-
-  const analyzer = new Analyzer(resultsForAnalysis);
+  const crawl = db.getCrawl(req.params.id);
+  const stats = JSON.parse(crawl?.stats || '{}');
+  const resultsForAnalysis = mapPagesForAnalysis(pages);
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt });
   res.json(analyzer.analyze());
 });
 
@@ -267,41 +237,10 @@ app.get('/api/crawls/:id/export/:format', (req, res) => {
   const pages = db.getCrawlPages(req.params.id);
   if (pages.length === 0) return res.status(404).json({ error: 'No pages found' });
 
-  const resultsForAnalysis = pages.map(p => ({
-    ...p,
-    statusCode: p.status_code,
-    titleLength: p.title_length,
-    metaDescriptionLength: p.meta_description_length,
-    metaRobots: p.meta_robots,
-    canonicalIsSelf: !!p.canonical_is_self,
-    h1: JSON.parse(p.h1 || '[]'),
-    h1Count: p.h1_count,
-    h2Count: p.h2_count,
-    wordCount: p.word_count,
-    responseTime: p.response_time,
-    internalLinks: p.internal_links,
-    externalLinks: p.external_links,
-    totalImages: p.images_total,
-    imagesWithoutAlt: p.images_without_alt,
-    hasStructuredData: !!p.has_structured_data,
-    structuredData: JSON.parse(p.structured_data_types || '[]'),
-    hasViewport: !!p.has_viewport,
-    htmlLang: p.html_lang,
-    inSitemap: !!p.in_sitemap,
-    hreflangs: JSON.parse(p.hreflangs || '[]'),
-    hreflangCanonicalConflicts: JSON.parse(p.hreflang_canonical_conflicts || '[]'),
-    redirectChain: JSON.parse(p.redirect_chain || '[]'),
-    securityHeaders: JSON.parse(p.security_headers || '{}'),
-    isHtml: (p.content_type || '').includes('html'),
-    contentHash: p.content_hash,
-    titleHash: p.title_hash,
-    metaDescription: p.meta_description,
-    blockedByRobots: !!p.blocked_by_robots,
-    finalUrl: p.final_url,
-    headingStructure: JSON.parse(p.heading_structure || '[]')
-  }));
-
-  const analyzer = new Analyzer(resultsForAnalysis);
+  const crawl = db.getCrawl(req.params.id);
+  const stats = JSON.parse(crawl?.stats || '{}');
+  const resultsForAnalysis = mapPagesForAnalysis(pages);
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt });
   const analysis = analyzer.analyze();
 
   switch (req.params.format) {
