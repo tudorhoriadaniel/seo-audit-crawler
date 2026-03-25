@@ -375,6 +375,14 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       data = (lnk.mostLinked || []).map(l => ({ URL: l.url, 'Inbound Links': l.inboundLinks }));
       sheetName = 'Internal Links';
       break;
+    case 'headings':
+      data = mapped.filter(p => p.statusCode < 300).map(p => ({ URL: p.url, 'H1 Count': p.h1Count || 0, 'H1 Tags': (p.h1 || []).join(' | '), 'H2 Count': p.h2Count || 0 }));
+      sheetName = 'Headings';
+      break;
+    case 'directives':
+      data = mapped.filter(p => p.statusCode < 300).map(p => ({ URL: p.url, 'Meta Robots': p.metaRobots || 'None' }));
+      sheetName = 'Directives';
+      break;
     case 'allpages':
       data = mapped.map(p => ({ URL: p.url, Status: p.statusCode, Title: p.title || '', 'Title Length': p.titleLength || 0, 'Meta Description': (p.metaDescription || '').substring(0, 200), 'Meta Desc Length': p.metaDescriptionLength || 0, 'Word Count': p.wordCount || 0, Canonical: p.canonical || '', 'Response Time': p.responseTime || 0 }));
       sheetName = 'All Pages';

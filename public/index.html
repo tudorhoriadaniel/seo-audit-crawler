@@ -62,6 +62,10 @@
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h12M3 7h8M3 11h10M3 15h6"/></svg>
         Content
       </a>
+      <a href="#" class="nav-link" data-view="headings">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v12M15 3v12M3 9h12"/></svg>
+        Headings
+      </a>
       <a href="#" class="nav-link" data-view="images">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="14" height="14" rx="2"/><circle cx="7" cy="7" r="2"/><path d="M16 12l-4-4-8 8"/></svg>
         Images
@@ -78,6 +82,10 @@
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2l6 3v4c0 4-2.5 7-6 9-3.5-2-6-5-6-9V5l6-3z"/></svg>
         Security
       </a>
+      <a href="#" class="nav-link" data-view="directives">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h12v2H3zM3 8h8v2H3zM3 13h5v2H3z"/><path d="M14 10l-3 3 3 3"/></svg>
+        Directives
+      </a>
       <a href="#" class="nav-link" data-view="links">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 11l4-4M5 9l-2 2a3 3 0 004 4l2-2M13 9l2-2a3 3 0 00-4-4l-2 2"/></svg>
         Internal Links
@@ -85,10 +93,6 @@
       <a href="#" class="nav-link" data-view="aibots">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M4 10h10M4 14h6"/><circle cx="14" cy="14" r="2"/><path d="M9 2v2M5 3l1 1.5M13 3l-1 1.5"/></svg>
         AI Bots
-      </a>
-      <a href="#" class="nav-link" data-view="history">
-        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v12h12"/><path d="M7 11l3-4 3 2 3-5"/></svg>
-        History
       </a>
       <a href="#" class="nav-link" data-view="summary">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2l2 4h4l-3 3 1 4-4-2-4 2 1-4-3-3h4z"/></svg>
@@ -136,15 +140,6 @@
             <input type="text" id="optUserAgent" placeholder="Default" style="width:140px;padding:6px 8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
           </div>
         </div>
-        <button class="settings-icon" id="saveProject" title="Save Project" style="display:none">
-          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h10l2 2v10a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M6 3v4h6V3M6 15v-4h6v4"/></svg>
-          <span>Save</span>
-        </button>
-        <button class="settings-icon" id="openProject" title="Open Project">
-          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V4a1 1 0 011-1h3l2 2h5a1 1 0 011 1v1"/><path d="M2 7h14l-2 8H4L2 7z"/></svg>
-          <span>Open</span>
-        </button>
-        <input type="file" id="projectFileInput" accept=".json" style="display:none">
       </div>
     </div>
 
@@ -348,10 +343,16 @@
         <div id="aibotsContent"></div>
       </div>
 
-      <!-- History view -->
-      <div class="view" id="view-history">
-        <div class="view-header"><h2>Crawl History</h2></div>
-        <div id="historyContent"></div>
+      <!-- Headings view -->
+      <div class="view" id="view-headings">
+        <div class="view-header"><h2>Headings Analysis</h2></div>
+        <div id="headingsContent"></div>
+      </div>
+
+      <!-- Directives view -->
+      <div class="view" id="view-directives">
+        <div class="view-header"><h2>Meta Robots Directives</h2></div>
+        <div id="directivesContent"></div>
       </div>
 
       <!-- Summary view -->

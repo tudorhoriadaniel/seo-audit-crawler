@@ -24,7 +24,6 @@ $$('.nav-link').forEach(link => {
     link.classList.add('active');
     $$('.view').forEach(v => v.classList.remove('active'));
     $(`#view-${view}`).classList.add('active');
-    if (view === 'history') loadHistory();
   });
 });
 
@@ -47,31 +46,6 @@ document.addEventListener('click', (e) => {
 $('#startCrawl').addEventListener('click', startCrawl);
 $('#urlInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') startCrawl(); });
 
-// Save/Open project
-$('#saveProject').addEventListener('click', async () => {
-  if (!currentCrawlId) return alert('No crawl to save');
-  window.open(`/api/crawls/${currentCrawlId}/export-project`, '_blank');
-});
-$('#openProject').addEventListener('click', () => $('#projectFileInput').click());
-$('#projectFileInput').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  try {
-    const text = await file.text();
-    const project = JSON.parse(text);
-    const res = await fetch('/api/import-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text });
-    const data = await res.json();
-    if (data.error) return alert(data.error);
-    analysisData = data.analysis;
-    pagesData = data.pages;
-    if (data.crawl) $('#urlInput').value = data.crawl.url || '';
-    renderAll(data.analysis);
-    $('#emptyState')?.classList.add('hidden');
-    alert('Project loaded successfully!');
-  } catch (err) { alert('Failed to load project: ' + err.message); }
-  e.target.value = '';
-});
-
 function renderAll(analysis) {
   renderDashboard(analysis);
   renderAllPages(pagesData);
@@ -91,6 +65,8 @@ function renderAll(analysis) {
   renderAnchors(analysis);
   renderMetaTitles(analysis);
   renderMetaDescriptions(analysis);
+  renderHeadings(analysis);
+  renderDirectives(analysis);
   renderSummary(analysis);
 }
 
@@ -227,8 +203,9 @@ socket.on('complete', (data) => {
   renderAnchors(data.analysis);
   renderMetaTitles(data.analysis);
   renderMetaDescriptions(data.analysis);
+  renderHeadings(data.analysis);
+  renderDirectives(data.analysis);
   renderSummary(data.analysis);
-  $('#saveProject').style.display = '';
 });
 
 socket.on('error', (data) => {
@@ -736,34 +713,6 @@ function renderLinks(analysis) {
   $('#linksContent').innerHTML = exportBtn('links') + html;
 }
 
-// ── History ──
-async function loadHistory() {
-  const res = await fetch('/api/crawls');
-  const crawls = await res.json();
-  if (crawls.length === 0) {
-    $('#historyContent').innerHTML = '<p style="color:var(--text-muted)">No previous crawls.</p>';
-    return;
-  }
-
-  $('#historyContent').innerHTML = crawls.map(c => {
-    const stats = c.stats || {};
-    return `<div class="history-item" data-id="${c.id}">
-      <div>
-        <div class="history-url">${esc(c.url)}</div>
-        <div class="history-meta">${new Date(c.created_at).toLocaleString()} | ${stats.crawled || '?'} pages | ${((stats.duration || 0)/1000).toFixed(0)}s</div>
-      </div>
-      <div class="history-status">
-        ${c.status === 'completed' ? '<span class="badge badge-success">Completed</span>' :
-          c.status === 'running' ? '<span class="badge badge-info">Running</span>' :
-          c.status === 'error' ? '<span class="badge badge-danger">Error</span>' :
-          '<span class="badge badge-muted">' + esc(c.status) + '</span>'}
-        <button class="btn btn-sm btn-secondary" style="margin-left:8px" onclick="loadCrawl('${c.id}')">Load</button>
-        <button class="btn btn-sm btn-danger" style="margin-left:4px" onclick="deleteCrawl('${c.id}')">Delete</button>
-      </div>
-    </div>`;
-  }).join('');
-}
-
 window.loadCrawl = async function(id) {
   setCurrentCrawlId(id);
   const res = await fetch(`/api/crawls/${id}/analysis`);
@@ -792,6 +741,8 @@ window.loadCrawl = async function(id) {
   renderAnchors(analysis);
   renderMetaTitles(analysis);
   renderMetaDescriptions(analysis);
+  renderHeadings(analysis);
+  renderDirectives(analysis);
   renderSummary(analysis);
 
   $('#emptyState').classList.add('hidden');
@@ -806,7 +757,6 @@ window.loadCrawl = async function(id) {
 window.deleteCrawl = async function(id) {
   if (!confirm('Delete this crawl?')) return;
   await fetch(`/api/crawls/${id}`, { method: 'DELETE' });
-  loadHistory();
 };
 
 // ── Status Codes ──
@@ -1076,6 +1026,20 @@ function renderSitemaps(analysis) {
       </tr>`).join('')}</tbody></table></div>`;
   }
 
+  // Noindex URLs in sitemap
+  const noindexUrls = (r.sitemapUrlStatuses || []).filter(u => u.isNoindex);
+  if (noindexUrls.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--danger)">
+      <h3>Noindex URLs in Sitemap (${noindexUrls.length})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These URLs are in the sitemap but have a noindex meta robots directive. They should be removed from the sitemap.</p>
+      <table><thead><tr><th>URL</th><th>Status</th><th>Sitemap</th></tr></thead>
+      <tbody>${noindexUrls.slice(0, 200).map(u => `<tr>
+        <td class="url-cell" title="${esc(u.url)}">${truncate(u.url, 60)}</td>
+        <td>${statusBadge(u.statusCode)} <span class="badge badge-danger">noindex</span></td>
+        <td title="${esc(u.sitemap)}">${truncate(u.sitemap, 40)}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
   // Crawled pages not in sitemap
   if (r.crawledNotInSitemapCount > 0) {
     html += `<div class="section-card" style="border-left:4px solid var(--warning)">
@@ -1213,6 +1177,72 @@ function renderAiBots(analysis) {
   </div>`;
 
   $('#aibotsContent').innerHTML = html;
+}
+
+// ── Headings ──
+let _hdData = null, _hdFilter = 'all';
+function renderHeadings(analysis) {
+  _hdData = analysis.headingsReport;
+  if (!_hdData) { $('#headingsContent').innerHTML = '<p style="color:var(--text-muted)">No data.</p>'; return; }
+  _hdFilter = 'all';
+  _renderHD();
+}
+function filterHD(f) { _hdFilter = (_hdFilter === f) ? 'all' : f; _renderHD(); }
+function _renderHD() {
+  const r = _hdData, f = _hdFilter;
+  const cb = (key, label, count, color) => {
+    const active = f === key ? 'border:2px solid #fff;' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
+    return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterHD('${key}')">${statCardInner(label, count)}</div>`;
+  };
+  let html = `<div class="stats-grid">
+    ${cb('all', 'Total Pages', r.total, '')}
+    ${cb('missingH1', 'Missing H1', r.missingH1.length, r.missingH1.length > 0 ? 'danger' : 'success')}
+    ${cb('multipleH1', 'Multiple H1s', r.multipleH1.length, r.multipleH1.length > 0 ? 'warning' : 'success')}
+    ${cb('missingH2', 'Missing H2', r.missingH2.length, r.missingH2.length > 0 ? 'warning' : 'success')}
+  </div>`;
+  if (f === 'all' || f === 'missingH1') {
+    if (r.missingH1.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing H1 (${r.missingH1.length})</h3><table><thead><tr><th>URL</th><th>H2 Count</th></tr></thead><tbody>${r.missingH1.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${p.h2Count}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  if (f === 'all' || f === 'multipleH1') {
+    if (r.multipleH1.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Multiple H1s (${r.multipleH1.length})</h3><table><thead><tr><th>URL</th><th>H1 Count</th><th>H1 Tags</th></tr></thead><tbody>${r.multipleH1.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${p.h1Count}</td><td style="font-size:12px">${(p.h1||[]).map(h=>esc(h)).join(', ')}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  if (f === 'all' || f === 'missingH2') {
+    if (r.missingH2.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Missing H2 (${r.missingH2.length})</h3><table><thead><tr><th>URL</th><th>H1 Count</th></tr></thead><tbody>${r.missingH2.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${p.h1Count}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  $('#headingsContent').innerHTML = exportBtn('headings') + html;
+}
+
+// ── Directives ──
+let _dirData = null, _dirFilter = 'all';
+function renderDirectives(analysis) {
+  _dirData = analysis.directivesReport;
+  if (!_dirData) { $('#directivesContent').innerHTML = '<p style="color:var(--text-muted)">No data.</p>'; return; }
+  _dirFilter = 'all';
+  _renderDir();
+}
+function filterDir(f) { _dirFilter = (_dirFilter === f) ? 'all' : f; _renderDir(); }
+function _renderDir() {
+  const r = _dirData, f = _dirFilter;
+  const cb = (key, label, count, color) => {
+    const active = f === key ? 'border:2px solid #fff;' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
+    return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterDir('${key}')">${statCardInner(label, count)}</div>`;
+  };
+  let html = `<div class="stats-grid">
+    ${cb('all', 'Total Pages', r.total, '')}
+    ${cb('noindex', 'Noindex', r.noindex.length, r.noindex.length > 0 ? 'danger' : '')}
+    ${cb('nofollow', 'Nofollow', r.nofollow.length, r.nofollow.length > 0 ? 'warning' : '')}
+    ${cb('indexFollow', 'Index / Follow', r.indexFollow.length, 'success')}
+    ${cb('noRobotsTag', 'No Robots Tag', r.noRobotsTag.length, r.noRobotsTag.length > 0 ? 'warning' : '')}
+  </div>`;
+  const showGroup = (key, label, items, color) => {
+    if (items.length === 0) return '';
+    return `<div class="section-card" style="border-left:4px solid var(--${color})"><h3>${label} (${items.length})</h3><table><thead><tr><th>URL</th><th>Meta Robots</th></tr></thead><tbody>${items.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${esc(p.metaRobots || 'None')}</td></tr>`).join('')}</tbody></table></div>`;
+  };
+  if (f === 'all' || f === 'noindex') html += showGroup('noindex', 'Noindex Pages', r.noindex, 'danger');
+  if (f === 'all' || f === 'nofollow') html += showGroup('nofollow', 'Nofollow Pages', r.nofollow, 'warning');
+  if (f === 'all' || f === 'indexFollow') html += showGroup('indexFollow', 'Index / Follow Pages', r.indexFollow, 'success');
+  if (f === 'all' || f === 'noRobotsTag') html += showGroup('noRobotsTag', 'No Robots Tag', r.noRobotsTag, 'warning');
+  $('#directivesContent').innerHTML = exportBtn('directives') + html;
 }
 
 // ── Helpers ──
@@ -1447,6 +1477,3 @@ const tableObserver = new MutationObserver(() => {
 });
 const vc = document.getElementById('viewsContainer');
 if (vc) tableObserver.observe(vc, { childList: true, subtree: true });
-
-// Load history on page load
-loadHistory();
