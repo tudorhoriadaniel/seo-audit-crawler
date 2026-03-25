@@ -320,14 +320,14 @@ function renderPagesTable(pages) {
       <th>Canonical</th><th>Hreflangs</th><th>Response (ms)</th><th>Depth</th>
     </tr></thead>
     <tbody>${filtered.map(p => `<tr class="page-row" data-url="${esc(p.url)}">
-      <td class="url-cell" title="${esc(p.url)}">${truncate(p.url, 60)}</td>
+      <td>${urlLink(p.url)}</td>
       <td>${statusBadge(p.status_code)}</td>
-      <td title="${esc(p.title || '')}">${truncate(p.title || '-', 40)}</td>
+      <td>${esc(p.title || '-')}</td>
       <td>${p.title_length || 0}</td>
       <td>${p.meta_description_length || 0}</td>
       <td>${p.h1_count || 0}</td>
       <td>${p.word_count || 0}</td>
-      <td title="${esc(p.canonical || '')}">${p.canonical ? (p.canonical_is_self ? '<span class="badge badge-success">Self</span>' : truncate(p.canonical, 30)) : '<span class="badge badge-muted">None</span>'}</td>
+      <td>${p.canonical ? (p.canonical_is_self ? '<span class="badge badge-success">Self</span>' : urlLink(p.canonical)) : '<span class="badge badge-muted">None</span>'}</td>
       <td>${JSON.parse(p.hreflangs || '[]').length || 0}</td>
       <td>${p.response_time || 0}</td>
       <td>${p.depth || 0}</td>
@@ -478,8 +478,8 @@ function renderHreflang(analysis) {
     html += `<div class="section-card"><h3>Missing Return Links (${r.returnLinkIssues.length})</h3>
       <table><thead><tr><th>From</th><th>To</th><th>Lang</th><th>Issue</th></tr></thead>
       <tbody>${r.returnLinkIssues.map(i => `<tr>
-        <td class="url-cell" title="${esc(i.from)}">${truncate(i.from, 40)}</td>
-        <td class="url-cell" title="${esc(i.to)}">${truncate(i.to, 40)}</td>
+        <td>${urlLink(i.from)}</td>
+        <td>${urlLink(i.to)}</td>
         <td>${esc(i.lang)}</td>
         <td style="font-size:12px">${esc(i.message)}</td>
       </tr>`).join('')}</tbody></table></div>`;
@@ -574,8 +574,8 @@ function renderRedirects(analysis) {
     html += `<div class="section-card"><h3>Redirect Chains</h3>
       <table><thead><tr><th>Original URL</th><th>Final URL</th><th>Hops</th><th>Chain</th></tr></thead>
       <tbody>${r.chains.map(c => `<tr>
-        <td class="url-cell" title="${esc(c.originalUrl)}">${truncate(c.originalUrl, 40)}</td>
-        <td title="${esc(c.finalUrl)}">${truncate(c.finalUrl, 40)}</td>
+        <td>${urlLink(c.originalUrl)}</td>
+        <td>${urlLink(c.finalUrl)}</td>
         <td>${c.hops} ${c.isLong ? '<span class="badge badge-danger">Long</span>' : ''}</td>
         <td style="font-size:11px">${c.chain.map(s => `${s.statusCode}`).join(' → ')}</td>
       </tr>`).join('')}</tbody></table></div>`;
@@ -601,7 +601,7 @@ function renderContent(analysis) {
   if (r.thinPages.length > 0) {
     html += `<div class="section-card"><h3>Thin Content Pages</h3>
       <table><thead><tr><th>URL</th><th>Word Count</th></tr></thead>
-      <tbody>${r.thinPages.slice(0, 50).map(p => `<tr><td class="url-cell">${truncate(p.url, 60)}</td><td>${p.wordCount}</td></tr>`).join('')}</tbody></table></div>`;
+      <tbody>${r.thinPages.slice(0, 50).map(p => `<tr><td>${urlLink(p.url)}</td><td>${p.wordCount}</td></tr>`).join('')}</tbody></table></div>`;
   }
 
   if (d.duplicateTitles.length > 0) {
@@ -705,7 +705,7 @@ function renderLinks(analysis) {
     html += `<div class="section-card"><h3>Orphan Pages (${r.orphanCount})</h3>
       <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Pages with no internal links pointing to them.</p>
       <table><thead><tr><th>URL</th></tr></thead>
-      <tbody>${r.orphanPages.slice(0, 50).map(u => `<tr><td class="url-cell">${truncate(u, 80)}</td></tr>`).join('')}</tbody></table></div>`;
+      <tbody>${r.orphanPages.slice(0, 50).map(u => `<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
   }
 
   if (r.topLinkedPages.length > 0) {
@@ -968,7 +968,7 @@ function renderSitemaps(analysis) {
         <h3>Indexable Pages Without Sitemap (${r.crawledNotInSitemapCount})</h3>
         <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These pages returned 200 and are indexable but have no sitemap coverage.</p>
         <table><thead><tr><th>URL</th></tr></thead>
-        <tbody>${r.crawledNotInSitemap.slice(0, 200).map(u => `<tr><td class="url-cell" title="${esc(u)}">${esc(u)}</td></tr>`).join('')}</tbody></table>
+        <tbody>${r.crawledNotInSitemap.slice(0, 200).map(u => `<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table>
       </div>`;
     }
 
@@ -996,7 +996,7 @@ function renderSitemaps(analysis) {
   html += `<div class="section-card"><h3>Sitemap Files (${r.files.length})</h3>
     <table><thead><tr><th>URL</th><th>Source</th><th>Type</th><th>URLs</th></tr></thead>
     <tbody>${r.files.map(f => `<tr>
-      <td class="url-cell" title="${esc(f.url)}">${esc(f.url)}</td>
+      <td>${urlLink(f.url)}</td>
       <td><span class="badge ${f.source === 'robots.txt' ? 'badge-success' : 'badge-info'}">${esc(f.source)}</span></td>
       <td>${esc(f.type)}</td>
       <td>${f.urlCount}</td>
@@ -1026,9 +1026,9 @@ function renderSitemaps(analysis) {
       <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These URLs are in the sitemap but don't return a 200 status code. They should be removed or fixed.</p>
       <table><thead><tr><th>URL</th><th>Status</th><th>Sitemap</th></tr></thead>
       <tbody>${problemUrls.slice(0, 200).map(u => `<tr>
-        <td class="url-cell" title="${esc(u.url)}">${truncate(u.url, 60)}</td>
+        <td>${urlLink(u.url)}</td>
         <td>${statusBadge(u.statusCode)}</td>
-        <td title="${esc(u.sitemap)}">${truncate(u.sitemap, 40)}</td>
+        <td>${urlLink(u.sitemap)}</td>
       </tr>`).join('')}</tbody></table></div>`;
   }
 
@@ -1040,9 +1040,9 @@ function renderSitemaps(analysis) {
       <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These URLs are in the sitemap but have a noindex meta robots directive. They should be removed from the sitemap.</p>
       <table><thead><tr><th>URL</th><th>Status</th><th>Sitemap</th></tr></thead>
       <tbody>${noindexUrls.slice(0, 200).map(u => `<tr>
-        <td class="url-cell" title="${esc(u.url)}">${truncate(u.url, 60)}</td>
+        <td>${urlLink(u.url)}</td>
         <td>${statusBadge(u.statusCode)} <span class="badge badge-danger">noindex</span></td>
-        <td title="${esc(u.sitemap)}">${truncate(u.sitemap, 40)}</td>
+        <td>${urlLink(u.sitemap)}</td>
       </tr>`).join('')}</tbody></table></div>`;
   }
 
@@ -1052,7 +1052,7 @@ function renderSitemaps(analysis) {
       <h3>Crawled Pages Not in Sitemap (${r.crawledNotInSitemapCount})</h3>
       <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Indexable pages (200, no noindex) that were discovered during crawling but are not included in any sitemap.</p>
       <table><thead><tr><th>URL</th></tr></thead>
-      <tbody>${r.crawledNotInSitemap.slice(0, 200).map(u => `<tr><td class="url-cell" title="${esc(u)}">${esc(u)}</td></tr>`).join('')}</tbody></table></div>`;
+      <tbody>${r.crawledNotInSitemap.slice(0, 200).map(u => `<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
   }
 
   // Sitemap URLs not reached by crawl
@@ -1061,7 +1061,7 @@ function renderSitemaps(analysis) {
       <h3>Sitemap URLs Not Reached by Crawl (${r.inSitemapNotCrawledCount})</h3>
       <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These URLs are in the sitemap but were not discovered during the crawl (possibly orphan pages or the crawl limit was reached).</p>
       <table><thead><tr><th>URL</th></tr></thead>
-      <tbody>${r.inSitemapNotCrawled.slice(0, 200).map(u => `<tr><td class="url-cell" title="${esc(u)}">${esc(u)}</td></tr>`).join('')}</tbody></table></div>`;
+      <tbody>${r.inSitemapNotCrawled.slice(0, 200).map(u => `<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
   }
 
   $('#sitemapsContent').innerHTML = exportBtn('sitemaps') + html;
