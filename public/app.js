@@ -910,88 +910,82 @@ function renderAnchors(analysis) {
 }
 
 // ── Meta Titles ──
+let _mtData = null, _mtFilter = 'all';
 function renderMetaTitles(analysis) {
-  const r = analysis.metaTitlesReport;
-  if (!r) { $('#metatitlesContent').innerHTML = '<p style="color:var(--text-muted)">No data.</p>'; return; }
-
+  _mtData = analysis.metaTitlesReport;
+  if (!_mtData) { $('#metatitlesContent').innerHTML = '<p style="color:var(--text-muted)">No data.</p>'; return; }
+  _mtFilter = 'all';
+  _renderMT();
+}
+function filterMT(f) { _mtFilter = (_mtFilter === f) ? 'all' : f; _renderMT(); }
+function _renderMT() {
+  const r = _mtData, f = _mtFilter;
+  const cb = (key, label, count, color) => {
+    const active = f === key ? 'border:2px solid #fff;' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
+    return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterMT('${key}')">${statCardInner(label, count)}</div>`;
+  };
   let html = `<div class="stats-grid">
-    ${statCard('Total Pages', r.total, '')}
-    ${statCard('Missing Title', r.missing.length, r.missing.length > 0 ? 'danger' : 'success')}
-    ${statCard('Too Short (<30)', r.tooShort.length, r.tooShort.length > 0 ? 'warning' : 'success')}
-    ${statCard('Too Long (>60)', r.tooLong.length, r.tooLong.length > 0 ? 'warning' : 'success')}
-    ${statCard('Optimal (30-60)', r.optimal, 'success')}
-    ${statCard('Duplicate Titles', r.duplicates.length, r.duplicates.length > 0 ? 'danger' : 'success')}
+    ${cb('all', 'Total Pages', r.total, '')}
+    ${cb('missing', 'Missing Title', r.missing.length, r.missing.length > 0 ? 'danger' : 'success')}
+    ${cb('short', 'Too Short (<30)', r.tooShort.length, r.tooShort.length > 0 ? 'warning' : 'success')}
+    ${cb('long', 'Too Long (>60)', r.tooLong.length, r.tooLong.length > 0 ? 'warning' : 'success')}
+    ${cb('optimal', 'Optimal (30-60)', r.optimal, 'success')}
+    ${cb('dup', 'Duplicates', r.duplicates.length, r.duplicates.length > 0 ? 'danger' : 'success')}
   </div>`;
-
-  if (r.missing.length > 0) {
-    html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing Title (${r.missing.length})</h3>
-      <table><thead><tr><th>URL</th></tr></thead>
-      <tbody>${r.missing.slice(0,200).map(p => `<tr><td>${urlLink(p.url)}</td></tr>`).join('')}</tbody></table></div>`;
+  if (f === 'all' || f === 'missing') {
+    if (r.missing.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing Title (${r.missing.length})</h3><table><thead><tr><th>URL</th></tr></thead><tbody>${r.missing.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td></tr>`).join('')}</tbody></table></div>`;
   }
-  if (r.duplicates.length > 0) {
-    html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Duplicate Titles (${r.duplicates.length} groups)</h3>`;
-    for (const d of r.duplicates.slice(0, 50)) {
-      html += `<div style="margin-bottom:16px;padding:12px;background:rgba(255,255,255,0.03);border-radius:8px">
-        <strong style="color:var(--text-muted)">"${esc(truncate(d.title, 80))}"</strong> <span class="badge badge-danger">${d.count}x</span>
-        <table style="margin-top:8px"><tbody>${d.urls.map(u => `<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table>
-      </div>`;
-    }
-    html += `</div>`;
+  if (f === 'all' || f === 'dup') {
+    if (r.duplicates.length > 0) { html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Duplicate Titles (${r.duplicates.length} groups)</h3>`;
+      for (const d of r.duplicates.slice(0,50)) html += `<div style="margin-bottom:16px;padding:12px;background:rgba(255,255,255,0.03);border-radius:8px"><strong style="color:var(--text-muted)">"${esc(truncate(d.title,80))}"</strong> <span class="badge badge-danger">${d.count}x</span><table style="margin-top:8px"><tbody>${d.urls.map(u=>`<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
+      html += `</div>`; }
   }
-  if (r.tooShort.length > 0) {
-    html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Short (${r.tooShort.length})</h3>
-      <table><thead><tr><th>URL</th><th>Title</th><th>Length</th></tr></thead>
-      <tbody>${r.tooShort.slice(0,200).map(p => `<tr><td>${urlLink(p.url)}</td><td>${esc(truncate(p.title,50))}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
+  if (f === 'all' || f === 'short') {
+    if (r.tooShort.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Short (${r.tooShort.length})</h3><table><thead><tr><th>URL</th><th>Title</th><th>Len</th></tr></thead><tbody>${r.tooShort.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${esc(p.title)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
   }
-  if (r.tooLong.length > 0) {
-    html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Long (${r.tooLong.length})</h3>
-      <table><thead><tr><th>URL</th><th>Title</th><th>Length</th></tr></thead>
-      <tbody>${r.tooLong.slice(0,200).map(p => `<tr><td>${urlLink(p.url)}</td><td>${esc(truncate(p.title,50))}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
+  if (f === 'all' || f === 'long') {
+    if (r.tooLong.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Long (${r.tooLong.length})</h3><table><thead><tr><th>URL</th><th>Title</th><th>Len</th></tr></thead><tbody>${r.tooLong.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${esc(p.title)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
   }
-
   $('#metatitlesContent').innerHTML = html;
 }
 
 // ── Meta Descriptions ──
+let _mdData = null, _mdFilter = 'all';
 function renderMetaDescriptions(analysis) {
-  const r = analysis.metaDescriptionsReport;
-  if (!r) { $('#metadescriptionsContent').innerHTML = '<p style="color:var(--text-muted)">No data.</p>'; return; }
-
+  _mdData = analysis.metaDescriptionsReport;
+  if (!_mdData) { $('#metadescriptionsContent').innerHTML = '<p style="color:var(--text-muted)">No data.</p>'; return; }
+  _mdFilter = 'all';
+  _renderMD();
+}
+function filterMD(f) { _mdFilter = (_mdFilter === f) ? 'all' : f; _renderMD(); }
+function _renderMD() {
+  const r = _mdData, f = _mdFilter;
+  const cb = (key, label, count, color) => {
+    const active = f === key ? 'border:2px solid #fff;' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
+    return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterMD('${key}')">${statCardInner(label, count)}</div>`;
+  };
   let html = `<div class="stats-grid">
-    ${statCard('Total Pages', r.total, '')}
-    ${statCard('Missing Description', r.missing.length, r.missing.length > 0 ? 'danger' : 'success')}
-    ${statCard('Too Short (<70)', r.tooShort.length, r.tooShort.length > 0 ? 'warning' : 'success')}
-    ${statCard('Too Long (>160)', r.tooLong.length, r.tooLong.length > 0 ? 'warning' : 'success')}
-    ${statCard('Optimal (70-160)', r.optimal, 'success')}
-    ${statCard('Duplicates', r.duplicates.length, r.duplicates.length > 0 ? 'danger' : 'success')}
+    ${cb('all', 'Total Pages', r.total, '')}
+    ${cb('missing', 'Missing Desc', r.missing.length, r.missing.length > 0 ? 'danger' : 'success')}
+    ${cb('short', 'Too Short (<70)', r.tooShort.length, r.tooShort.length > 0 ? 'warning' : 'success')}
+    ${cb('long', 'Too Long (>160)', r.tooLong.length, r.tooLong.length > 0 ? 'warning' : 'success')}
+    ${cb('optimal', 'Optimal (70-160)', r.optimal, 'success')}
+    ${cb('dup', 'Duplicates', r.duplicates.length, r.duplicates.length > 0 ? 'danger' : 'success')}
   </div>`;
-
-  if (r.missing.length > 0) {
-    html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing Meta Description (${r.missing.length})</h3>
-      <table><thead><tr><th>URL</th></tr></thead>
-      <tbody>${r.missing.slice(0,200).map(p => `<tr><td>${urlLink(p.url)}</td></tr>`).join('')}</tbody></table></div>`;
+  if (f === 'all' || f === 'missing') {
+    if (r.missing.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing Description (${r.missing.length})</h3><table><thead><tr><th>URL</th></tr></thead><tbody>${r.missing.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td></tr>`).join('')}</tbody></table></div>`;
   }
-  if (r.duplicates.length > 0) {
-    html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Duplicate Descriptions (${r.duplicates.length} groups)</h3>`;
-    for (const d of r.duplicates.slice(0, 50)) {
-      html += `<div style="margin-bottom:16px;padding:12px;background:rgba(255,255,255,0.03);border-radius:8px">
-        <strong style="color:var(--text-muted)">"${esc(truncate(d.description, 80))}"</strong> <span class="badge badge-danger">${d.count}x</span>
-        <table style="margin-top:8px"><tbody>${d.urls.map(u => `<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table>
-      </div>`;
-    }
-    html += `</div>`;
+  if (f === 'all' || f === 'dup') {
+    if (r.duplicates.length > 0) { html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Duplicate Descriptions (${r.duplicates.length} groups)</h3>`;
+      for (const d of r.duplicates.slice(0,50)) html += `<div style="margin-bottom:16px;padding:12px;background:rgba(255,255,255,0.03);border-radius:8px"><strong style="color:var(--text-muted)">"${esc(truncate(d.description,80))}"</strong> <span class="badge badge-danger">${d.count}x</span><table style="margin-top:8px"><tbody>${d.urls.map(u=>`<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
+      html += `</div>`; }
   }
-  if (r.tooShort.length > 0) {
-    html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Short (${r.tooShort.length})</h3>
-      <table><thead><tr><th>URL</th><th>Description</th><th>Length</th></tr></thead>
-      <tbody>${r.tooShort.slice(0,200).map(p => `<tr><td>${urlLink(p.url)}</td><td>${esc(truncate(p.metaDescription,60))}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
+  if (f === 'all' || f === 'short') {
+    if (r.tooShort.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Short (${r.tooShort.length})</h3><table><thead><tr><th>URL</th><th>Description</th><th>Len</th></tr></thead><tbody>${r.tooShort.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${esc(p.metaDescription)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
   }
-  if (r.tooLong.length > 0) {
-    html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Long (${r.tooLong.length})</h3>
-      <table><thead><tr><th>URL</th><th>Description</th><th>Length</th></tr></thead>
-      <tbody>${r.tooLong.slice(0,200).map(p => `<tr><td>${urlLink(p.url)}</td><td>${esc(truncate(p.metaDescription,60))}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
+  if (f === 'all' || f === 'long') {
+    if (r.tooLong.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Long (${r.tooLong.length})</h3><table><thead><tr><th>URL</th><th>Description</th><th>Len</th></tr></thead><tbody>${r.tooLong.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${esc(p.metaDescription)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
   }
-
   $('#metadescriptionsContent').innerHTML = html;
 }
 
@@ -1239,59 +1233,62 @@ function severityBadge(s) {
 }
 
 // ── Resizable table columns ──
-function initResizableColumns(tableContainer) {
-  if (!tableContainer) return;
-  const table = tableContainer.querySelector('table');
-  if (!table) return;
-
-  const ths = table.querySelectorAll('th');
-  ths.forEach(th => {
-    // Set initial width from content
-    if (!th.style.width) {
-      th.style.width = th.offsetWidth + 'px';
-    }
-    // Add resize handle
-    const handle = document.createElement('div');
-    handle.className = 'col-resize';
-    th.appendChild(handle);
-
-    let startX, startW;
-    handle.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      startX = e.pageX;
-      startW = th.offsetWidth;
-      handle.classList.add('active');
-
-      function onMove(e2) {
-        const diff = e2.pageX - startX;
-        const newW = Math.max(60, startW + diff);
-        th.style.width = newW + 'px';
-        th.style.minWidth = newW + 'px';
-      }
-      function onUp() {
-        handle.classList.remove('active');
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-      }
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+function initAllResizableColumns() {
+  document.querySelectorAll('table').forEach(table => {
+    if (table.dataset.resizable) return;
+    table.dataset.resizable = 'true';
+    table.style.tableLayout = 'auto'; // let browser auto-size first
+    requestAnimationFrame(() => {
+      const ths = table.querySelectorAll('th');
+      ths.forEach(th => {
+        if (th.querySelector('.col-resizer')) return;
+        th.style.width = th.offsetWidth + 'px';
+      });
+      table.style.tableLayout = 'fixed';
+      ths.forEach(th => {
+        const handle = document.createElement('div');
+        handle.className = 'col-resizer';
+        th.style.position = 'relative';
+        th.appendChild(handle);
+        initResizeHandle(th, handle);
+      });
     });
   });
 }
 
-// Observe table containers for new tables
-const tableObserver = new MutationObserver((mutations) => {
-  for (const m of mutations) {
-    if (m.type === 'childList') {
-      const container = m.target;
-      if (container.classList?.contains('table-container') || container.querySelector?.('.table-container')) {
-        document.querySelectorAll('.table-container').forEach(initResizableColumns);
-      }
+function initResizeHandle(th, handle) {
+
+  let startX, startW;
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    startX = e.pageX;
+    startW = th.offsetWidth;
+    handle.classList.add('active');
+
+    function onMove(e2) {
+      const diff = e2.pageX - startX;
+      const newW = Math.max(60, startW + diff);
+      th.style.width = newW + 'px';
+      th.style.minWidth = newW + 'px';
     }
-  }
+    function onUp() {
+      handle.classList.remove('active');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+// Auto-init resizable columns whenever DOM changes
+const tableObserver = new MutationObserver(() => {
+  clearTimeout(tableObserver._t);
+  tableObserver._t = setTimeout(initAllResizableColumns, 200);
 });
-tableObserver.observe(document.getElementById('viewsContainer'), { childList: true, subtree: true });
+const vc = document.getElementById('viewsContainer');
+if (vc) tableObserver.observe(vc, { childList: true, subtree: true });
 
 // Load history on page load
 loadHistory();

@@ -594,10 +594,13 @@ tr:hover { background: var(--bg-hover); }
 a.url-cell { text-decoration: none; }
 a.url-cell:hover { text-decoration: underline; }
 
-/* Resizable table columns */
-table { table-layout: auto; width: 100%; }
-table th, table td { overflow: hidden; text-overflow: ellipsis; max-width: 600px; resize: horizontal; overflow: auto; }
-table th { cursor: col-resize; }
+/* Tables: horizontal scroll wrapper */
+.section-card { overflow-x: auto; }
+table { table-layout: fixed; width: 100%; min-width: 600px; border-collapse: collapse; }
+table th, table td { padding: 10px 12px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+table th { position: relative; user-select: none; }
+table th .col-resizer { position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 2; }
+table th .col-resizer:hover, table th .col-resizer.active { background: var(--primary); opacity: 0.5; }
 
 /* Responsive */
 @media (max-width: 768px) {
