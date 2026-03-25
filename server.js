@@ -299,6 +299,7 @@ app.get('/api/crawls/:id/export/:format', (req, res) => {
 
 // Per-section XLSX export
 app.get('/api/crawls/:id/export-section/:section', (req, res) => {
+  try {
   const crawl = db.getCrawl(req.params.id);
   if (!crawl) return res.status(404).json({ error: 'Crawl not found' });
   const pages = db.getPages(req.params.id);
@@ -321,11 +322,11 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       sheetName = 'Canonicals';
       break;
     case 'hreflang':
-      data = mapped.filter(p => p.hreflangs?.length > 0).map(p => ({ URL: p.url, Hreflangs: p.hreflangs.map(h => `${h.lang}: ${h.url}`).join(' | ') }));
+      data = mapped.filter(p => p.hreflangs?.length > 0).map(p => ({ URL: p.url, Hreflangs: p.hreflangs.map(h => `${h.lang}: ${h.href || h.url}`).join(' | ') }));
       sheetName = 'Hreflang';
       break;
     case 'hreflang-canonical':
-      data = (analysis.hreflangCanonicalReport?.conflicts || []).map(c => ({ URL: c.url, Canonical: c.canonical, Type: c.type, Details: c.details }));
+      data = (analysis.hreflangCanonicalConflicts?.conflicts || []).map(c => ({ URL: c.url, Canonical: c.canonical, Conflicts: (c.conflicts || []).map(cc => `${cc.type}: ${cc.message}`).join(' | ') }));
       sheetName = 'Hreflang vs Canonical';
       break;
     case 'redirects':
@@ -428,6 +429,10 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename=${section}-export.xlsx`);
   res.send(buf);
+  } catch (err) {
+    console.error('Export error:', err);
+    res.status(500).json({ error: 'Export failed: ' + err.message });
+  }
 });
 
 // Pause/Resume/Abort
