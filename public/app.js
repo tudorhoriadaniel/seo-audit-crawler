@@ -1257,7 +1257,8 @@ function renderSummary(analysis) {
   const img = analysis.imageAnalysis || {};
   const anch = analysis.anchorsReport || {};
   const sm = analysis.sitemapReport || {};
-  const hvc = analysis.hreflangCanonicalReport || {};
+  const hvc = analysis.hreflangVsCanonicalReport || {};
+  const hrf = analysis.hreflangReport || {};
   const sec = analysis.securityReport || {};
   const sd = analysis.structuredDataReport || {};
   const cnt = analysis.contentReport || {};
@@ -1280,6 +1281,7 @@ function renderSummary(analysis) {
   if ((sc.groups?.['5xx']?.urls?.length || 0) > 0) deductions += 15;
   if (!sm.found) deductions += 5;
   if ((hvc.conflicts?.length || 0) > 0) deductions += 10;
+  if ((hrf.totalReturnLinkIssues || 0) > 0) deductions += 5;
   const score = Math.max(0, Math.min(100, Math.round(100 - deductions)));
   const scoreColor = score >= 80 ? '#22c55e' : score >= 50 ? '#f59e0b' : '#ef4444';
   const scoreLabel = score >= 80 ? 'Good' : score >= 50 ? 'Needs Work' : 'Critical Issues';
@@ -1350,9 +1352,10 @@ function renderSummary(analysis) {
 
       <div class="summary-category" style="border-left-color:#ec4899">
         <h3><span class="cat-icon">🌍</span> Hreflang & Canonical</h3>
-        ${row('Hreflang/Canonical Conflicts', hvc.conflicts?.length || 0)}
-        ${row('Missing Return Tags', hvc.missingReturnTags || 0, v => v > 0 ? 'warn' : 'ok')}
-        ${row('Missing x-default', hvc.missingXDefault || 0, v => v > 0 ? 'warn' : 'ok')}
+        ${row('Pages with Hreflangs', hrf.pagesWithHreflangs || 0, v => 'neutral')}
+        ${row('Languages Found', hrf.languages?.length || 0, v => 'neutral')}
+        ${row('Missing Return Links', hrf.totalReturnLinkIssues || 0)}
+        ${row('Hreflang vs Canonical Conflicts', hvc.conflicts?.length || 0)}
       </div>
 
       <div class="summary-category" style="border-left-color:#06b6d4">
@@ -1425,31 +1428,31 @@ function initAllResizableColumns() {
   document.querySelectorAll('table').forEach(table => {
     if (table.dataset.resizable) return;
     table.dataset.resizable = 'true';
-    table.style.tableLayout = 'auto'; // let browser auto-size first
-    requestAnimationFrame(() => {
-      const ths = table.querySelectorAll('th');
-      ths.forEach(th => {
-        if (th.querySelector('.col-resizer')) return;
-        th.style.width = th.offsetWidth + 'px';
-      });
-      table.style.tableLayout = 'fixed';
-      ths.forEach(th => {
-        const handle = document.createElement('div');
-        handle.className = 'col-resizer';
-        th.style.position = 'relative';
-        th.appendChild(handle);
-        initResizeHandle(th, handle);
-      });
+    // Keep table-layout: auto so columns size naturally
+    table.style.tableLayout = 'auto';
+    const ths = table.querySelectorAll('th');
+    ths.forEach(th => {
+      if (th.querySelector('.col-resizer')) return;
+      const handle = document.createElement('div');
+      handle.className = 'col-resizer';
+      th.style.position = 'relative';
+      th.appendChild(handle);
+      initResizeHandle(th, handle, table);
     });
   });
 }
 
-function initResizeHandle(th, handle) {
-
+function initResizeHandle(th, handle, table) {
   let startX, startW;
   handle.addEventListener('mousedown', (e) => {
     e.preventDefault();
     e.stopPropagation();
+    // Switch to fixed layout on first resize so widths are respected
+    if (table.style.tableLayout !== 'fixed') {
+      const ths = table.querySelectorAll('th');
+      ths.forEach(t => { t.style.width = t.offsetWidth + 'px'; });
+      table.style.tableLayout = 'fixed';
+    }
     startX = e.pageX;
     startW = th.offsetWidth;
     handle.classList.add('active');

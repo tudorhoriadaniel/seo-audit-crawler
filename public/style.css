@@ -615,7 +615,7 @@ a.url-cell:hover { text-decoration: underline; }
 
 /* Tables: horizontal scroll wrapper */
 .section-card { overflow-x: auto; }
-table { table-layout: fixed; width: 100%; min-width: 600px; border-collapse: collapse; }
+table { table-layout: auto; width: 100%; min-width: 600px; border-collapse: collapse; }
 table th, table td { padding: 10px 12px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: normal; word-break: break-word; }
 table th { position: relative; user-select: none; }
 table th .col-resizer { position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 2; }
