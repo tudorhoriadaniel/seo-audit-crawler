@@ -315,23 +315,34 @@ function renderPagesTable(pages) {
 
   const html = `<table>
     <thead><tr>
-      <th>URL</th><th>Status</th><th>Title</th><th>Title Len</th>
-      <th>Meta Desc Len</th><th>H1 Count</th><th>Word Count</th>
-      <th>Canonical</th><th>Hreflangs</th><th>Response (ms)</th><th>Depth</th>
+      <th>URL</th><th>Status</th><th>Meta Title</th><th>Title Len</th>
+      <th>Meta Description</th><th>Desc Len</th>
+      <th>H1</th><th>H1 #</th><th>H2 #</th>
+      <th>Word Count</th><th>Canonical</th><th>Hreflangs</th>
+      <th>Schema Types</th><th>Directives</th><th>Response (ms)</th><th>Depth</th>
     </tr></thead>
-    <tbody>${filtered.map(p => `<tr class="page-row" data-url="${esc(p.url)}">
+    <tbody>${filtered.map(p => {
+      const h1s = JSON.parse(p.h1 || '[]');
+      const hls = JSON.parse(p.hreflangs || '[]');
+      const sdt = JSON.parse(p.structured_data_types || '[]');
+      return `<tr class="page-row" data-url="${esc(p.url)}">
       <td>${urlLink(p.url)}</td>
       <td>${statusBadge(p.status_code)}</td>
       <td>${esc(p.title || '-')}</td>
       <td>${p.title_length || 0}</td>
+      <td style="max-width:300px">${esc(p.meta_description || '-')}</td>
       <td>${p.meta_description_length || 0}</td>
+      <td>${h1s.length > 0 ? esc(h1s[0]) : '-'}</td>
       <td>${p.h1_count || 0}</td>
+      <td>${p.h2_count || 0}</td>
       <td>${p.word_count || 0}</td>
       <td>${p.canonical ? (p.canonical_is_self ? '<span class="badge badge-success">Self</span>' : urlLink(p.canonical)) : '<span class="badge badge-muted">None</span>'}</td>
-      <td>${JSON.parse(p.hreflangs || '[]').length || 0}</td>
+      <td>${hls.length > 0 ? hls.map(h => `<span class="badge badge-info">${esc(h.lang)}</span>`).join(' ') : '0'}</td>
+      <td>${sdt.length > 0 ? sdt.map(t => `<span class="badge badge-info">${esc(t)}</span>`).join(' ') : '-'}</td>
+      <td>${esc(p.meta_robots || 'index, follow')}</td>
       <td>${p.response_time || 0}</td>
       <td>${p.depth || 0}</td>
-    </tr>`).join('')}</tbody>
+    </tr>`}).join('')}</tbody>
   </table>`;
   $('#pagesTable').innerHTML = exportBtn('allpages') + html;
 

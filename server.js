@@ -330,7 +330,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       sheetName = 'Hreflang vs Canonical';
       break;
     case 'redirects':
-      data = (analysis.redirectReport?.chains || []).map(r => ({ 'Original URL': r.url, 'Final URL': r.finalUrl, Hops: r.hops, Chain: (r.chain || []).map(c => `${c.statusCode}: ${c.url}`).join(' → ') }));
+      data = (analysis.redirectChains?.chains || []).map(r => ({ 'Original URL': r.originalUrl, 'Final URL': r.finalUrl, Hops: r.hops, Chain: (r.chain || []).map(c => `${c.statusCode}: ${c.url}`).join(' → ') }));
       sheetName = 'Redirects';
       break;
     case 'statuscodes':
@@ -355,7 +355,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       break;
     case 'sitemaps':
       const sm = analysis.sitemapReport || {};
-      data = (sm.notInSitemap || []).map(u => ({ URL: u, Status: 'Crawled, not in sitemap' }));
+      data = (sm.crawledNotInSitemap || []).map(u => ({ URL: u, Status: 'Crawled, not in sitemap' }));
       (sm.inSitemapNotCrawled || []).forEach(u => data.push({ URL: u, Status: 'In sitemap, not crawled' }));
       sheetName = 'Sitemap Analysis';
       break;
@@ -372,7 +372,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       sheetName = 'Security';
       break;
     case 'links':
-      const lnk = analysis.internalLinksReport || {};
+      const lnk = analysis.internalLinkAnalysis || {};
       data = (lnk.mostLinked || []).map(l => ({ URL: l.url, 'Inbound Links': l.inboundLinks }));
       sheetName = 'Internal Links';
       break;
@@ -385,7 +385,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       sheetName = 'Directives';
       break;
     case 'allpages':
-      data = mapped.map(p => ({ URL: p.url, Status: p.statusCode, Title: p.title || '', 'Title Length': p.titleLength || 0, 'Meta Description': (p.metaDescription || '').substring(0, 200), 'Meta Desc Length': p.metaDescriptionLength || 0, 'Word Count': p.wordCount || 0, Canonical: p.canonical || '', 'Response Time': p.responseTime || 0 }));
+      data = mapped.map(p => ({ URL: p.url, Status: p.statusCode, 'Meta Title': p.title || '', 'Title Length': p.titleLength || 0, 'Meta Description': p.metaDescription || '', 'Desc Length': p.metaDescriptionLength || 0, H1: (p.h1 || [])[0] || '', 'H1 Count': p.h1Count || 0, 'H2 Count': p.h2Count || 0, 'Word Count': p.wordCount || 0, Canonical: p.canonical || '', 'Hreflangs': (p.hreflangs || []).map(h => h.lang).join(', '), 'Schema Types': (p.structuredData || []).join(', '), Directives: p.metaRobots || 'index, follow', 'Response Time': p.responseTime || 0, Depth: p.depth || 0 }));
       sheetName = 'All Pages';
       break;
     case 'summary': {
