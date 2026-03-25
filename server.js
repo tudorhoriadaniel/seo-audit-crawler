@@ -19,6 +19,62 @@ const db = new CrawlDatabase();
 const activeCrawls = new Map();
 
 app.use(express.json());
+
+// ── Password protection ──
+const SITE_PASSWORD = process.env.SITE_PASSWORD || 'converta2026';
+const cookieParser = (req) => {
+  const raw = req.headers.cookie || '';
+  const cookies = {};
+  raw.split(';').forEach(c => {
+    const [k, v] = c.trim().split('=');
+    if (k) cookies[k] = v;
+  });
+  return cookies;
+};
+
+app.get('/login', (req, res) => {
+  const error = req.query.error ? '<p style="color:#ef4444;margin-bottom:16px">Incorrect password</p>' : '';
+  res.send(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Login - SEO Audit Crawler</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#0f1117;color:#e4e6ef;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.login-box{background:#1a1d27;border:1px solid #2a2e3d;border-radius:12px;padding:40px;width:100%;max-width:400px;text-align:center}
+h1{font-size:24px;margin-bottom:8px}p.sub{color:#8b8fa3;font-size:14px;margin-bottom:24px}
+input{width:100%;padding:12px 16px;background:#141620;border:1px solid #2a2e3d;border-radius:8px;color:#e4e6ef;font-size:15px;margin-bottom:16px;outline:none}
+input:focus{border-color:#6366f1}
+button{width:100%;padding:12px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
+button:hover{background:#818cf8}</style></head><body>
+<div class="login-box">
+<h1>SEO Audit Crawler</h1><p class="sub">Enter password to access</p>
+${error}
+<form method="POST" action="/login"><input type="password" name="password" placeholder="Password" autofocus required><button type="submit">Login</button></form>
+</div></body></html>`);
+});
+
+app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
+  if (req.body.password === SITE_PASSWORD) {
+    // Set auth cookie (24h)
+    res.setHeader('Set-Cookie', `seo_auth=1; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400${req.secure ? '; Secure' : ''}`);
+    res.redirect('/');
+  } else {
+    res.redirect('/login?error=1');
+  }
+});
+
+app.get('/logout', (req, res) => {
+  res.setHeader('Set-Cookie', 'seo_auth=; Path=/; HttpOnly; Max-Age=0');
+  res.redirect('/login');
+});
+
+// Auth middleware — protect everything except /login and /api/health
+app.use((req, res, next) => {
+  if (req.path === '/login' || req.path === '/api/health') return next();
+  const cookies = cookieParser(req);
+  if (cookies.seo_auth === '1') return next();
+  // For API calls return 401, for pages redirect to login
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
+  res.redirect('/login');
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── API Routes ──
