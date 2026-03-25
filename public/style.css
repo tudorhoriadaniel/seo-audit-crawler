@@ -26,7 +26,6 @@ body {
   color: var(--text);
   display: flex;
   min-height: 100vh;
-  overflow-x: hidden;
 }
 
 /* Sidebar */
@@ -87,6 +86,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  overflow-x: auto;
 }
 
 /* Topbar */
@@ -313,7 +313,7 @@ table {
   min-width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-  table-layout: fixed;
+  table-layout: auto;
 }
 th {
   background: var(--bg-card);
