@@ -47,6 +47,52 @@ document.addEventListener('click', (e) => {
 $('#startCrawl').addEventListener('click', startCrawl);
 $('#urlInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') startCrawl(); });
 
+// Save/Open project
+$('#saveProject').addEventListener('click', async () => {
+  if (!currentCrawlId) return alert('No crawl to save');
+  window.open(`/api/crawls/${currentCrawlId}/export-project`, '_blank');
+});
+$('#openProject').addEventListener('click', () => $('#projectFileInput').click());
+$('#projectFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const project = JSON.parse(text);
+    const res = await fetch('/api/import-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text });
+    const data = await res.json();
+    if (data.error) return alert(data.error);
+    analysisData = data.analysis;
+    pagesData = data.pages;
+    if (data.crawl) $('#urlInput').value = data.crawl.url || '';
+    renderAll(data.analysis);
+    $('#emptyState')?.classList.add('hidden');
+    alert('Project loaded successfully!');
+  } catch (err) { alert('Failed to load project: ' + err.message); }
+  e.target.value = '';
+});
+
+function renderAll(analysis) {
+  renderDashboard(analysis);
+  renderAllPages(pagesData);
+  renderIssues(analysis);
+  renderHreflang(analysis);
+  renderCanonicals(analysis);
+  renderConflicts(analysis);
+  renderRedirects(analysis);
+  renderContent(analysis);
+  renderImages(analysis);
+  renderStructuredData(analysis);
+  renderSecurity(analysis);
+  renderInternalLinks(analysis);
+  renderAiBots(analysis);
+  renderSitemaps(analysis);
+  renderStatusCodes(analysis);
+  renderAnchors(analysis);
+  renderMetaTitles(analysis);
+  renderMetaDescriptions(analysis);
+}
+
 async function startCrawl() {
   const url = $('#urlInput').value.trim();
   if (!url) return;
@@ -178,6 +224,9 @@ socket.on('complete', (data) => {
   renderSitemaps(data.analysis);
   renderStatusCodes(data.analysis);
   renderAnchors(data.analysis);
+  renderMetaTitles(data.analysis);
+  renderMetaDescriptions(data.analysis);
+  $('#saveProject').style.display = '';
 });
 
 socket.on('error', (data) => {
@@ -399,12 +448,14 @@ function renderIssues(analysis) {
       ${issueCountCard(filtered.filter(i => i.severity === 'info').length, 'Info', 'info')}
     `;
 
-    $('#issuesTable').innerHTML = `<table>
+    $('#issuesTable').innerHTML = `
+      <div style="margin-bottom:12px"><button class="btn btn-sm" onclick="exportIssuesToCSV()">📥 Export Issues CSV</button></div>
+      <table>
       <thead><tr><th>Severity</th><th>Category</th><th>URL</th><th>Issue</th></tr></thead>
       <tbody>${filtered.map(i => `<tr>
         <td>${severityBadge(i.severity)}</td>
         <td>${esc(i.category)}</td>
-        <td class="url-cell" title="${esc(i.url)}">${truncate(i.url, 50)}</td>
+        <td>${urlLink(i.url)}</td>
         <td>${esc(i.message)}</td>
       </tr>`).join('')}</tbody>
     </table>`;
@@ -413,6 +464,20 @@ function renderIssues(analysis) {
   $('#issuesSeverity').addEventListener('change', render);
   $('#issuesCategory').addEventListener('change', render);
   render();
+}
+
+function exportIssuesToCSV() {
+  if (!analysisData || !analysisData.issues) return;
+  const rows = [['Severity','Category','URL','Issue']];
+  for (const i of analysisData.issues) {
+    rows.push([i.severity, i.category, i.url, i.message]);
+  }
+  const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'seo-issues.csv';
+  a.click();
 }
 
 // ── Hreflang ──
@@ -659,11 +724,11 @@ function renderLinks(analysis) {
   }
 
   if (r.topLinkedPages.length > 0) {
-    const max = r.topLinkedPages[0]?.inboundLinks || 1;
     html += `<div class="section-card"><h3>Most Linked Pages (Top 50)</h3>
-      <div class="bar-chart">${r.topLinkedPages.map(p =>
-        `<div class="bar-item"><span class="bar-label" title="${esc(p.url)}">${truncate(p.url, 40)}</span><div class="bar-track"><div class="bar-fill primary" style="width:${(p.inboundLinks/max*100).toFixed(0)}%">${p.inboundLinks}</div></div></div>`
-      ).join('')}</div></div>`;
+      <table><thead><tr><th>URL</th><th>Inbound Links</th></tr></thead>
+      <tbody>${r.topLinkedPages.map(p =>
+        `<tr><td>${urlLink(p.url)}</td><td><strong>${p.inboundLinks}</strong></td></tr>`
+      ).join('')}</tbody></table></div>`;
   }
 
   $('#linksContent').innerHTML = html;
@@ -723,6 +788,8 @@ window.loadCrawl = async function(id) {
   renderSitemaps(analysis);
   renderStatusCodes(analysis);
   renderAnchors(analysis);
+  renderMetaTitles(analysis);
+  renderMetaDescriptions(analysis);
 
   $('#emptyState').classList.add('hidden');
   $('#dashboardContent').classList.remove('hidden');
@@ -740,17 +807,33 @@ window.deleteCrawl = async function(id) {
 };
 
 // ── Status Codes ──
+let _statusCodesData = null;
+let _statusCodesActiveFilter = 'all';
+
 function renderStatusCodes(analysis) {
   const r = analysis.statusCodesReport;
   if (!r) { $('#statuscodesContent').innerHTML = '<p style="color:var(--text-muted)">No data.</p>'; return; }
+  _statusCodesData = r;
+  _statusCodesActiveFilter = 'all';
+  _renderStatusCodesUI();
+}
+
+function _renderStatusCodesUI() {
+  const r = _statusCodesData;
+  const f = _statusCodesActiveFilter;
+
+  const cardBtn = (key, label, count, color) => {
+    const active = f === key ? 'border:2px solid #fff;' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
+    return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterStatusCodes('${key}')">${statCardInner(label, count)}</div>`;
+  };
 
   let html = `<div class="stats-grid">
-    ${statCard('Total URLs', r.total, '')}
-    ${statCard('2xx Success', r.groups['2xx'].urls.length, 'success')}
-    ${statCard('3xx Redirect', r.groups['3xx'].urls.length, r.groups['3xx'].urls.length > 0 ? 'warning' : '')}
-    ${statCard('4xx Client Error', r.groups['4xx'].urls.length, r.groups['4xx'].urls.length > 0 ? 'danger' : 'success')}
-    ${statCard('5xx Server Error', r.groups['5xx'].urls.length, r.groups['5xx'].urls.length > 0 ? 'danger' : 'success')}
-    ${statCard('Conn Errors', r.groups['error'].urls.length, r.groups['error'].urls.length > 0 ? 'danger' : '')}
+    ${cardBtn('all', 'Total URLs', r.total, '')}
+    ${cardBtn('2xx', '2xx Success', r.groups['2xx'].urls.length, 'success')}
+    ${cardBtn('3xx', '3xx Redirect', r.groups['3xx'].urls.length, r.groups['3xx'].urls.length > 0 ? 'warning' : '')}
+    ${cardBtn('4xx', '4xx Client Error', r.groups['4xx'].urls.length, r.groups['4xx'].urls.length > 0 ? 'danger' : 'success')}
+    ${cardBtn('5xx', '5xx Server Error', r.groups['5xx'].urls.length, r.groups['5xx'].urls.length > 0 ? 'danger' : 'success')}
+    ${cardBtn('error', 'Conn Errors', r.groups['error'].urls.length, r.groups['error'].urls.length > 0 ? 'danger' : '')}
   </div>`;
 
   // Pie chart
@@ -769,24 +852,32 @@ function renderStatusCodes(analysis) {
     </div>`;
   }
 
-  // Tables for each group
-  const groupOrder = ['2xx', '3xx', '4xx', '5xx', 'error'];
-  const groupColors = { '2xx': 'success', '3xx': 'warning', '4xx': 'danger', '5xx': 'danger', 'error': 'muted' };
+  // Tables for filtered groups
+  const groupOrder = f === 'all' ? ['2xx', '3xx', '4xx', '5xx', 'error'] : [f];
   for (const key of groupOrder) {
     const g = r.groups[key];
-    if (g.urls.length === 0) continue;
+    if (!g || g.urls.length === 0) continue;
     html += `<div class="section-card" style="border-left:4px solid ${g.color}">
       <h3>${esc(g.label)} (${g.urls.length})</h3>
       <table><thead><tr><th>URL</th><th>Status</th>${key === '3xx' ? '<th>Redirects To</th>' : ''}${key === 'error' ? '<th>Error</th>' : ''}</tr></thead>
       <tbody>${g.urls.slice(0, 500).map(u => `<tr>
-        <td>${urlLink(u.url, 70)}</td>
+        <td>${urlLink(u.url)}</td>
         <td>${u.statusCode ? statusBadge(u.statusCode) : '<span class="badge badge-danger">Error</span>'}</td>
-        ${key === '3xx' ? `<td>${u.finalUrl ? urlLink(u.finalUrl, 50) : '-'}</td>` : ''}
+        ${key === '3xx' ? `<td>${u.finalUrl ? urlLink(u.finalUrl) : '-'}</td>` : ''}
         ${key === 'error' ? `<td style="font-size:12px;color:var(--text-muted)">${esc(u.error || '')}</td>` : ''}
       </tr>`).join('')}</tbody></table></div>`;
   }
 
   $('#statuscodesContent').innerHTML = html;
+}
+
+function filterStatusCodes(key) {
+  _statusCodesActiveFilter = (_statusCodesActiveFilter === key) ? 'all' : key;
+  _renderStatusCodesUI();
+}
+
+function statCardInner(label, value) {
+  return `<div class="stat-value">${value}</div><div class="stat-label">${label}</div>`;
 }
 
 // ── Anchors ──
@@ -816,6 +907,92 @@ function renderAnchors(analysis) {
   }
 
   $('#anchorsContent').innerHTML = html;
+}
+
+// ── Meta Titles ──
+function renderMetaTitles(analysis) {
+  const r = analysis.metaTitlesReport;
+  if (!r) { $('#metatitlesContent').innerHTML = '<p style="color:var(--text-muted)">No data.</p>'; return; }
+
+  let html = `<div class="stats-grid">
+    ${statCard('Total Pages', r.total, '')}
+    ${statCard('Missing Title', r.missing.length, r.missing.length > 0 ? 'danger' : 'success')}
+    ${statCard('Too Short (<30)', r.tooShort.length, r.tooShort.length > 0 ? 'warning' : 'success')}
+    ${statCard('Too Long (>60)', r.tooLong.length, r.tooLong.length > 0 ? 'warning' : 'success')}
+    ${statCard('Optimal (30-60)', r.optimal, 'success')}
+    ${statCard('Duplicate Titles', r.duplicates.length, r.duplicates.length > 0 ? 'danger' : 'success')}
+  </div>`;
+
+  if (r.missing.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing Title (${r.missing.length})</h3>
+      <table><thead><tr><th>URL</th></tr></thead>
+      <tbody>${r.missing.slice(0,200).map(p => `<tr><td>${urlLink(p.url)}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  if (r.duplicates.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Duplicate Titles (${r.duplicates.length} groups)</h3>`;
+    for (const d of r.duplicates.slice(0, 50)) {
+      html += `<div style="margin-bottom:16px;padding:12px;background:rgba(255,255,255,0.03);border-radius:8px">
+        <strong style="color:var(--text-muted)">"${esc(truncate(d.title, 80))}"</strong> <span class="badge badge-danger">${d.count}x</span>
+        <table style="margin-top:8px"><tbody>${d.urls.map(u => `<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+  if (r.tooShort.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Short (${r.tooShort.length})</h3>
+      <table><thead><tr><th>URL</th><th>Title</th><th>Length</th></tr></thead>
+      <tbody>${r.tooShort.slice(0,200).map(p => `<tr><td>${urlLink(p.url)}</td><td>${esc(truncate(p.title,50))}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  if (r.tooLong.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Long (${r.tooLong.length})</h3>
+      <table><thead><tr><th>URL</th><th>Title</th><th>Length</th></tr></thead>
+      <tbody>${r.tooLong.slice(0,200).map(p => `<tr><td>${urlLink(p.url)}</td><td>${esc(truncate(p.title,50))}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+
+  $('#metatitlesContent').innerHTML = html;
+}
+
+// ── Meta Descriptions ──
+function renderMetaDescriptions(analysis) {
+  const r = analysis.metaDescriptionsReport;
+  if (!r) { $('#metadescriptionsContent').innerHTML = '<p style="color:var(--text-muted)">No data.</p>'; return; }
+
+  let html = `<div class="stats-grid">
+    ${statCard('Total Pages', r.total, '')}
+    ${statCard('Missing Description', r.missing.length, r.missing.length > 0 ? 'danger' : 'success')}
+    ${statCard('Too Short (<70)', r.tooShort.length, r.tooShort.length > 0 ? 'warning' : 'success')}
+    ${statCard('Too Long (>160)', r.tooLong.length, r.tooLong.length > 0 ? 'warning' : 'success')}
+    ${statCard('Optimal (70-160)', r.optimal, 'success')}
+    ${statCard('Duplicates', r.duplicates.length, r.duplicates.length > 0 ? 'danger' : 'success')}
+  </div>`;
+
+  if (r.missing.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing Meta Description (${r.missing.length})</h3>
+      <table><thead><tr><th>URL</th></tr></thead>
+      <tbody>${r.missing.slice(0,200).map(p => `<tr><td>${urlLink(p.url)}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  if (r.duplicates.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Duplicate Descriptions (${r.duplicates.length} groups)</h3>`;
+    for (const d of r.duplicates.slice(0, 50)) {
+      html += `<div style="margin-bottom:16px;padding:12px;background:rgba(255,255,255,0.03);border-radius:8px">
+        <strong style="color:var(--text-muted)">"${esc(truncate(d.description, 80))}"</strong> <span class="badge badge-danger">${d.count}x</span>
+        <table style="margin-top:8px"><tbody>${d.urls.map(u => `<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+  if (r.tooShort.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Short (${r.tooShort.length})</h3>
+      <table><thead><tr><th>URL</th><th>Description</th><th>Length</th></tr></thead>
+      <tbody>${r.tooShort.slice(0,200).map(p => `<tr><td>${urlLink(p.url)}</td><td>${esc(truncate(p.metaDescription,60))}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  if (r.tooLong.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Long (${r.tooLong.length})</h3>
+      <table><thead><tr><th>URL</th><th>Description</th><th>Length</th></tr></thead>
+      <tbody>${r.tooLong.slice(0,200).map(p => `<tr><td>${urlLink(p.url)}</td><td>${esc(truncate(p.metaDescription,60))}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+
+  $('#metadescriptionsContent').innerHTML = html;
 }
 
 // ── Sitemaps ──

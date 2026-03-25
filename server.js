@@ -129,6 +129,31 @@ app.get('/api/crawls', (req, res) => {
   res.json(crawls.map(c => ({ ...c, stats: JSON.parse(c.stats || '{}') })));
 });
 
+// Export project JSON
+app.get('/api/crawls/:id/export-project', (req, res) => {
+  const crawl = db.getCrawl(req.params.id);
+  if (!crawl) return res.status(404).json({ error: 'Crawl not found' });
+  const pages = db.getPages(req.params.id);
+  const mapped = mapPagesForAnalysis(pages);
+  const analyzer = new Analyzer(mapped, { robotsTxt: crawl.robots_txt, sitemapData: crawl.sitemap_data ? JSON.parse(crawl.sitemap_data) : null });
+  const analysis = analyzer.analyze();
+  const project = { version: '2.0', crawl: { ...crawl, stats: JSON.parse(crawl.stats || '{}') }, pages: mapped, analysis };
+  res.setHeader('Content-Disposition', `attachment; filename="seo-crawl-${req.params.id.slice(0,8)}.json"`);
+  res.setHeader('Content-Type', 'application/json');
+  res.json(project);
+});
+
+// Import project JSON
+app.post('/api/import-project', express.json({ limit: '200mb' }), (req, res) => {
+  try {
+    const project = req.body;
+    if (!project.analysis || !project.pages) return res.status(400).json({ error: 'Invalid project file' });
+    res.json({ analysis: project.analysis, pages: project.pages, crawl: project.crawl });
+  } catch (e) {
+    res.status(400).json({ error: 'Failed to parse project: ' + e.message });
+  }
+});
+
 // Start a new crawl
 app.post('/api/crawls', (req, res) => {
   const { url, maxPages, maxDepth, concurrency, respectRobots, userAgent } = req.body;

@@ -589,8 +589,15 @@ tr:hover { background: var(--bg-hover); }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* URL display */
-.url-cell { color: var(--primary); cursor: pointer; }
+.url-cell { color: var(--primary); cursor: pointer; word-break: break-all; }
 .url-cell:hover { text-decoration: underline; }
+a.url-cell { text-decoration: none; }
+a.url-cell:hover { text-decoration: underline; }
+
+/* Resizable table columns */
+table { table-layout: auto; width: 100%; }
+table th, table td { overflow: hidden; text-overflow: ellipsis; max-width: 600px; resize: horizontal; overflow: auto; }
+table th { cursor: col-resize; }
 
 /* Responsive */
 @media (max-width: 768px) {

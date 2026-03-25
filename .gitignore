@@ -7,3 +7,16 @@ __pycache__/
 output/
 exports/
 *.pyc
+seo_crawler/
+web/
+deploy/
+resources/
+src/
+*.py
+*.sh
+*.ttf
+*.txt
+.htaccess
+.claude/
+SEO Crawler Pro.app/
+package-lock.json
