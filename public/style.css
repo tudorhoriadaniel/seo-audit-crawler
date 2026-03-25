@@ -357,11 +357,10 @@ tr:hover { background: var(--bg-hover); }
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  margin-bottom: 20px;
-  max-height: 300px;
-  overflow-y: auto;
+  margin: 0 0 20px;
+  overflow: hidden;
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column;
 }
 .live-feed-header {
   padding: 12px 16px;
@@ -371,10 +370,13 @@ tr:hover { background: var(--bg-hover); }
   display: flex;
   align-items: center;
   gap: 8px;
-  position: sticky;
-  top: 0;
-  background: var(--bg-card);
-  z-index: 1;
+  flex-shrink: 0;
+}
+#liveFeedItems {
+  max-height: 250px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 .live-feed-header .pulse {
   width: 8px; height: 8px;

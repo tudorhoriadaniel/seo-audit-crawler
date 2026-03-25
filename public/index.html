@@ -121,14 +121,14 @@
       </div>
     </div>
 
-    <!-- Live feed (visible during crawl) -->
-    <div class="live-feed hidden" id="liveFeed">
-      <div class="live-feed-header"><div class="pulse"></div> Live Crawl Feed</div>
-      <div id="liveFeedItems"></div>
-    </div>
-
     <!-- Views container -->
     <div class="views-container" id="viewsContainer">
+      <!-- Live feed (visible during crawl) -->
+      <div class="live-feed hidden" id="liveFeed">
+        <div class="live-feed-header"><div class="pulse"></div> Live Crawl Feed <span id="liveFeedCount" style="margin-left:auto;font-size:11px;color:var(--text-muted)"></span></div>
+        <div id="liveFeedItems"></div>
+      </div>
+
       <!-- Dashboard view -->
       <div class="view active" id="view-dashboard">
         <div class="empty-state" id="emptyState">

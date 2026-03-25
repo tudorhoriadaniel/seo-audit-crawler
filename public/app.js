@@ -1,8 +1,15 @@
 /* global io */
 const socket = io();
-let currentCrawlId = null;
+// Each tab gets its own crawl ID via sessionStorage so parallel tabs work
+let currentCrawlId = sessionStorage.getItem('currentCrawlId') || null;
 let analysisData = null;
 let pagesData = [];
+
+function setCurrentCrawlId(id) {
+  currentCrawlId = id;
+  if (id) sessionStorage.setItem('currentCrawlId', id);
+  else sessionStorage.removeItem('currentCrawlId');
+}
 
 // ── DOM refs ──
 const $ = (s) => document.querySelector(s);
@@ -62,7 +69,7 @@ async function startCrawl() {
     const data = await res.json();
     if (data.error) return alert(data.error);
 
-    currentCrawlId = data.id;
+    setCurrentCrawlId(data.id);
     pagesData = [];
     analysisData = null;
 
@@ -139,8 +146,11 @@ socket.on('page', (page) => {
       <span class="feed-time">${page.responseTime || 0}ms</span>
     `;
     feed.prepend(item);
-    // Keep max 100 items
-    while (feed.children.length > 100) feed.removeChild(feed.lastChild);
+    // Keep max 200 items visible
+    while (feed.children.length > 200) feed.removeChild(feed.lastChild);
+    // Update count
+    const countEl = $('#liveFeedCount');
+    if (countEl) countEl.textContent = `${pagesData.length} pages scanned`;
   }
 });
 
@@ -673,7 +683,7 @@ async function loadHistory() {
 }
 
 window.loadCrawl = async function(id) {
-  currentCrawlId = id;
+  setCurrentCrawlId(id);
   const res = await fetch(`/api/crawls/${id}/analysis`);
   if (!res.ok) return alert('Could not load analysis');
   const analysis = await res.json();
