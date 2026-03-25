@@ -79,6 +79,7 @@ async function startCrawl() {
     $('#startCrawl').classList.add('hidden');
     $('#stopCrawl').classList.remove('hidden');
     $('#pauseCrawl').classList.remove('hidden');
+    $('#resumeCrawl').classList.add('hidden');
     $('#progressContainer').classList.remove('hidden');
     $('#liveFeed').classList.remove('hidden');
     $('#liveFeedItems').innerHTML = '';
@@ -97,7 +98,7 @@ async function startCrawl() {
   }
 }
 
-// Stop / Pause
+// Stop / Pause / Resume
 $('#stopCrawl').addEventListener('click', async () => {
   if (!currentCrawlId) return;
   await fetch(`/api/crawls/${currentCrawlId}/abort`, { method: 'POST' });
@@ -106,21 +107,25 @@ $('#stopCrawl').addEventListener('click', async () => {
 
 $('#pauseCrawl').addEventListener('click', async () => {
   if (!currentCrawlId) return;
-  const btn = $('#pauseCrawl');
-  if (btn.textContent === 'Pause') {
-    await fetch(`/api/crawls/${currentCrawlId}/pause`, { method: 'POST' });
-    btn.textContent = 'Resume';
-  } else {
-    await fetch(`/api/crawls/${currentCrawlId}/resume`, { method: 'POST' });
-    btn.textContent = 'Pause';
-  }
+  await fetch(`/api/crawls/${currentCrawlId}/pause`, { method: 'POST' });
+  $('#pauseCrawl').classList.add('hidden');
+  $('#resumeCrawl').classList.remove('hidden');
+  $('#progressText').textContent = 'Paused';
+});
+
+$('#resumeCrawl').addEventListener('click', async () => {
+  if (!currentCrawlId) return;
+  await fetch(`/api/crawls/${currentCrawlId}/resume`, { method: 'POST' });
+  $('#resumeCrawl').classList.add('hidden');
+  $('#pauseCrawl').classList.remove('hidden');
+  $('#progressText').textContent = 'Crawling...';
 });
 
 function resetCrawlUI() {
   $('#startCrawl').classList.remove('hidden');
   $('#stopCrawl').classList.add('hidden');
   $('#pauseCrawl').classList.add('hidden');
-  $('#pauseCrawl').textContent = 'Pause';
+  $('#resumeCrawl').classList.add('hidden');
   $('#progressContainer').classList.add('hidden');
   $('#liveFeed').classList.add('hidden');
 }

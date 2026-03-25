@@ -143,7 +143,7 @@ app.post('/api/crawls', (req, res) => {
 
   const crawlId = uuidv4();
   const config = {
-    maxPages: Math.min(parseInt(maxPages) || 500, 10000),
+    maxPages: Math.min(parseInt(maxPages) || 5000, 50000),
     maxDepth: Math.min(parseInt(maxDepth) || 10, 50),
     concurrency: Math.min(parseInt(concurrency) || 5, 20),
     respectRobots: respectRobots !== false,

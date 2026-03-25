@@ -84,8 +84,9 @@
       <div class="crawl-input-bar" id="crawlBar">
         <input type="url" id="urlInput" placeholder="Enter website URL to crawl (e.g., https://example.com)" autocomplete="url">
         <button class="btn btn-primary" id="startCrawl">Start Crawl</button>
+        <button class="btn btn-warning hidden" id="pauseCrawl">Pause</button>
+        <button class="btn btn-success hidden" id="resumeCrawl">Resume</button>
         <button class="btn btn-danger hidden" id="stopCrawl">Stop</button>
-        <button class="btn btn-secondary hidden" id="pauseCrawl">Pause</button>
       </div>
       <div class="topbar-settings">
         <button class="settings-icon" id="settingsToggle">
@@ -100,7 +101,7 @@
           </div>
           <div class="setting-row">
             <span>Max Pages</span>
-            <input type="number" id="optMaxPages" value="500" min="1" max="10000" style="width:80px;padding:6px 8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;text-align:right">
+            <input type="number" id="optMaxPages" value="5000" min="1" max="50000" style="width:80px;padding:6px 8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;text-align:right">
           </div>
           <div class="setting-row">
             <span>Max Depth</span>
