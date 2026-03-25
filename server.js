@@ -176,16 +176,23 @@ app.post('/api/crawls', (req, res) => {
   };
 
   crawler.onComplete = (summary) => {
-    // Store robotsTxt in stats for later retrieval
-    const statsWithRobots = { ...summary.stats, robotsTxt: summary.robotsTxt || null };
-    db.updateCrawlStatus(crawlId, 'completed', statsWithRobots);
+    // Store robotsTxt and sitemapData in stats for later retrieval
+    const statsWithExtra = {
+      ...summary.stats,
+      robotsTxt: summary.robotsTxt || null,
+      sitemapData: summary.sitemapData || null
+    };
+    db.updateCrawlStatus(crawlId, 'completed', statsWithExtra);
     activeCrawls.delete(crawlId);
 
     // Run analysis
     const pages = db.getCrawlPages(crawlId);
     const resultsForAnalysis = mapPagesForAnalysis(pages);
 
-    const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: summary.robotsTxt });
+    const analyzer = new Analyzer(resultsForAnalysis, {
+      robotsTxt: summary.robotsTxt,
+      sitemapData: summary.sitemapData
+    });
     const analysis = analyzer.analyze();
 
     io.to(crawlId).emit('complete', { stats: summary.stats, analysis });
@@ -228,7 +235,7 @@ app.get('/api/crawls/:id/analysis', (req, res) => {
   const crawl = db.getCrawl(req.params.id);
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
   res.json(analyzer.analyze());
 });
 
@@ -240,7 +247,7 @@ app.get('/api/crawls/:id/export/:format', (req, res) => {
   const crawl = db.getCrawl(req.params.id);
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
   const analysis = analyzer.analyze();
 
   switch (req.params.format) {

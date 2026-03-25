@@ -654,3 +654,27 @@ tr:hover { background: var(--bg-hover); }
 .history-url { font-weight: 600; font-size: 14px; }
 .history-meta { font-size: 12px; color: var(--text-muted); }
 .history-status { margin-left: auto; }
+
+/* Pie chart */
+.pie-chart-container {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+.pie-chart-svg { flex-shrink: 0; }
+.pie-legend { display: flex; flex-direction: column; gap: 8px; }
+.pie-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.pie-legend-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.pie-legend-label { color: var(--text); }
+.pie-legend-count { color: var(--text-muted); font-size: 12px; margin-left: auto; min-width: 80px; text-align: right; }

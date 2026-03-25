@@ -170,6 +170,7 @@ socket.on('complete', (data) => {
   renderSecurity(data.analysis);
   renderLinks(data.analysis);
   renderAiBots(data.analysis);
+  renderSitemaps(data.analysis);
 });
 
 socket.on('error', (data) => {
@@ -706,6 +707,7 @@ window.loadCrawl = async function(id) {
   renderSecurity(analysis);
   renderLinks(analysis);
   renderAiBots(analysis);
+  renderSitemaps(analysis);
 
   $('#emptyState').classList.add('hidden');
   $('#dashboardContent').classList.remove('hidden');
@@ -721,6 +723,141 @@ window.deleteCrawl = async function(id) {
   await fetch(`/api/crawls/${id}`, { method: 'DELETE' });
   loadHistory();
 };
+
+// ── Sitemaps ──
+function renderSitemaps(analysis) {
+  const r = analysis.sitemapReport;
+  if (!r) {
+    $('#sitemapsContent').innerHTML = '<p style="color:var(--text-muted)">No sitemap data available.</p>';
+    return;
+  }
+
+  if (!r.found) {
+    let html = `<div class="section-card" style="text-align:center;padding:40px;border-left:4px solid var(--danger)">
+      <div style="font-size:48px;margin-bottom:16px">🚫</div>
+      <h3>No Sitemap.xml Found</h3>
+      <p style="color:var(--text-muted);max-width:600px;margin:0 auto 20px">${esc(r.message)}</p>
+    </div>`;
+
+    if (r.crawledNotInSitemapCount > 0) {
+      html += `<div class="section-card">
+        <h3>Indexable Pages Without Sitemap (${r.crawledNotInSitemapCount})</h3>
+        <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These pages returned 200 and are indexable but have no sitemap coverage.</p>
+        <table><thead><tr><th>URL</th></tr></thead>
+        <tbody>${r.crawledNotInSitemap.slice(0, 200).map(u => `<tr><td class="url-cell" title="${esc(u)}">${esc(u)}</td></tr>`).join('')}</tbody></table>
+      </div>`;
+    }
+
+    $('#sitemapsContent').innerHTML = html;
+    return;
+  }
+
+  // Sitemaps found
+  let html = `<div class="stats-grid">
+    ${statCard('Sitemap Files', r.files.length, 'info')}
+    ${statCard('URLs in Sitemaps', r.totalSitemapUrls, '')}
+    ${statCard('Source', r.fromRobots ? 'robots.txt' : 'Auto-discovered', r.fromRobots ? 'success' : 'warning')}
+    ${statCard('Crawled Not in Sitemap', r.crawledNotInSitemapCount, r.crawledNotInSitemapCount > 0 ? 'warning' : 'success')}
+    ${statCard('In Sitemap Not Crawled', r.inSitemapNotCrawledCount, r.inSitemapNotCrawledCount > 0 ? 'info' : '')}
+  </div>`;
+
+  if (!r.fromRobots) {
+    html += `<div class="section-card" style="border-left:4px solid var(--warning)">
+      <h3 style="color:var(--warning)">Sitemap Not Declared in robots.txt</h3>
+      <p style="color:var(--text-muted);font-size:13px">The sitemap was found via auto-discovery but is not referenced in robots.txt. Add a <code>Sitemap:</code> directive to robots.txt for better discoverability by search engines.</p>
+    </div>`;
+  }
+
+  // Sitemap files list
+  html += `<div class="section-card"><h3>Sitemap Files (${r.files.length})</h3>
+    <table><thead><tr><th>URL</th><th>Source</th><th>Type</th><th>URLs</th></tr></thead>
+    <tbody>${r.files.map(f => `<tr>
+      <td class="url-cell" title="${esc(f.url)}">${esc(f.url)}</td>
+      <td><span class="badge ${f.source === 'robots.txt' ? 'badge-success' : 'badge-info'}">${esc(f.source)}</span></td>
+      <td>${esc(f.type)}</td>
+      <td>${f.urlCount}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+
+  // Status code pie chart
+  if (r.statusPieChart && r.statusPieChart.length > 0) {
+    html += `<div class="section-card"><h3>Sitemap URLs by Status Code</h3>
+      <div class="pie-chart-container">
+        ${renderPieChart(r.statusPieChart, 180)}
+        <div class="pie-legend">
+          ${r.statusPieChart.map(s => `<div class="pie-legend-item">
+            <div class="pie-legend-dot" style="background:${s.color}"></div>
+            <span class="pie-legend-label">${esc(s.label)}</span>
+            <span class="pie-legend-count">${s.count} (${s.percentage}%)</span>
+          </div>`).join('')}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // Non-200 URLs in sitemap
+  const problemUrls = (r.sitemapUrlStatuses || []).filter(u => u.statusCode !== 200 && u.statusCode !== 'not_crawled');
+  if (problemUrls.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--danger)">
+      <h3>Non-200 URLs in Sitemap (${problemUrls.length})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These URLs are in the sitemap but don't return a 200 status code. They should be removed or fixed.</p>
+      <table><thead><tr><th>URL</th><th>Status</th><th>Sitemap</th></tr></thead>
+      <tbody>${problemUrls.slice(0, 200).map(u => `<tr>
+        <td class="url-cell" title="${esc(u.url)}">${truncate(u.url, 60)}</td>
+        <td>${statusBadge(u.statusCode)}</td>
+        <td title="${esc(u.sitemap)}">${truncate(u.sitemap, 40)}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  // Crawled pages not in sitemap
+  if (r.crawledNotInSitemapCount > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--warning)">
+      <h3>Crawled Pages Not in Sitemap (${r.crawledNotInSitemapCount})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Indexable pages (200, no noindex) that were discovered during crawling but are not included in any sitemap.</p>
+      <table><thead><tr><th>URL</th></tr></thead>
+      <tbody>${r.crawledNotInSitemap.slice(0, 200).map(u => `<tr><td class="url-cell" title="${esc(u)}">${esc(u)}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+
+  // Sitemap URLs not reached by crawl
+  if (r.inSitemapNotCrawledCount > 0) {
+    html += `<div class="section-card">
+      <h3>Sitemap URLs Not Reached by Crawl (${r.inSitemapNotCrawledCount})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These URLs are in the sitemap but were not discovered during the crawl (possibly orphan pages or the crawl limit was reached).</p>
+      <table><thead><tr><th>URL</th></tr></thead>
+      <tbody>${r.inSitemapNotCrawled.slice(0, 200).map(u => `<tr><td class="url-cell" title="${esc(u)}">${esc(u)}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+
+  $('#sitemapsContent').innerHTML = html;
+}
+
+function renderPieChart(data, size) {
+  const total = data.reduce((s, d) => s + d.count, 0);
+  if (total === 0) return '';
+  const r = size / 2;
+  const cx = r, cy = r;
+  let currentAngle = -Math.PI / 2;
+
+  let paths = '';
+  for (const slice of data) {
+    const pct = slice.count / total;
+    if (pct === 0) continue;
+    const angle = pct * 2 * Math.PI;
+    const x1 = cx + r * Math.cos(currentAngle);
+    const y1 = cy + r * Math.sin(currentAngle);
+    const x2 = cx + r * Math.cos(currentAngle + angle);
+    const y2 = cy + r * Math.sin(currentAngle + angle);
+    const largeArc = angle > Math.PI ? 1 : 0;
+
+    if (pct >= 0.999) {
+      // Full circle
+      paths += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${slice.color}"/>`;
+    } else {
+      paths += `<path d="M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${largeArc} 1 ${x2},${y2} Z" fill="${slice.color}"/>`;
+    }
+    currentAngle += angle;
+  }
+
+  return `<svg class="pie-chart-svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${paths}</svg>`;
+}
 
 // ── AI Bots ──
 function renderAiBots(analysis) {
