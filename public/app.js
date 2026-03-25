@@ -489,31 +489,37 @@ function renderHreflang(analysis) {
 }
 
 // ── Canonicals ──
+let _canData = null, _canFilter = 'all';
 function renderCanonicals(analysis) {
-  const r = analysis.canonicalReport;
+  _canData = analysis.canonicalReport;
+  _canFilter = 'all';
+  _renderCan();
+}
+function filterCan(f) { _canFilter = (_canFilter === f) ? 'all' : f; _renderCan(); }
+function _renderCan() {
+  const r = _canData, f = _canFilter;
+  if (!r) { $('#canonicalsContent').innerHTML = '<p style="color:var(--text-muted)">No data.</p>'; return; }
+  const cb = (key, label, count, color) => {
+    const active = f === key ? 'border:2px solid #fff;' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
+    return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterCan('${key}')">${statCardInner(label, count)}</div>`;
+  };
   let html = `<div class="stats-grid">
-    ${statCard('Total Pages', r.total, '')}
-    ${statCard('With Canonical', r.withCanonical, 'info')}
-    ${statCard('Self-Referencing', r.selfReferencing, 'success')}
-    ${statCard('Canonicalized (Other)', r.canonicalized, 'warning')}
-    ${statCard('Missing Canonical', r.missing, r.missing > 0 ? 'danger' : 'success')}
+    ${cb('all', 'Total Pages', r.total, '')}
+    ${cb('with', 'With Canonical', r.withCanonical, 'info')}
+    ${cb('self', 'Self-Referencing', r.selfReferencing, 'success')}
+    ${cb('other', 'Canonicalized (Other)', r.canonicalized, 'warning')}
+    ${cb('missing', 'Missing Canonical', r.missing, r.missing > 0 ? 'danger' : 'success')}
   </div>`;
-
-  if (r.canonicalizedPages.length > 0) {
-    html += `<div class="section-card"><h3>Canonicalized to Other URLs (${r.canonicalizedPages.length})</h3>
-      <table><thead><tr><th>Page URL</th><th>Canonical Points To</th></tr></thead>
-      <tbody>${r.canonicalizedPages.map(p => `<tr>
-        <td class="url-cell" title="${esc(p.url)}">${truncate(p.url, 50)}</td>
-        <td title="${esc(p.canonical)}">${truncate(p.canonical, 50)}</td>
-      </tr>`).join('')}</tbody></table></div>`;
+  if (f === 'all' || f === 'other') {
+    if (r.canonicalizedPages.length > 0) html += `<div class="section-card"><h3>Canonicalized to Other URLs (${r.canonicalizedPages.length})</h3><table><thead><tr><th>Page URL</th><th>Canonical Points To</th></tr></thead><tbody>${r.canonicalizedPages.map(p=>`<tr><td>${urlLink(p.url)}</td><td>${urlLink(p.canonical)}</td></tr>`).join('')}</tbody></table></div>`;
   }
-
-  if (r.missingPages.length > 0) {
-    html += `<div class="section-card"><h3>Pages Missing Canonical (${r.missingPages.length})</h3>
-      <table><thead><tr><th>URL</th></tr></thead>
-      <tbody>${r.missingPages.map(u => `<tr><td class="url-cell" title="${esc(u)}">${truncate(u, 80)}</td></tr>`).join('')}</tbody></table></div>`;
+  if (f === 'all' || f === 'missing') {
+    if (r.missingPages.length > 0) html += `<div class="section-card"><h3>Pages Missing Canonical (${r.missingPages.length})</h3><table><thead><tr><th>URL</th></tr></thead><tbody>${r.missingPages.map(u=>`<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
   }
-
+  if (f === 'self') {
+    if (r.selfReferencingPages && r.selfReferencingPages.length > 0) html += `<div class="section-card"><h3>Self-Referencing Canonical (${r.selfReferencingPages.length})</h3><table><thead><tr><th>URL</th></tr></thead><tbody>${r.selfReferencingPages.slice(0,500).map(u=>`<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
+    else html += `<div class="section-card"><p style="color:var(--text-muted)">Self-referencing URL list not stored separately.</p></div>`;
+  }
   $('#canonicalsContent').innerHTML = exportBtn('canonicals') + html;
 }
 
@@ -627,8 +633,8 @@ function renderImages(analysis) {
       <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Each image URL is shown once with one example origin page. "Occurrences" shows how many times this image appears across the site.</p>
       <table><thead><tr><th>Image URL</th><th>Found On</th><th>Issue</th><th>Occurrences</th></tr></thead>
       <tbody>${issues.slice(0, 500).map(i => `<tr>
-        <td>${i.src ? urlLink(i.src, 50) : '<span style="color:var(--text-muted)">No src</span>'}</td>
-        <td>${urlLink(i.pageUrl, 45)}</td>
+        <td>${i.src ? urlLink(i.src) : '<span style="color:var(--text-muted)">No src</span>'}</td>
+        <td>${urlLink(i.pageUrl)}</td>
         <td>${i.issue === 'Missing alt attribute' ? '<span class="badge badge-danger">Missing alt attr</span>' : '<span class="badge badge-warning">Empty alt text</span>'}</td>
         <td>${i.occurrences}</td>
       </tr>`).join('')}</tbody></table></div>`;
@@ -853,8 +859,8 @@ function renderAnchors(analysis) {
       <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These internal links have no visible anchor text, which reduces their SEO value and accessibility.</p>
       <table><thead><tr><th>Origin Page</th><th>Destination URL</th><th>Nofollow</th></tr></thead>
       <tbody>${r.emptyAnchors.slice(0, 500).map(a => `<tr>
-        <td>${urlLink(a.from, 50)}</td>
-        <td>${urlLink(a.to, 50)}</td>
+        <td>${urlLink(a.from)}</td>
+        <td>${urlLink(a.to)}</td>
         <td>${a.isNofollow ? '<span class="badge badge-warning">Yes</span>' : 'No'}</td>
       </tr>`).join('')}</tbody></table></div>`;
   }
@@ -1406,10 +1412,9 @@ function exportSection(section) {
   if (!currentCrawlId) return;
   window.open(`/api/crawls/${currentCrawlId}/export-section/${section}`, '_blank');
 }
-function urlLink(url, maxLen) {
+function urlLink(url) {
   if (!url) return '-';
-  const display = maxLen ? truncate(url, maxLen) : esc(url);
-  return `<a href="${esc(url)}" target="_blank" rel="noopener" class="url-cell" title="${esc(url)}">${display}</a>`;
+  return `<a href="${esc(url)}" target="_blank" rel="noopener" class="url-cell" title="${esc(url)}">${esc(url)}</a>`;
 }
 function formatBytes(b) { if (b < 1024) return b + ' B'; if (b < 1048576) return (b/1024).toFixed(1) + ' KB'; return (b/1048576).toFixed(1) + ' MB'; }
 function statusBadge(code) {
