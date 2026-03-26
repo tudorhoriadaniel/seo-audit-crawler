@@ -306,7 +306,15 @@ function renderStatusBars(breakdown) {
 async function loadPages() {
   if (!currentCrawlId) return;
   const res = await fetch(`/api/crawls/${currentCrawlId}/pages?limit=5000`);
-  pagesData = await res.json();
+  const allPages = await res.json();
+  // Filter out non-HTML resources (images, CSS, JS, fonts, etc.)
+  pagesData = allPages.filter(p => {
+    const ct = (p.content_type || '').toLowerCase();
+    const url = (p.url || '').toLowerCase();
+    if (ct && !ct.includes('html') && !ct.includes('xml')) return false;
+    if (/\.(jpe?g|png|gif|svg|webp|avif|ico|bmp|tiff?|css|js|woff2?|ttf|eot|mp4|mp3|pdf|zip|gz)(\?|#|$)/i.test(url)) return false;
+    return true;
+  });
   renderPagesTable(pagesData);
 }
 
