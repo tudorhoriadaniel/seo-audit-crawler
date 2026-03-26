@@ -49,7 +49,7 @@ $('#urlInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') star
 function renderAll(analysis) {
   renderDashboard(analysis);
   renderAllPages(pagesData);
-  renderIssues(analysis);
+  // Issues tab removed
   renderHreflang(analysis);
   renderCanonicals(analysis);
   renderConflicts(analysis);
@@ -187,7 +187,7 @@ socket.on('complete', (data) => {
   analysisData = data.analysis;
   renderDashboard(data.stats, data.analysis);
   loadPages();
-  renderIssues(data.analysis);
+  // Issues tab removed
   renderHreflang(data.analysis);
   renderCanonicals(data.analysis);
   renderConflicts(data.analysis);
@@ -742,7 +742,7 @@ window.loadCrawl = async function(id) {
 
   renderDashboard(crawl.stats, analysis);
   loadPages();
-  renderIssues(analysis);
+  // Issues tab removed
   renderHreflang(analysis);
   renderCanonicals(analysis);
   renderConflicts(analysis);
@@ -1416,8 +1416,7 @@ function renderSummary(analysis) {
 function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function truncate(s, len) { s = s || ''; return s.length > len ? s.substring(0, len) + '...' : s; }
 function exportBtn(section) {
-  if (!currentCrawlId) return '';
-  return `<div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button class="btn btn-sm btn-export" onclick="exportSection('${section}')" title="Export to Excel" style="background:var(--primary);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:6px">📥 Export XLSX</button></div>`;
+  return ''; // Export buttons removed
 }
 function exportSection(section) {
   if (!currentCrawlId) return;

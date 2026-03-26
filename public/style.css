@@ -348,8 +348,7 @@ th .col-resize:hover, th .col-resize.active { background: var(--primary); }
 td {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
-  white-space: normal;
-  word-break: break-all;
+  white-space: nowrap;
 }
 tr:hover { background: var(--bg-hover); }
 
@@ -612,11 +611,7 @@ a.url-cell:hover { text-decoration: underline; }
 
 /* Tables: horizontal scroll wrapper */
 .section-card { overflow-x: auto; }
-table { table-layout: auto; width: 100%; min-width: 600px; border-collapse: collapse; }
-table th, table td { padding: 10px 12px; text-align: left; white-space: normal; word-break: break-all; }
-table th { position: relative; user-select: none; }
-table th .col-resizer { position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 2; }
-table th .col-resizer:hover, table th .col-resizer.active { background: var(--primary); opacity: 0.5; }
+/* duplicate table rules removed — originals above */
 
 /* Responsive */
 @media (max-width: 768px) {
