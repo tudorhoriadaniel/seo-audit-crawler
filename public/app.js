@@ -306,54 +306,107 @@ async function loadPages() {
   renderPagesTable(pages);
 }
 
-function renderPagesTable(pages) {
-  const filter = ($('#pagesFilter')?.value || '').toLowerCase();
-  const statusFilter = $('#pagesStatusFilter')?.value;
-  let filtered = pages;
-  if (filter) filtered = filtered.filter(p => (p.url || '').toLowerCase().includes(filter));
-  if (statusFilter) filtered = filtered.filter(p => String(p.status_code) === statusFilter);
+// Build duplicate lookup maps for filtering
+let _titleDups = new Set(), _descDups = new Set();
+function buildDupMaps(pages) {
+  const tc = {}, dc = {};
+  for (const p of pages) {
+    if (p.status_code >= 300) continue;
+    if (p.title) { const k = p.title.trim().toLowerCase(); tc[k] = (tc[k]||0)+1; }
+    if (p.meta_description) { const k = p.meta_description.trim().toLowerCase(); dc[k] = (dc[k]||0)+1; }
+  }
+  _titleDups = new Set(Object.keys(tc).filter(k => tc[k] > 1));
+  _descDups = new Set(Object.keys(dc).filter(k => dc[k] > 1));
+}
 
-  const html = `<table>
+function renderPagesTable(pages) {
+  buildDupMaps(pages);
+  const filter = ($('#pagesFilter')?.value || '').toLowerCase();
+  const sf = $('#pagesStatusFilter')?.value || '';
+  const tf = $('#pagesTitleFilter')?.value || '';
+  const df = $('#pagesDescFilter')?.value || '';
+  const dirf = $('#pagesDirectiveFilter')?.value || '';
+  const cf = $('#pagesCanonicalFilter')?.value || '';
+
+  let filtered = pages;
+  if (filter) filtered = filtered.filter(p => (p.url||'').toLowerCase().includes(filter));
+
+  // Status filter
+  if (sf === '2xx') filtered = filtered.filter(p => p.status_code >= 200 && p.status_code < 300);
+  else if (sf === '3xx') filtered = filtered.filter(p => p.status_code >= 300 && p.status_code < 400);
+  else if (sf === '4xx') filtered = filtered.filter(p => p.status_code >= 400 && p.status_code < 500);
+  else if (sf === '5xx') filtered = filtered.filter(p => p.status_code >= 500);
+  else if (sf) filtered = filtered.filter(p => String(p.status_code) === sf);
+
+  // Title filter
+  if (tf === 'missing') filtered = filtered.filter(p => !p.title && p.status_code < 300);
+  else if (tf === 'short') filtered = filtered.filter(p => p.title && (p.title_length||0) < 30);
+  else if (tf === 'long') filtered = filtered.filter(p => p.title && (p.title_length||0) > 60);
+  else if (tf === 'optimal') filtered = filtered.filter(p => p.title && (p.title_length||0) >= 30 && (p.title_length||0) <= 60);
+  else if (tf === 'duplicate') filtered = filtered.filter(p => p.title && _titleDups.has(p.title.trim().toLowerCase()));
+
+  // Desc filter
+  if (df === 'missing') filtered = filtered.filter(p => !p.meta_description && p.status_code < 300);
+  else if (df === 'short') filtered = filtered.filter(p => p.meta_description && (p.meta_description_length||0) < 70);
+  else if (df === 'long') filtered = filtered.filter(p => p.meta_description && (p.meta_description_length||0) > 160);
+  else if (df === 'optimal') filtered = filtered.filter(p => p.meta_description && (p.meta_description_length||0) >= 70 && (p.meta_description_length||0) <= 160);
+  else if (df === 'duplicate') filtered = filtered.filter(p => p.meta_description && _descDups.has(p.meta_description.trim().toLowerCase()));
+
+  // Directives filter
+  if (dirf === 'noindex') filtered = filtered.filter(p => (p.meta_robots||'').toLowerCase().includes('noindex'));
+  else if (dirf === 'nofollow') filtered = filtered.filter(p => (p.meta_robots||'').toLowerCase().includes('nofollow'));
+  else if (dirf === 'index') filtered = filtered.filter(p => !(p.meta_robots||'').toLowerCase().includes('noindex'));
+
+  // Canonical filter
+  if (cf === 'self') filtered = filtered.filter(p => p.canonical_is_self);
+  else if (cf === 'other') filtered = filtered.filter(p => p.canonical && !p.canonical_is_self);
+  else if (cf === 'missing') filtered = filtered.filter(p => !p.canonical && p.status_code < 300);
+
+  const count = filtered.length;
+  const html = `<p style="color:var(--text-muted);font-size:13px;margin-bottom:8px">Showing ${count} of ${pages.length} pages</p>
+  <table>
     <thead><tr>
-      <th>URL</th><th>Status</th><th>Meta Title</th><th>Title Len</th>
-      <th>Meta Description</th><th>Desc Len</th>
-      <th>H1</th><th>H1 #</th><th>H2 #</th>
-      <th>Word Count</th><th>Canonical</th><th>Hreflangs</th>
-      <th>Schema Types</th><th>Directives</th><th>Response (ms)</th><th>Depth</th>
+      <th style="min-width:280px">URL</th><th>Status</th><th style="min-width:200px">Meta Title</th><th>Title Len</th>
+      <th style="min-width:250px">Meta Description</th><th>Desc Len</th>
+      <th style="min-width:180px">H1</th><th>H1#</th><th>H2#</th>
+      <th>Words</th><th style="min-width:120px">Canonical</th><th>Hreflangs</th>
+      <th>Schema</th><th>Directives</th><th>Resp ms</th><th>Depth</th>
     </tr></thead>
-    <tbody>${filtered.map(p => {
+    <tbody>${filtered.slice(0, 2000).map(p => {
       const h1s = JSON.parse(p.h1 || '[]');
       const hls = JSON.parse(p.hreflangs || '[]');
       const sdt = JSON.parse(p.structured_data_types || '[]');
+      const dir = p.meta_robots || 'index, follow';
       return `<tr class="page-row" data-url="${esc(p.url)}">
       <td>${urlLink(p.url)}</td>
       <td>${statusBadge(p.status_code)}</td>
-      <td>${esc(p.title || '-')}</td>
+      <td style="white-space:normal;max-width:250px">${esc(p.title || '-')}</td>
       <td>${p.title_length || 0}</td>
-      <td style="max-width:300px">${esc(p.meta_description || '-')}</td>
+      <td style="white-space:normal;max-width:300px">${esc(p.meta_description || '-')}</td>
       <td>${p.meta_description_length || 0}</td>
-      <td>${h1s.length > 0 ? esc(h1s[0]) : '-'}</td>
+      <td style="white-space:normal;max-width:200px">${h1s.length > 0 ? esc(h1s[0]) : '-'}</td>
       <td>${p.h1_count || 0}</td>
       <td>${p.h2_count || 0}</td>
       <td>${p.word_count || 0}</td>
-      <td>${p.canonical ? (p.canonical_is_self ? '<span class="badge badge-success">Self</span>' : urlLink(p.canonical)) : '<span class="badge badge-muted">None</span>'}</td>
-      <td>${hls.length > 0 ? hls.map(h => `<span class="badge badge-info">${esc(h.lang)}</span>`).join(' ') : '0'}</td>
+      <td>${p.canonical ? (p.canonical_is_self ? '<span class="badge badge-success">Self</span>' : '<span class="badge badge-warning">Other</span>') : '<span class="badge badge-muted">None</span>'}</td>
+      <td>${hls.length > 0 ? hls.map(h => `<span class="badge badge-info">${esc(h.lang)}</span>`).join(' ') : '-'}</td>
       <td>${sdt.length > 0 ? sdt.map(t => `<span class="badge badge-info">${esc(t)}</span>`).join(' ') : '-'}</td>
-      <td>${esc(p.meta_robots || 'index, follow')}</td>
+      <td>${dir.includes('noindex') ? '<span class="badge badge-danger">noindex</span>' : ''}${dir.includes('nofollow') ? '<span class="badge badge-warning">nofollow</span>' : ''}${!dir.includes('noindex') && !dir.includes('nofollow') ? '<span class="badge badge-success">index,follow</span>' : ''}</td>
       <td>${p.response_time || 0}</td>
       <td>${p.depth || 0}</td>
     </tr>`}).join('')}</tbody>
   </table>`;
-  $('#pagesTable').innerHTML = exportBtn('allpages') + html;
+  $('#pagesTable').innerHTML = html;
 
-  // Click handler for page details
   $$('.page-row').forEach(row => {
     row.addEventListener('click', () => showPageDetail(row.dataset.url, pages));
   });
 }
 
-$('#pagesFilter')?.addEventListener('input', () => { if (currentCrawlId) loadPages(); });
-$('#pagesStatusFilter')?.addEventListener('change', () => { if (currentCrawlId) loadPages(); });
+['pagesFilter'].forEach(id => { $('#'+id)?.addEventListener('input', () => { if (pagesData.length) renderPagesTable(pagesData); }); });
+['pagesStatusFilter','pagesTitleFilter','pagesDescFilter','pagesDirectiveFilter','pagesCanonicalFilter'].forEach(id => {
+  $('#'+id)?.addEventListener('change', () => { if (pagesData.length) renderPagesTable(pagesData); });
+});
 
 function showPageDetail(url, pages) {
   const p = pages.find(pg => pg.url === url);

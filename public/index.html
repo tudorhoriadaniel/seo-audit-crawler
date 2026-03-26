@@ -206,15 +206,48 @@
       <div class="view" id="view-pages">
         <div class="view-header">
           <h2>All Crawled Pages</h2>
-          <div class="view-actions">
+          <div class="view-actions" style="flex-wrap:wrap;gap:8px">
             <input type="text" class="filter-input" id="pagesFilter" placeholder="Filter URLs...">
             <select id="pagesStatusFilter">
               <option value="">All Status Codes</option>
-              <option value="200">200 OK</option>
-              <option value="301">301 Redirect</option>
-              <option value="302">302 Redirect</option>
-              <option value="404">404 Not Found</option>
-              <option value="500">500 Server Error</option>
+              <option value="2xx">2xx Success</option>
+              <option value="3xx">3xx Redirect</option>
+              <option value="4xx">4xx Error</option>
+              <option value="5xx">5xx Error</option>
+              <option value="200">200</option>
+              <option value="301">301</option>
+              <option value="302">302</option>
+              <option value="404">404</option>
+              <option value="410">410</option>
+              <option value="500">500</option>
+            </select>
+            <select id="pagesTitleFilter">
+              <option value="">All Titles</option>
+              <option value="missing">Missing Title</option>
+              <option value="short">Too Short (&lt;30)</option>
+              <option value="long">Too Long (&gt;60)</option>
+              <option value="optimal">Optimal (30-60)</option>
+              <option value="duplicate">Duplicate Title</option>
+            </select>
+            <select id="pagesDescFilter">
+              <option value="">All Descriptions</option>
+              <option value="missing">Missing Description</option>
+              <option value="short">Too Short (&lt;70)</option>
+              <option value="long">Too Long (&gt;160)</option>
+              <option value="optimal">Optimal (70-160)</option>
+              <option value="duplicate">Duplicate Description</option>
+            </select>
+            <select id="pagesDirectiveFilter">
+              <option value="">All Directives</option>
+              <option value="noindex">Noindex</option>
+              <option value="nofollow">Nofollow</option>
+              <option value="index">Index (default)</option>
+            </select>
+            <select id="pagesCanonicalFilter">
+              <option value="">All Canonicals</option>
+              <option value="self">Self-Canonical</option>
+              <option value="other">Canonical to Other</option>
+              <option value="missing">Missing Canonical</option>
             </select>
             <div class="export-dropdown">
               <button class="btn btn-secondary export-btn">Export ▾</button>
