@@ -306,6 +306,14 @@ async function loadPages() {
   renderPagesTable(pagesData);
 }
 
+// Sort state for All Pages table
+let _sortCol = null, _sortDir = 'asc';
+function sortPages(col) {
+  if (_sortCol === col) _sortDir = _sortDir === 'asc' ? 'desc' : 'asc';
+  else { _sortCol = col; _sortDir = 'asc'; }
+  if (pagesData.length) renderPagesTable(pagesData);
+}
+
 // Build duplicate lookup maps for filtering
 let _titleDups = new Set(), _descDups = new Set();
 function buildDupMaps(pages) {
@@ -380,15 +388,39 @@ function renderPagesTable(pages) {
   if (hlf === 'has') filtered = filtered.filter(p => { try { return JSON.parse(p.hreflangs || '[]').length > 0; } catch { return false; } });
   else if (hlf === 'none') filtered = filtered.filter(p => { try { return JSON.parse(p.hreflangs || '[]').length === 0; } catch { return true; } });
 
+  // Sort
+  if (_sortCol) {
+    const colMap = { url:'url', status:'status_code', title:'title', titlelen:'title_length', desc:'meta_description', desclen:'meta_description_length', h1:'h1', h1c:'h1_count', h2c:'h2_count', words:'word_count', resp:'response_time', depth:'depth', dir:'meta_robots' };
+    const key = colMap[_sortCol];
+    if (key) {
+      filtered.sort((a, b) => {
+        let va = a[key], vb = b[key];
+        if (typeof va === 'number' || typeof vb === 'number') { va = va || 0; vb = vb || 0; return _sortDir === 'asc' ? va - vb : vb - va; }
+        va = String(va || '').toLowerCase(); vb = String(vb || '').toLowerCase();
+        return _sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+      });
+    }
+  }
+
   const count = filtered.length;
+  const sortIcon = (col) => _sortCol === col ? (_sortDir === 'asc' ? ' ▲' : ' ▼') : '';
   const html = `<p style="color:var(--text-muted);font-size:13px;margin-bottom:8px">Showing ${count} of ${pages.length} pages</p>
   <table>
     <thead><tr>
-      <th style="min-width:280px">URL</th><th>Status</th><th style="min-width:200px">Meta Title</th><th>Title Len</th>
-      <th style="min-width:250px">Meta Description</th><th>Desc Len</th>
-      <th style="min-width:180px">H1</th><th>H1#</th><th>H2#</th>
-      <th>Words</th><th style="min-width:120px">Canonical</th><th>Hreflangs</th>
-      <th>Schema</th><th>Directives</th><th>Resp ms</th><th>Depth</th>
+      <th style="min-width:280px;cursor:pointer" onclick="sortPages('url')">URL${sortIcon('url')}</th>
+      <th style="cursor:pointer" onclick="sortPages('status')">Status${sortIcon('status')}</th>
+      <th style="min-width:200px;cursor:pointer" onclick="sortPages('title')">Meta Title${sortIcon('title')}</th>
+      <th style="cursor:pointer" onclick="sortPages('titlelen')">Title Len${sortIcon('titlelen')}</th>
+      <th style="min-width:250px;cursor:pointer" onclick="sortPages('desc')">Meta Desc${sortIcon('desc')}</th>
+      <th style="cursor:pointer" onclick="sortPages('desclen')">Desc Len${sortIcon('desclen')}</th>
+      <th style="min-width:180px;cursor:pointer" onclick="sortPages('h1')">H1${sortIcon('h1')}</th>
+      <th style="cursor:pointer" onclick="sortPages('h1c')">H1#${sortIcon('h1c')}</th>
+      <th style="cursor:pointer" onclick="sortPages('h2c')">H2#${sortIcon('h2c')}</th>
+      <th style="cursor:pointer" onclick="sortPages('words')">Words${sortIcon('words')}</th>
+      <th style="min-width:120px">Canonical</th><th>Hreflangs</th><th>Schema</th>
+      <th style="cursor:pointer" onclick="sortPages('dir')">Directives${sortIcon('dir')}</th>
+      <th style="cursor:pointer" onclick="sortPages('resp')">Resp ms${sortIcon('resp')}</th>
+      <th style="cursor:pointer" onclick="sortPages('depth')">Depth${sortIcon('depth')}</th>
     </tr></thead>
     <tbody>${filtered.slice(0, 2000).map(p => {
       const h1s = JSON.parse(p.h1 || '[]');
@@ -1345,13 +1377,14 @@ function renderSummary(analysis) {
   const img = analysis.imageAnalysis || {};
   const anch = analysis.anchorsReport || {};
   const sm = analysis.sitemapReport || {};
-  const hvc = analysis.hreflangVsCanonicalReport || {};
+  const hvc = analysis.hreflangCanonicalConflicts || {};
   const hrf = analysis.hreflangReport || {};
   const sec = analysis.securityReport || {};
   const sd = analysis.structuredDataReport || {};
-  const cnt = analysis.contentReport || {};
-  const lnk = analysis.internalLinksReport || {};
+  const cnt = analysis.contentAnalysis || {};
+  const lnk = analysis.internalLinkAnalysis || {};
   const iss = analysis.issues || [];
+  const hdg = analysis.headingsReport || {};
 
   const criticals = iss.filter(i => i.severity === 'critical').length;
   const warnings = iss.filter(i => i.severity === 'warning').length;
@@ -1449,9 +1482,9 @@ function renderSummary(analysis) {
       <div class="summary-category" style="border-left-color:#06b6d4">
         <h3><span class="cat-icon">🗺️</span> Sitemaps</h3>
         ${row('Sitemap Found', sm.found ? 'Yes' : 'No', v => v === 'Yes' ? 'ok' : 'bad')}
-        ${row('URLs in Sitemap', sm.totalUrls || 0, v => 'neutral')}
-        ${row('Crawled but NOT in Sitemap', sm.notInSitemap?.length || 0, v => v > 0 ? 'warn' : 'ok')}
-        ${row('In Sitemap but NOT Crawled', sm.inSitemapNotCrawled?.length || 0, v => v > 0 ? 'warn' : 'ok')}
+        ${row('URLs in Sitemap', sm.totalSitemapUrls || 0, v => 'neutral')}
+        ${row('Crawled but NOT in Sitemap', sm.crawledNotInSitemapCount || 0, v => v > 0 ? 'warn' : 'ok')}
+        ${row('In Sitemap but NOT Crawled', sm.inSitemapNotCrawledCount || 0, v => v > 0 ? 'warn' : 'ok')}
       </div>
 
       <div class="summary-category" style="border-left-color:#14b8a6">
@@ -1463,19 +1496,19 @@ function renderSummary(analysis) {
 
       <div class="summary-category" style="border-left-color:#f97316">
         <h3><span class="cat-icon">🔒</span> Security</h3>
-        ${row('Missing HTTPS', sec.httpPages || 0)}
-        ${row('Mixed Content', sec.mixedContent || 0)}
-        ${row('Missing HSTS Header', sec.missingHSTS || 0, v => v > 0 ? 'warn' : 'ok')}
-        ${row('Missing X-Frame-Options', sec.missingXFrame || 0, v => v > 0 ? 'warn' : 'ok')}
+        ${row('HTTPS', sec.isHttps ? 'Yes' : 'No', v => v === 'Yes' ? 'ok' : 'bad')}
+        ${row('Missing HSTS', sec.headers?.strictTransportSecurity?.missing || 0, v => v > 0 ? 'warn' : 'ok')}
+        ${row('Missing X-Frame-Options', sec.headers?.xFrameOptions?.missing || 0, v => v > 0 ? 'warn' : 'ok')}
+        ${row('Missing CSP', sec.headers?.contentSecurityPolicy?.missing || 0, v => v > 0 ? 'warn' : 'ok')}
       </div>
 
       <div class="summary-category" style="border-left-color:#a855f7">
         <h3><span class="cat-icon">📏</span> Content Quality</h3>
-        ${row('Thin Content (<300 words)', cnt.thinContent?.length || 0)}
-        ${row('Duplicate Content', cnt.duplicateContent?.length || 0)}
-        ${row('Missing H1', cnt.missingH1?.length || 0)}
-        ${row('Multiple H1s', cnt.multipleH1?.length || 0)}
-        ${row('Slow Pages (>3s)', cnt.slowPages?.length || 0)}
+        ${row('Thin Content (<300 words)', cnt.thinPages?.length || 0)}
+        ${row('Avg Word Count', cnt.avgWordCount || 0, v => 'neutral')}
+        ${row('Missing H1', hdg?.missingH1?.length || 0)}
+        ${row('Multiple H1s', hdg?.multipleH1?.length || 0)}
+        ${row('Text/HTML Ratio', cnt.avgTextRatio ? cnt.avgTextRatio + '%' : '0%', v => 'neutral')}
       </div>
 
     </div>
