@@ -218,7 +218,11 @@ $$('.export-menu a').forEach(a => {
   a.addEventListener('click', (e) => {
     e.preventDefault();
     if (!currentCrawlId) return alert('No crawl data to export');
-    window.location.href = `/api/crawls/${currentCrawlId}/export/${a.dataset.format}`;
+    if (a.dataset.format === 'pdf') {
+      window.open(`/api/crawls/${currentCrawlId}/export-pdf`, '_blank');
+    } else {
+      window.location.href = `/api/crawls/${currentCrawlId}/export/${a.dataset.format}`;
+    }
   });
 });
 

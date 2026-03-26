@@ -273,6 +273,7 @@
                 <a href="#" data-format="csv">CSV</a>
                 <a href="#" data-format="xlsx">XLSX</a>
                 <a href="#" data-format="json">JSON</a>
+                <a href="#" data-format="pdf">📄 PDF Audit Report</a>
               </div>
             </div>
           </div>
@@ -387,7 +388,10 @@
 
       <!-- Summary view -->
       <div class="view" id="view-summary">
-        <div class="view-header"><h2>SEO Audit Summary</h2></div>
+        <div class="view-header">
+          <h2>SEO Audit Summary</h2>
+          <button id="downloadPdfBtn" class="btn btn-primary" style="background:var(--primary);color:#fff;border:none;padding:8px 20px;border-radius:8px;cursor:pointer;font-size:13px" onclick="if(currentCrawlId) window.open('/api/crawls/'+currentCrawlId+'/export-pdf','_blank'); else alert('No crawl data');">📄 Download PDF Report</button>
+        </div>
         <div id="summaryContent"></div>
       </div>
     </div>

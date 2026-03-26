@@ -297,6 +297,25 @@ app.get('/api/crawls/:id/export/:format', (req, res) => {
   }
 });
 
+// PDF Audit Report export
+const { generatePDFReport } = require('./lib/pdf-report');
+app.get('/api/crawls/:id/export-pdf', (req, res) => {
+  try {
+    const pages = db.getCrawlPages(req.params.id, { limit: 10000 });
+    if (!pages.length) return res.status(404).json({ error: 'No pages found' });
+    const mapped = mapPagesForAnalysis(pages);
+    const Analyzer = require('./lib/analyzer');
+    const analyzer = new Analyzer(mapped);
+    const analysis = analyzer.analyze();
+    const crawl = db.getCrawl(req.params.id);
+    const siteUrl = crawl?.url || 'Unknown';
+    generatePDFReport(res, analysis, siteUrl);
+  } catch (err) {
+    console.error('PDF export error:', err);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+
 // Per-section XLSX export
 app.get('/api/crawls/:id/export-section/:section', (req, res) => {
   try {
