@@ -303,11 +303,11 @@ app.get('/api/crawls/:id/export-pdf', (req, res) => {
   try {
     const pages = db.getCrawlPages(req.params.id, { limit: 10000 });
     if (!pages.length) return res.status(404).json({ error: 'No pages found' });
-    const mapped = mapPagesForAnalysis(pages);
-    const Analyzer = require('./lib/analyzer');
-    const analyzer = new Analyzer(mapped);
-    const analysis = analyzer.analyze();
     const crawl = db.getCrawl(req.params.id);
+    const stats = JSON.parse(crawl?.stats || '{}');
+    const mapped = mapPagesForAnalysis(pages);
+    const analyzer = new Analyzer(mapped, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
+    const analysis = analyzer.analyze();
     const siteUrl = crawl?.url || 'Unknown';
     generatePDFReport(res, analysis, siteUrl);
   } catch (err) {
