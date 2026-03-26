@@ -1002,7 +1002,6 @@ function _renderMT() {
     ${cb('missing', 'Missing Title', r.missing.length, r.missing.length > 0 ? 'danger' : 'success')}
     ${cb('short', 'Too Short (<30)', r.tooShort.length, r.tooShort.length > 0 ? 'warning' : 'success')}
     ${cb('long', 'Too Long (>60)', r.tooLong.length, r.tooLong.length > 0 ? 'warning' : 'success')}
-    ${cb('optimal', 'Optimal (30-60)', r.optimal, 'success')}
     ${cb('dup', 'Duplicates', r.duplicates.length, r.duplicates.length > 0 ? 'danger' : 'success')}
   </div>`;
   if (f === 'all' || f === 'missing') {
@@ -1042,7 +1041,6 @@ function _renderMD() {
     ${cb('missing', 'Missing Desc', r.missing.length, r.missing.length > 0 ? 'danger' : 'success')}
     ${cb('short', 'Too Short (<70)', r.tooShort.length, r.tooShort.length > 0 ? 'warning' : 'success')}
     ${cb('long', 'Too Long (>160)', r.tooLong.length, r.tooLong.length > 0 ? 'warning' : 'success')}
-    ${cb('optimal', 'Optimal (70-160)', r.optimal, 'success')}
     ${cb('dup', 'Duplicates', r.duplicates.length, r.duplicates.length > 0 ? 'danger' : 'success')}
   </div>`;
   if (f === 'all' || f === 'missing') {
@@ -1286,7 +1284,7 @@ function renderAiBots(analysis) {
         <td><strong>${esc(b.name)}</strong></td>
         <td>${esc(b.owner)}</td>
         <td style="white-space:normal;max-width:300px">${esc(b.description)}</td>
-        <td><span class="badge badge-muted">${esc(b.statusLabel)}</span></td>
+        <td><span class="badge badge-success">Allowed</span></td>
       </tr>`).join('')}</tbody></table></div>`;
   }
 
