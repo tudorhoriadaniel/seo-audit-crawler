@@ -302,8 +302,8 @@ function renderStatusBars(breakdown) {
 async function loadPages() {
   if (!currentCrawlId) return;
   const res = await fetch(`/api/crawls/${currentCrawlId}/pages?limit=5000`);
-  const pages = await res.json();
-  renderPagesTable(pages);
+  pagesData = await res.json();
+  renderPagesTable(pagesData);
 }
 
 // Build duplicate lookup maps for filtering
@@ -327,6 +327,9 @@ function renderPagesTable(pages) {
   const df = $('#pagesDescFilter')?.value || '';
   const dirf = $('#pagesDirectiveFilter')?.value || '';
   const cf = $('#pagesCanonicalFilter')?.value || '';
+  const h1f = $('#pagesH1Filter')?.value || '';
+  const wf = $('#pagesWordFilter')?.value || '';
+  const hlf = $('#pagesHreflangFilter')?.value || '';
 
   let filtered = pages;
   if (filter) filtered = filtered.filter(p => (p.url||'').toLowerCase().includes(filter));
@@ -361,6 +364,21 @@ function renderPagesTable(pages) {
   if (cf === 'self') filtered = filtered.filter(p => p.canonical_is_self);
   else if (cf === 'other') filtered = filtered.filter(p => p.canonical && !p.canonical_is_self);
   else if (cf === 'missing') filtered = filtered.filter(p => !p.canonical && p.status_code < 300);
+
+  // H1 filter
+  if (h1f === 'missing') filtered = filtered.filter(p => (p.h1_count || 0) === 0 && p.status_code < 300);
+  else if (h1f === 'multiple') filtered = filtered.filter(p => (p.h1_count || 0) > 1);
+  else if (h1f === 'single') filtered = filtered.filter(p => (p.h1_count || 0) === 1);
+
+  // Word count filter
+  if (wf === 'thin') filtered = filtered.filter(p => (p.word_count || 0) < 300 && p.status_code < 300);
+  else if (wf === 'short') filtered = filtered.filter(p => (p.word_count || 0) >= 300 && (p.word_count || 0) < 600);
+  else if (wf === 'medium') filtered = filtered.filter(p => (p.word_count || 0) >= 600 && (p.word_count || 0) < 1500);
+  else if (wf === 'long') filtered = filtered.filter(p => (p.word_count || 0) >= 1500);
+
+  // Hreflang filter
+  if (hlf === 'has') filtered = filtered.filter(p => { try { return JSON.parse(p.hreflangs || '[]').length > 0; } catch { return false; } });
+  else if (hlf === 'none') filtered = filtered.filter(p => { try { return JSON.parse(p.hreflangs || '[]').length === 0; } catch { return true; } });
 
   const count = filtered.length;
   const html = `<p style="color:var(--text-muted);font-size:13px;margin-bottom:8px">Showing ${count} of ${pages.length} pages</p>
@@ -404,7 +422,7 @@ function renderPagesTable(pages) {
 }
 
 ['pagesFilter'].forEach(id => { $('#'+id)?.addEventListener('input', () => { if (pagesData.length) renderPagesTable(pagesData); }); });
-['pagesStatusFilter','pagesTitleFilter','pagesDescFilter','pagesDirectiveFilter','pagesCanonicalFilter'].forEach(id => {
+['pagesStatusFilter','pagesTitleFilter','pagesDescFilter','pagesDirectiveFilter','pagesCanonicalFilter','pagesH1Filter','pagesWordFilter','pagesHreflangFilter'].forEach(id => {
   $('#'+id)?.addEventListener('change', () => { if (pagesData.length) renderPagesTable(pagesData); });
 });
 
