@@ -771,6 +771,10 @@ function _renderCan() {
     ${cb('other', 'Canonicalized (Other)', r.canonicalized, 'warning')}
     ${cb('missing', 'Missing Canonical', r.missing, r.missing > 0 ? 'danger' : 'success')}
   </div>`;
+  if (f === 'with') {
+    const wcp = r.withCanonicalPages || [];
+    if (wcp.length > 0) html += `<div class="section-card"><h3>Pages With Canonical (${wcp.length})</h3><table><thead><tr><th>Page URL</th><th>Canonical URL</th><th>Type</th></tr></thead><tbody>${wcp.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${urlLink(p.canonical)}</td><td>${p.isSelf ? '<span class="badge badge-success">Self</span>' : '<span class="badge badge-warning">Other</span>'}</td></tr>`).join('')}</tbody></table></div>`;
+  }
   if (f === 'all' || f === 'other') {
     if (r.canonicalizedPages.length > 0) html += `<div class="section-card"><h3>Canonicalized to Other URLs (${r.canonicalizedPages.length})</h3><table><thead><tr><th>Page URL</th><th>Canonical Points To</th></tr></thead><tbody>${r.canonicalizedPages.map(p=>`<tr><td>${urlLink(p.url)}</td><td>${urlLink(p.canonical)}</td></tr>`).join('')}</tbody></table></div>`;
   }
@@ -778,8 +782,8 @@ function _renderCan() {
     if (r.missingPages.length > 0) html += `<div class="section-card"><h3>Pages Missing Canonical (${r.missingPages.length})</h3><table><thead><tr><th>URL</th></tr></thead><tbody>${r.missingPages.map(u=>`<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
   }
   if (f === 'self') {
-    if (r.selfReferencingPages && r.selfReferencingPages.length > 0) html += `<div class="section-card"><h3>Self-Referencing Canonical (${r.selfReferencingPages.length})</h3><table><thead><tr><th>URL</th></tr></thead><tbody>${r.selfReferencingPages.slice(0,500).map(u=>`<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
-    else html += `<div class="section-card"><p style="color:var(--text-muted)">Self-referencing URL list not stored separately.</p></div>`;
+    const srp = r.selfReferencingPages || [];
+    html += `<div class="section-card"><h3>Self-Referencing Canonical (${srp.length})</h3><table><thead><tr><th>URL</th></tr></thead><tbody>${srp.slice(0,500).map(u=>`<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
   }
   $('#canonicalsContent').innerHTML = exportBtn('canonicals') + html;
 }
