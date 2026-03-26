@@ -531,6 +531,141 @@ function detailItem(label, value) {
   return `<div class="detail-item"><div class="dlabel">${label}</div><div class="dvalue">${value}</div></div>`;
 }
 
+// ── URL Context Menu (hover dropdown on all url-cell links) ──
+let _urlMenu = null;
+function showUrlMenu(e, url) {
+  e.preventDefault();
+  e.stopPropagation();
+  hideUrlMenu();
+  _urlMenu = document.createElement('div');
+  _urlMenu.className = 'url-context-menu';
+  _urlMenu.innerHTML = `
+    <a href="${esc(url)}" target="_blank" rel="noopener" class="url-menu-item">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 2h4v4M14 2L7 9M12 8v5a1 1 0 01-1 1H3a1 1 0 01-1-1V5a1 1 0 011-1h5"/></svg>
+      Open Link
+    </a>
+    <div class="url-menu-item" onclick="inspectUrl('${esc(url).replace(/'/g, "\\'")}')">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7" cy="7" r="5"/><path d="M7 4v3h2M11 11l2 2"/></svg>
+      Inspect URL
+    </div>
+  `;
+  // Position near cursor
+  _urlMenu.style.left = Math.min(e.clientX, window.innerWidth - 180) + 'px';
+  _urlMenu.style.top = Math.min(e.clientY, window.innerHeight - 100) + 'px';
+  document.body.appendChild(_urlMenu);
+}
+
+function hideUrlMenu() {
+  if (_urlMenu) { _urlMenu.remove(); _urlMenu = null; }
+}
+document.addEventListener('click', hideUrlMenu);
+document.addEventListener('scroll', hideUrlMenu, true);
+
+// Attach context menu to all url-cell links via delegation
+document.addEventListener('contextmenu', (e) => {
+  const link = e.target.closest('a.url-cell');
+  if (link) showUrlMenu(e, link.href || link.textContent);
+});
+
+// ── Inspect URL (full page detail with inbound links) ──
+function inspectUrl(url) {
+  hideUrlMenu();
+  if (!pagesData.length) return alert('No crawl data available');
+  const p = pagesData.find(pg => pg.url === url);
+
+  // Find pages linking TO this URL
+  const inboundLinks = [];
+  for (const page of pagesData) {
+    try {
+      const links = JSON.parse(page.links || '[]');
+      for (const link of links) {
+        if (link.href === url && link.isInternal) {
+          inboundLinks.push({ from: page.url, anchor: link.anchor || '(no text)', nofollow: link.isNofollow });
+        }
+      }
+    } catch {}
+  }
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+
+  if (!p) {
+    // URL not crawled directly — just show inbound links
+    modal.innerHTML = `<div class="modal">
+      <button class="modal-close">&times;</button>
+      <h3 style="word-break:break-all">${esc(url)}</h3>
+      <p style="color:var(--text-muted);font-size:13px">This URL was not directly crawled.</p>
+      ${inboundLinks.length > 0 ? `<div class="section-card" style="margin-top:16px"><h3>Pages Linking Here (${inboundLinks.length})</h3>
+        <table><thead><tr><th>Source Page</th><th>Anchor Text</th><th>Nofollow</th></tr></thead><tbody>
+        ${inboundLinks.slice(0, 100).map(l => `<tr><td>${urlLink(l.from)}</td><td>${esc(l.anchor)}</td><td>${l.nofollow ? '<span class="badge badge-warning">Yes</span>' : 'No'}</td></tr>`).join('')}
+        </tbody></table></div>` : '<p style="color:var(--text-muted)">No internal pages link to this URL.</p>'}
+    </div>`;
+  } else {
+    const hreflangs = JSON.parse(p.hreflangs || '[]');
+    const conflicts = JSON.parse(p.hreflang_canonical_conflicts || '[]');
+    const headings = JSON.parse(p.heading_structure || '[]');
+    const secHeaders = JSON.parse(p.security_headers || '{}');
+    const sdt = JSON.parse(p.structured_data_types || '[]');
+
+    modal.innerHTML = `<div class="modal">
+      <button class="modal-close">&times;</button>
+      <h3 style="word-break:break-all">${esc(p.url)}</h3>
+      <div class="detail-grid">
+        ${detailItem('Status', statusBadge(p.status_code))}
+        ${detailItem('Title', esc(p.title || 'None') + ` (${p.title_length || 0} chars)`)}
+        ${detailItem('Meta Description', esc(p.meta_description || 'None') + ` (${p.meta_description_length || 0} chars)`)}
+        ${detailItem('Canonical', p.canonical ? esc(p.canonical) + (p.canonical_is_self ? ' (Self)' : ' (Different)') : 'None')}
+        ${detailItem('H1', JSON.parse(p.h1 || '[]').join(', ') || 'None')}
+        ${detailItem('H1 Count', p.h1_count || 0)}
+        ${detailItem('H2 Count', p.h2_count || 0)}
+        ${detailItem('Word Count', p.word_count || 0)}
+        ${detailItem('Response Time', (p.response_time || 0) + 'ms')}
+        ${detailItem('Content Length', formatBytes(p.content_length || 0))}
+        ${detailItem('Internal Links', p.internal_links || 0)}
+        ${detailItem('External Links', p.external_links || 0)}
+        ${detailItem('Images', `${p.images_total || 0} total, ${p.images_without_alt || 0} missing alt`)}
+        ${detailItem('Meta Robots', p.meta_robots || 'index, follow')}
+        ${detailItem('HTML Lang', p.html_lang || 'None')}
+        ${detailItem('In Sitemap', p.in_sitemap ? 'Yes' : 'No')}
+        ${detailItem('Structured Data', sdt.join(', ') || 'None')}
+        ${detailItem('OG Title', p.og_title || 'None')}
+        ${detailItem('OG Image', p.og_image || 'None')}
+        ${detailItem('Depth', p.depth || 0)}
+      </div>
+
+      <div class="section-card" style="margin-top:20px;border-left:4px solid var(--info)">
+        <h3>Pages Linking Here (${inboundLinks.length})</h3>
+        ${inboundLinks.length > 0 ? `<table><thead><tr><th>Source Page</th><th>Anchor Text</th><th>Nofollow</th></tr></thead><tbody>
+        ${inboundLinks.slice(0, 100).map(l => `<tr><td>${urlLink(l.from)}</td><td>${esc(l.anchor)}</td><td>${l.nofollow ? '<span class="badge badge-warning">Yes</span>' : 'No'}</td></tr>`).join('')}
+        </tbody></table>` : '<p style="color:var(--text-muted)">No internal pages link to this URL.</p>'}
+      </div>
+
+      ${hreflangs.length > 0 ? `<div class="section-card" style="margin-top:16px"><h3>Hreflangs (${hreflangs.length})</h3>
+        <table><thead><tr><th>Lang</th><th>URL</th></tr></thead><tbody>
+        ${hreflangs.map(h => `<tr><td>${esc(h.lang)}</td><td>${urlLink(h.href)}</td></tr>`).join('')}
+        </tbody></table></div>` : ''}
+
+      ${conflicts.length > 0 ? `<div class="section-card" style="margin-top:16px;border-left:4px solid var(--danger)"><h3>Hreflang/Canonical Conflicts</h3>
+        ${conflicts.map(c => `<div style="margin:8px 0;padding:8px;background:rgba(255,0,0,0.05);border-radius:4px"><span class="badge badge-${c.severity === 'critical' ? 'danger' : c.severity}">${esc(c.type)}</span> ${esc(c.message)}</div>`).join('')}
+      </div>` : ''}
+
+      ${headings.length > 0 ? `<div class="section-card" style="margin-top:16px"><h3>Heading Structure</h3>
+        ${headings.map(h => `<div style="padding-left:${(h.level-1)*20}px;margin:4px 0;font-size:13px"><strong>${h.tag}:</strong> ${esc(h.text)}</div>`).join('')}
+      </div>` : ''}
+
+      <div class="section-card" style="margin-top:16px"><h3>Security Headers</h3>
+        <div class="detail-grid">
+        ${Object.entries(secHeaders).map(([k,v]) => detailItem(k, v ? `<span class="badge badge-success">${esc(String(v).substring(0,80))}</span>` : '<span class="badge badge-danger">Missing</span>')).join('')}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  document.body.appendChild(modal);
+  modal.querySelector('.modal-close').addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+}
+
 // ── Issues ──
 function renderIssues(analysis) {
   const issues = analysis.issues;
