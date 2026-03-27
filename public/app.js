@@ -591,18 +591,19 @@ function inspectUrl(url) {
   if (!pagesData.length) return alert('No crawl data available');
   const p = pagesData.find(pg => pg.url === url);
 
-  // Find pages linking TO this URL
-  const inboundLinks = [];
+  // Find pages linking TO this URL (deduplicated by source URL)
+  const inboundMap = new Map();
   for (const page of pagesData) {
     try {
       const links = JSON.parse(page.links || '[]');
       for (const link of links) {
-        if (link.href === url && link.isInternal) {
-          inboundLinks.push({ from: page.url, anchor: link.anchor || '(no text)', nofollow: link.isNofollow });
+        if (link.href === url && link.isInternal && !inboundMap.has(page.url)) {
+          inboundMap.set(page.url, { from: page.url, anchor: link.anchor || '(no text)', nofollow: link.isNofollow });
         }
       }
     } catch {}
   }
+  const inboundLinks = [...inboundMap.values()];
 
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
