@@ -887,6 +887,7 @@ function renderRedirects(analysis) {
 function renderContent(analysis) {
   const r = analysis.contentAnalysis;
   const d = analysis.duplicates;
+  const lm = analysis.languageMismatchReport || { totalPages: 0, pages: [] };
 
   let html = `<div class="stats-grid">
     ${statCard('Avg Word Count', r.avgWordCount, r.avgWordCount < 300 ? 'warning' : '')}
@@ -895,7 +896,28 @@ function renderContent(analysis) {
     ${statCard('Duplicate Titles', d.duplicateTitles.length, d.duplicateTitles.length > 0 ? 'warning' : 'success')}
     ${statCard('Duplicate Descriptions', d.duplicateDescriptions.length, d.duplicateDescriptions.length > 0 ? 'warning' : 'success')}
     ${statCard('Duplicate Content', d.duplicateContent.length, d.duplicateContent.length > 0 ? 'warning' : 'success')}
+    ${statCard('Language Mismatches', lm.totalPages, lm.totalPages > 0 ? 'critical' : 'success')}
   </div>`;
+
+  // Language mismatches — show first since it's a critical issue
+  if (lm.totalPages > 0) {
+    html += `<div class="section-card"><h3>Language Mismatches (${lm.totalPages} pages)</h3>
+      <p style="margin-bottom:12px;color:var(--text-muted);font-size:13px">Pages where the URL path language doesn't match the content language, html lang attribute, or og:locale. For example, a <code>/en/</code> URL serving French content.</p>
+      <table><thead><tr><th>URL</th><th>URL Lang</th><th>html lang</th><th>og:locale</th><th>Content Lang</th><th>Issues</th></tr></thead>
+      <tbody>${lm.pages.slice(0, 100).map(p => {
+        const urlLangMatch = p.url.match(/^https?:\/\/[^/]+\/([a-z]{2}(?:-[a-z]{2})?)\//i);
+        const urlLang = urlLangMatch ? urlLangMatch[1] : '—';
+        const issueList = p.issues.map(i => `<span class="badge badge-critical" style="margin:2px">${esc(i.message)}</span>`).join('');
+        return `<tr>
+          <td>${urlLink(p.url)}</td>
+          <td><strong>${esc(urlLang)}</strong></td>
+          <td>${esc(p.htmlLang || '—')}</td>
+          <td>${esc(p.ogLocale || '—')}</td>
+          <td>${esc(p.detectedContentLang ? p.detectedContentLang.toUpperCase() : '—')}</td>
+          <td>${issueList}</td>
+        </tr>`;
+      }).join('')}</tbody></table></div>`;
+  }
 
   if (r.thinPages.length > 0) {
     html += `<div class="section-card"><h3>Thin Content Pages</h3>

@@ -117,7 +117,10 @@ function mapPagesForAnalysis(pages) {
     metaDescription: p.meta_description,
     blockedByRobots: !!p.blocked_by_robots,
     finalUrl: p.final_url,
-    headingStructure: JSON.parse(p.heading_structure || '[]')
+    headingStructure: JSON.parse(p.heading_structure || '[]'),
+    ogLocale: p.og_locale,
+    detectedContentLang: p.detected_content_lang,
+    languageMismatch: JSON.parse(p.language_mismatch || 'null')
   }));
 }
 
