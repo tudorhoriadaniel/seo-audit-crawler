@@ -1,5 +1,23 @@
 /* global io */
 const socket = io();
+
+// ── Theme ──
+(function initTheme() {
+  const saved = localStorage.getItem('seo-theme') || 'light';
+  document.documentElement.setAttribute('data-theme', saved);
+  document.addEventListener('DOMContentLoaded', () => {
+    const sel = document.getElementById('themeSelect');
+    if (sel) {
+      sel.value = saved;
+      sel.addEventListener('change', () => {
+        const t = sel.value;
+        document.documentElement.setAttribute('data-theme', t);
+        localStorage.setItem('seo-theme', t);
+      });
+    }
+  });
+})();
+
 // Each tab gets its own crawl ID via sessionStorage so parallel tabs work
 let currentCrawlId = sessionStorage.getItem('currentCrawlId') || null;
 let analysisData = null;
@@ -1160,7 +1178,7 @@ function _renderMT() {
   }
   if (f === 'all' || f === 'dup') {
     if (r.duplicates.length > 0) { html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Duplicate Titles (${r.duplicates.length} groups)</h3>`;
-      for (const d of r.duplicates.slice(0,50)) html += `<div style="margin-bottom:16px;padding:12px;background:rgba(255,255,255,0.03);border-radius:8px"><strong style="color:var(--text-muted)">"${esc(truncate(d.title,80))}"</strong> <span class="badge badge-danger">${d.count}x</span><table style="margin-top:8px"><tbody>${d.urls.map(u=>`<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
+      for (const d of r.duplicates.slice(0,50)) html += `<div style="margin-bottom:16px;padding:12px;background:var(--bg-hover);border-radius:8px"><strong style="color:var(--text-muted)">"${esc(truncate(d.title,80))}"</strong> <span class="badge badge-danger">${d.count}x</span><table style="margin-top:8px"><tbody>${d.urls.map(u=>`<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
       html += `</div>`; }
   }
   if (f === 'all' || f === 'short') {
@@ -1199,7 +1217,7 @@ function _renderMD() {
   }
   if (f === 'all' || f === 'dup') {
     if (r.duplicates.length > 0) { html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Duplicate Descriptions (${r.duplicates.length} groups)</h3>`;
-      for (const d of r.duplicates.slice(0,50)) html += `<div style="margin-bottom:16px;padding:12px;background:rgba(255,255,255,0.03);border-radius:8px"><strong style="color:var(--text-muted)">"${esc(truncate(d.description,80))}"</strong> <span class="badge badge-danger">${d.count}x</span><table style="margin-top:8px"><tbody>${d.urls.map(u=>`<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
+      for (const d of r.duplicates.slice(0,50)) html += `<div style="margin-bottom:16px;padding:12px;background:var(--bg-hover);border-radius:8px"><strong style="color:var(--text-muted)">"${esc(truncate(d.description,80))}"</strong> <span class="badge badge-danger">${d.count}x</span><table style="margin-top:8px"><tbody>${d.urls.map(u=>`<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table></div>`;
       html += `</div>`; }
   }
   if (f === 'all' || f === 'short') {
