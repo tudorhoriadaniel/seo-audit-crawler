@@ -88,13 +88,39 @@ body {
   border-left: 3px solid transparent;
 }
 .nav-link:hover { color: var(--text); background: var(--bg-hover); }
-.nav-link.active {
-  color: var(--primary);
-  background: rgba(99,102,241,.08);
-  border-left-color: var(--primary);
-  font-weight: 600;
-}
+.nav-link.active { font-weight: 600; }
 .nav-link svg { flex-shrink: 0; }
+
+/* Per-tab colors */
+.nav-link[data-view="dashboard"]       { --tab: #6366f1; }
+.nav-link[data-view="allpages"]        { --tab: #3b82f6; }
+.nav-link[data-view="metatitles"]      { --tab: #8b5cf6; }
+.nav-link[data-view="metadescriptions"]{ --tab: #a855f7; }
+.nav-link[data-view="hreflang"]        { --tab: #06b6d4; }
+.nav-link[data-view="canonicals"]      { --tab: #14b8a6; }
+.nav-link[data-view="hreflang_canonical"]{ --tab: #ec4899; }
+.nav-link[data-view="redirects"]       { --tab: #f59e0b; }
+.nav-link[data-view="statuscodes"]     { --tab: #f97316; }
+.nav-link[data-view="sitemaps"]        { --tab: #10b981; }
+.nav-link[data-view="content"]         { --tab: #64748b; }
+.nav-link[data-view="headings"]        { --tab: #0ea5e9; }
+.nav-link[data-view="images"]          { --tab: #e879f9; }
+.nav-link[data-view="anchors"]         { --tab: #fb923c; }
+.nav-link[data-view="structured"]      { --tab: #4ade80; }
+.nav-link[data-view="security"]        { --tab: #facc15; }
+.nav-link[data-view="directives"]      { --tab: #38bdf8; }
+.nav-link[data-view="links"]           { --tab: #c084fc; }
+.nav-link[data-view="aibots"]          { --tab: #2dd4bf; }
+.nav-link[data-view="summary"]         { --tab: #fbbf24; }
+
+.nav-link { border-left: 3px solid transparent; }
+.nav-link svg { color: var(--tab, var(--text-muted)); }
+.nav-link:hover { color: var(--tab, var(--text)); background: var(--bg-hover); }
+.nav-link.active {
+  color: var(--tab, var(--primary));
+  border-left-color: var(--tab, var(--primary));
+  background: color-mix(in srgb, var(--tab, var(--primary)) 8%, transparent);
+}
 
 /* Main */
 .main-content {
