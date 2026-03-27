@@ -60,6 +60,17 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// ── Save Project toggle ──
+// Restore per-domain preference when URL input changes
+$('#optSaveProject').checked = false; // default unchecked
+$('#urlInput').addEventListener('change', () => {
+  try {
+    const u = new URL($('#urlInput').value.startsWith('http') ? $('#urlInput').value : 'https://' + $('#urlInput').value);
+    const saved = localStorage.getItem('seo-save-' + u.hostname);
+    $('#optSaveProject').checked = saved === '1';
+  } catch { /* ignore */ }
+});
+
 // ── Start Crawl ──
 $('#startCrawl').addEventListener('click', startCrawl);
 $('#urlInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') startCrawl(); });
@@ -92,14 +103,22 @@ async function startCrawl() {
   const url = $('#urlInput').value.trim();
   if (!url) return;
 
+  const saveProject = $('#optSaveProject').checked;
   const body = {
     url,
     maxPages: parseInt($('#optMaxPages').value) || 500,
     maxDepth: parseInt($('#optMaxDepth').value) || 10,
     concurrency: parseInt($('#optConcurrency').value) || 5,
     respectRobots: $('#optRobots').checked,
-    userAgent: $('#optUserAgent').value || undefined
+    userAgent: $('#optUserAgent').value || undefined,
+    saveProject
   };
+
+  // Persist save preference per domain
+  try {
+    const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+    localStorage.setItem('seo-save-' + u.hostname, saveProject ? '1' : '0');
+  } catch { /* ignore */ }
 
   try {
     const res = await fetch('/api/crawls', {
@@ -205,7 +224,6 @@ socket.on('complete', (data) => {
   analysisData = data.analysis;
   renderDashboard(data.stats, data.analysis);
   loadPages();
-  // Issues tab removed
   renderHreflang(data.analysis);
   renderCanonicals(data.analysis);
   renderConflicts(data.analysis);
@@ -224,6 +242,11 @@ socket.on('complete', (data) => {
   renderHeadings(data.analysis);
   renderDirectives(data.analysis);
   renderSummary(data.analysis);
+
+  // Load project history if save is enabled
+  if ($('#optSaveProject').checked) {
+    loadProjectHistory();
+  }
 });
 
 socket.on('error', (data) => {
@@ -291,6 +314,86 @@ function renderDashboard(stats, analysis) {
     </div>
   `;
   $('#dashboardContent').innerHTML = html;
+}
+
+async function loadProjectHistory() {
+  try {
+    const urlVal = $('#urlInput').value.trim();
+    const u = new URL(urlVal.startsWith('http') ? urlVal : 'https://' + urlVal);
+    const domain = u.hostname;
+    const res = await fetch(`/api/projects/${encodeURIComponent(domain)}/history`);
+    if (!res.ok) return;
+    const crawls = await res.json();
+
+    // Need at least 2 crawls for comparison (current + previous)
+    if (crawls.length < 2) return;
+
+    const current = crawls[0];
+    const previous = crawls[1];
+    if (!current.stats || !previous.stats) return;
+
+    const cs = current.stats;
+    const ps = previous.stats;
+
+    const el = document.getElementById('projectHistory');
+    if (el) el.remove();
+
+    const div = document.createElement('div');
+    div.id = 'projectHistory';
+    div.className = 'section-card';
+    div.style.borderLeft = '4px solid var(--info)';
+
+    const delta = (cur, prev, label, inverse = false) => {
+      const diff = (cur || 0) - (prev || 0);
+      if (diff === 0) return `<td>${cur || 0}</td><td style="color:var(--text-muted)">—</td>`;
+      const good = inverse ? diff < 0 : diff > 0;
+      const color = good ? 'var(--success)' : 'var(--danger)';
+      const arrow = diff > 0 ? '&#9650;' : '&#9660;';
+      return `<td>${cur || 0}</td><td style="color:${color};font-weight:600">${arrow} ${Math.abs(diff)}</td>`;
+    };
+
+    const prevDate = new Date(previous.completed_at || previous.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const curDate = new Date(current.completed_at || current.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    div.innerHTML = `
+      <h3>Evolution vs Previous Crawl</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Comparing <strong>${curDate}</strong> with <strong>${prevDate}</strong> &middot; ${crawls.length} total crawl(s) saved</p>
+      <table>
+        <thead><tr><th>Metric</th><th>Current</th><th>Change</th><th>Previous</th></tr></thead>
+        <tbody>
+          <tr><td>Pages Crawled</td>${delta(cs.pagesDiscovered || cs.crawled, ps.pagesDiscovered || ps.crawled)}<td>${ps.pagesDiscovered || ps.crawled || 0}</td></tr>
+          <tr><td>Pages Crawled (fetched)</td>${delta(cs.crawled, ps.crawled)}<td>${ps.crawled || 0}</td></tr>
+          <tr><td>2xx Responses</td>${delta(cs.status2xx, ps.status2xx)}<td>${ps.status2xx || 0}</td></tr>
+          <tr><td>3xx Redirects</td>${delta(cs.status3xx, ps.status3xx, null, true)}<td>${ps.status3xx || 0}</td></tr>
+          <tr><td>4xx Errors</td>${delta(cs.status4xx, ps.status4xx, null, true)}<td>${ps.status4xx || 0}</td></tr>
+          <tr><td>5xx Errors</td>${delta(cs.status5xx, ps.status5xx, null, true)}<td>${ps.status5xx || 0}</td></tr>
+          <tr><td>Blocked by Robots</td>${delta(cs.blockedByRobots, ps.blockedByRobots, null, true)}<td>${ps.blockedByRobots || 0}</td></tr>
+          <tr><td>Connection Errors</td>${delta(cs.errors, ps.errors, null, true)}<td>${ps.errors || 0}</td></tr>
+        </tbody>
+      </table>
+      ${crawls.length > 2 ? `
+        <details style="margin-top:12px"><summary style="cursor:pointer;color:var(--primary);font-size:13px;font-weight:600">View all ${crawls.length} crawls</summary>
+        <table style="margin-top:8px">
+          <thead><tr><th>Date</th><th>Pages</th><th>2xx</th><th>3xx</th><th>4xx</th><th>5xx</th><th>Actions</th></tr></thead>
+          <tbody>${crawls.map(c => {
+            const s = c.stats || {};
+            const d = new Date(c.completed_at || c.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+            return `<tr>
+              <td>${d}</td>
+              <td>${s.crawled || 0}</td>
+              <td>${s.status2xx || 0}</td>
+              <td>${s.status3xx || 0}</td>
+              <td>${s.status4xx || 0}</td>
+              <td>${s.status5xx || 0}</td>
+              <td><a href="#" onclick="loadCrawl('${c.id}');return false" style="color:var(--primary);font-size:12px">Load</a></td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>
+        </details>` : ''}
+    `;
+
+    $('#dashboardContent').appendChild(div);
+  } catch (e) { /* ignore history errors */ }
 }
 
 function statCard(label, value, colorClass) {
@@ -1079,6 +1182,15 @@ window.loadCrawl = async function(id) {
   $('[data-view="dashboard"]').classList.add('active');
   $$('.view').forEach(v => v.classList.remove('active'));
   $('#view-dashboard').classList.add('active');
+
+  // Load history if this is a saved project
+  if (crawl.saved || $('#optSaveProject').checked) {
+    try {
+      const domain = new URL(crawl.url).hostname;
+      $('#urlInput').value = crawl.url;
+      loadProjectHistory();
+    } catch { /* ignore */ }
+  }
 };
 
 window.deleteCrawl = async function(id) {

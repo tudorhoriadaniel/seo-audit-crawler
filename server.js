@@ -159,7 +159,7 @@ app.post('/api/import-project', express.json({ limit: '200mb' }), (req, res) => 
 
 // Start a new crawl
 app.post('/api/crawls', (req, res) => {
-  const { url, maxPages, maxDepth, concurrency, respectRobots, userAgent } = req.body;
+  const { url, maxPages, maxDepth, concurrency, respectRobots, userAgent, saveProject } = req.body;
 
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -170,6 +170,7 @@ app.post('/api/crawls', (req, res) => {
     return res.status(400).json({ error: 'Invalid URL' });
   }
 
+  const domain = parsedUrl.hostname;
   const crawlId = uuidv4();
   const config = {
     maxPages: Math.min(parseInt(maxPages) || 5000, 50000),
@@ -179,7 +180,13 @@ app.post('/api/crawls', (req, res) => {
     userAgent: userAgent || undefined
   };
 
-  db.createCrawl(crawlId, parsedUrl.href, config);
+  const saved = saveProject ? 1 : 0;
+  db.createCrawl(crawlId, parsedUrl.href, config, { saved, domain });
+
+  // If not saving, clean up previous unsaved crawls for this domain
+  if (!saveProject) {
+    db.cleanupUnsavedCrawls(domain, crawlId);
+  }
 
   const crawler = new CrawlerEngine(config);
 
@@ -236,7 +243,7 @@ app.post('/api/crawls', (req, res) => {
     activeCrawls.delete(crawlId);
   });
 
-  res.json({ id: crawlId, url: parsedUrl.href, status: 'running' });
+  res.json({ id: crawlId, url: parsedUrl.href, domain, saved, status: 'running' });
 });
 
 // Get crawl details
@@ -485,6 +492,25 @@ app.post('/api/crawls/:id/abort', (req, res) => {
 app.delete('/api/crawls/:id', (req, res) => {
   db.deleteCrawl(req.params.id);
   res.json({ deleted: true });
+});
+
+// Get crawl history for a domain (for evolution comparison)
+app.get('/api/projects/:domain/history', (req, res) => {
+  const crawls = db.getCrawlsByDomain(req.params.domain, 20);
+  res.json(crawls.map(c => ({ ...c, stats: JSON.parse(c.stats || '{}') })));
+});
+
+// Toggle saved status for a crawl
+app.patch('/api/crawls/:id/saved', (req, res) => {
+  const { saved } = req.body;
+  db.setCrawlSaved(req.params.id, saved);
+  // If unsaving, clean up old unsaved crawls for same domain
+  const crawl = db.getCrawl(req.params.id);
+  if (!saved && crawl) {
+    const domain = crawl.domain || new URL(crawl.url).hostname;
+    db.cleanupUnsavedCrawls(domain, req.params.id);
+  }
+  res.json({ saved: !!saved });
 });
 
 // Health check
