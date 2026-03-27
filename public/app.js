@@ -479,7 +479,11 @@ function renderPagesTable(pages) {
   $('#pagesTable').innerHTML = html;
 
   $$('.page-row').forEach(row => {
-    row.addEventListener('click', () => showPageDetail(row.dataset.url, pages));
+    row.addEventListener('click', (e) => {
+      // Don't trigger row click if clicking a URL link (let the link handle it)
+      if (e.target.closest('a.url-cell')) return;
+      showPageDetail(row.dataset.url, pages);
+    });
   });
 }
 
@@ -557,16 +561,27 @@ function showUrlMenu(e, url) {
   hideUrlMenu();
   _urlMenu = document.createElement('div');
   _urlMenu.className = 'url-context-menu';
+  const safeUrl = url.replace(/'/g, "\\'");
   _urlMenu.innerHTML = `
-    <a href="${esc(url)}" target="_blank" rel="noopener" class="url-menu-item">
+    <div class="url-menu-item" data-action="open">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 2h4v4M14 2L7 9M12 8v5a1 1 0 01-1 1H3a1 1 0 01-1-1V5a1 1 0 011-1h5"/></svg>
       Open Link
-    </a>
-    <div class="url-menu-item" onclick="inspectUrl('${esc(url).replace(/'/g, "\\'")}')">
+    </div>
+    <div class="url-menu-item" data-action="inspect">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7" cy="7" r="5"/><path d="M7 4v3h2M11 11l2 2"/></svg>
       Inspect URL
     </div>
   `;
+  _urlMenu.querySelector('[data-action="open"]').addEventListener('click', (ev) => {
+    ev.preventDefault(); ev.stopPropagation();
+    hideUrlMenu();
+    window.open(url, '_blank', 'noopener');
+  });
+  _urlMenu.querySelector('[data-action="inspect"]').addEventListener('click', (ev) => {
+    ev.preventDefault(); ev.stopPropagation();
+    hideUrlMenu();
+    inspectUrl(url);
+  });
   // Position near cursor
   _urlMenu.style.left = Math.min(e.clientX, window.innerWidth - 180) + 'px';
   _urlMenu.style.top = Math.min(e.clientY, window.innerHeight - 100) + 'px';
