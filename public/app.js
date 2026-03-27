@@ -42,6 +42,8 @@ $$('.nav-link').forEach(link => {
     link.classList.add('active');
     $$('.view').forEach(v => v.classList.remove('active'));
     $(`#view-${view}`).classList.add('active');
+    // Load saved projects when navigating to that view
+    if (view === 'saved-projects') loadSavedProjects();
   });
 });
 
@@ -325,15 +327,14 @@ async function loadProjectHistory() {
     if (!res.ok) return;
     const crawls = await res.json();
 
-    // Need at least 2 crawls for comparison (current + previous)
-    if (crawls.length < 2) return;
+    if (crawls.length === 0) return;
 
     const current = crawls[0];
-    const previous = crawls[1];
-    if (!current.stats || !previous.stats) return;
+    if (!current.stats) return;
+    const previous = crawls.length >= 2 ? crawls[1] : null;
 
     const cs = current.stats;
-    const ps = previous.stats;
+    const ps = previous ? previous.stats : null;
 
     const el = document.getElementById('projectHistory');
     if (el) el.remove();
@@ -343,36 +344,49 @@ async function loadProjectHistory() {
     div.className = 'section-card';
     div.style.borderLeft = '4px solid var(--info)';
 
-    const delta = (cur, prev, label, inverse = false) => {
-      const diff = (cur || 0) - (prev || 0);
-      if (diff === 0) return `<td>${cur || 0}</td><td style="color:var(--text-muted)">—</td>`;
-      const good = inverse ? diff < 0 : diff > 0;
-      const color = good ? 'var(--success)' : 'var(--danger)';
-      const arrow = diff > 0 ? '&#9650;' : '&#9660;';
-      return `<td>${cur || 0}</td><td style="color:${color};font-weight:600">${arrow} ${Math.abs(diff)}</td>`;
-    };
-
-    const prevDate = new Date(previous.completed_at || previous.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     const curDate = new Date(current.completed_at || current.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-    div.innerHTML = `
-      <h3>Evolution vs Previous Crawl</h3>
-      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Comparing <strong>${curDate}</strong> with <strong>${prevDate}</strong> &middot; ${crawls.length} total crawl(s) saved</p>
-      <table>
-        <thead><tr><th>Metric</th><th>Current</th><th>Change</th><th>Previous</th></tr></thead>
-        <tbody>
-          <tr><td>Pages Crawled</td>${delta(cs.pagesDiscovered || cs.crawled, ps.pagesDiscovered || ps.crawled)}<td>${ps.pagesDiscovered || ps.crawled || 0}</td></tr>
-          <tr><td>Pages Crawled (fetched)</td>${delta(cs.crawled, ps.crawled)}<td>${ps.crawled || 0}</td></tr>
-          <tr><td>2xx Responses</td>${delta(cs.status2xx, ps.status2xx)}<td>${ps.status2xx || 0}</td></tr>
-          <tr><td>3xx Redirects</td>${delta(cs.status3xx, ps.status3xx, null, true)}<td>${ps.status3xx || 0}</td></tr>
-          <tr><td>4xx Errors</td>${delta(cs.status4xx, ps.status4xx, null, true)}<td>${ps.status4xx || 0}</td></tr>
-          <tr><td>5xx Errors</td>${delta(cs.status5xx, ps.status5xx, null, true)}<td>${ps.status5xx || 0}</td></tr>
-          <tr><td>Blocked by Robots</td>${delta(cs.blockedByRobots, ps.blockedByRobots, null, true)}<td>${ps.blockedByRobots || 0}</td></tr>
-          <tr><td>Connection Errors</td>${delta(cs.errors, ps.errors, null, true)}<td>${ps.errors || 0}</td></tr>
-        </tbody>
-      </table>
-      ${crawls.length > 2 ? `
-        <details style="margin-top:12px"><summary style="cursor:pointer;color:var(--primary);font-size:13px;font-weight:600">View all ${crawls.length} crawls</summary>
+    if (!previous || !ps) {
+      // Only 1 crawl saved — show info, no comparison
+      div.innerHTML = `
+        <h3>Saved Project</h3>
+        <p style="color:var(--text-muted);margin-bottom:8px;font-size:13px">1 crawl saved (${curDate}). Run another crawl with <strong>Save Project</strong> enabled to see evolution.</p>
+      `;
+    } else {
+      const delta = (cur, prev, label, inverse = false) => {
+        const diff = (cur || 0) - (prev || 0);
+        if (diff === 0) return `<td>${cur || 0}</td><td style="color:var(--text-muted)">—</td>`;
+        const good = inverse ? diff < 0 : diff > 0;
+        const color = good ? 'var(--success)' : 'var(--danger)';
+        const arrow = diff > 0 ? '&#9650;' : '&#9660;';
+        return `<td>${cur || 0}</td><td style="color:${color};font-weight:600">${arrow} ${Math.abs(diff)}</td>`;
+      };
+
+      const prevDate = new Date(previous.completed_at || previous.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+      div.innerHTML = `
+        <h3>Evolution vs Previous Crawl</h3>
+        <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Comparing <strong>${curDate}</strong> with <strong>${prevDate}</strong> &middot; ${crawls.length} total crawl(s) saved</p>
+        <table>
+          <thead><tr><th>Metric</th><th>Current</th><th>Change</th><th>Previous</th></tr></thead>
+          <tbody>
+            <tr><td>Pages Crawled</td>${delta(cs.pagesDiscovered || cs.crawled, ps.pagesDiscovered || ps.crawled)}<td>${ps.pagesDiscovered || ps.crawled || 0}</td></tr>
+            <tr><td>Pages Crawled (fetched)</td>${delta(cs.crawled, ps.crawled)}<td>${ps.crawled || 0}</td></tr>
+            <tr><td>2xx Responses</td>${delta(cs.status2xx, ps.status2xx)}<td>${ps.status2xx || 0}</td></tr>
+            <tr><td>3xx Redirects</td>${delta(cs.status3xx, ps.status3xx, null, true)}<td>${ps.status3xx || 0}</td></tr>
+            <tr><td>4xx Errors</td>${delta(cs.status4xx, ps.status4xx, null, true)}<td>${ps.status4xx || 0}</td></tr>
+            <tr><td>5xx Errors</td>${delta(cs.status5xx, ps.status5xx, null, true)}<td>${ps.status5xx || 0}</td></tr>
+            <tr><td>Blocked by Robots</td>${delta(cs.blockedByRobots, ps.blockedByRobots, null, true)}<td>${ps.blockedByRobots || 0}</td></tr>
+            <tr><td>Connection Errors</td>${delta(cs.errors, ps.errors, null, true)}<td>${ps.errors || 0}</td></tr>
+          </tbody>
+        </table>
+      `;
+    }
+
+    // Always show all crawls list if there are any
+    if (crawls.length > 1) {
+      div.innerHTML += `
+        <details style="margin-top:12px"${crawls.length <= 3 ? ' open' : ''}><summary style="cursor:pointer;color:var(--primary);font-size:13px;font-weight:600">View all ${crawls.length} crawls</summary>
         <table style="margin-top:8px">
           <thead><tr><th>Date</th><th>Pages</th><th>2xx</th><th>3xx</th><th>4xx</th><th>5xx</th><th>Actions</th></tr></thead>
           <tbody>${crawls.map(c => {
@@ -389,12 +403,137 @@ async function loadProjectHistory() {
             </tr>`;
           }).join('')}</tbody>
         </table>
-        </details>` : ''}
-    `;
+        </details>`;
+    }
 
     $('#dashboardContent').appendChild(div);
   } catch (e) { /* ignore history errors */ }
 }
+
+async function loadSavedProjects() {
+  const container = $('#savedProjectsContent');
+  try {
+    const res = await fetch('/api/projects');
+    if (!res.ok) { container.innerHTML = '<p style="color:var(--text-muted);padding:20px">Could not load saved projects.</p>'; return; }
+    const projects = await res.json();
+
+    if (projects.length === 0) {
+      container.innerHTML = `
+        <div class="section-card" style="text-align:center;padding:40px">
+          <svg width="48" height="48" fill="none" stroke="var(--text-muted)" stroke-width="1.5" style="margin-bottom:12px"><path d="M6 10a4 4 0 014-4h6l4 4h8a4 4 0 014 4v14a4 4 0 01-4 4H10a4 4 0 01-4-4V10z"/></svg>
+          <h3 style="color:var(--text-muted);margin-bottom:8px">No Saved Projects Yet</h3>
+          <p style="color:var(--text-muted);max-width:400px;margin:0 auto;line-height:1.6">
+            To save a project, enable the <strong>"Save Project"</strong> toggle in the settings panel before starting a crawl.
+            Saved projects let you track SEO evolution over time by comparing crawls.
+          </p>
+        </div>`;
+      return;
+    }
+
+    container.innerHTML = `
+      <div class="stats-grid" style="margin-bottom:20px">
+        ${statCard('SAVED DOMAINS', projects.length, '')}
+        ${statCard('TOTAL CRAWLS', projects.reduce((s, p) => s + p.crawl_count, 0), '')}
+      </div>
+      <div id="savedProjectsList"></div>`;
+
+    const list = $('#savedProjectsList');
+
+    for (const project of projects) {
+      const card = document.createElement('div');
+      card.className = 'section-card';
+      card.style.marginBottom = '16px';
+
+      const lastDate = new Date(project.last_crawl).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      const firstDate = new Date(project.first_crawl).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+
+      card.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div>
+            <h3 style="margin:0;font-size:16px">${project.domain}</h3>
+            <p style="color:var(--text-muted);font-size:12px;margin:4px 0 0">${project.crawl_count} crawl(s) &middot; First: ${firstDate} &middot; Last: ${lastDate}</p>
+          </div>
+          <button class="btn btn-primary" style="font-size:12px;padding:6px 14px" onclick="expandProject('${project.domain}', this.closest('.section-card'))">View History</button>
+        </div>
+        <div class="project-history-detail"></div>`;
+
+      list.appendChild(card);
+    }
+  } catch (e) {
+    container.innerHTML = '<p style="color:var(--danger);padding:20px">Error loading saved projects: ' + e.message + '</p>';
+  }
+}
+
+window.expandProject = async function(domain, card) {
+  const detail = card.querySelector('.project-history-detail');
+  if (detail.dataset.loaded) {
+    detail.style.display = detail.style.display === 'none' ? '' : 'none';
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/projects/${encodeURIComponent(domain)}/history`);
+    if (!res.ok) return;
+    const crawls = await res.json();
+
+    if (crawls.length === 0) {
+      detail.innerHTML = '<p style="color:var(--text-muted)">No completed crawls found.</p>';
+      detail.dataset.loaded = '1';
+      return;
+    }
+
+    let html = `<table>
+      <thead><tr><th>Date</th><th>URL</th><th>Pages</th><th>2xx</th><th>3xx</th><th>4xx</th><th>5xx</th><th>Errors</th><th>Actions</th></tr></thead>
+      <tbody>`;
+
+    for (const c of crawls) {
+      const s = c.stats ? (typeof c.stats === 'string' ? JSON.parse(c.stats) : c.stats) : {};
+      const d = new Date(c.completed_at || c.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      html += `<tr>
+        <td>${d}</td>
+        <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${c.url}">${c.url}</td>
+        <td>${s.crawled || s.pagesDiscovered || 0}</td>
+        <td style="color:var(--success)">${s.status2xx || 0}</td>
+        <td style="color:var(--warning)">${s.status3xx || 0}</td>
+        <td style="color:var(--danger)">${s.status4xx || 0}</td>
+        <td style="color:var(--danger)">${s.status5xx || 0}</td>
+        <td>${s.errors || 0}</td>
+        <td><a href="#" onclick="loadCrawl('${c.id}');return false" style="color:var(--primary);font-weight:600;font-size:12px">Load</a></td>
+      </tr>`;
+    }
+
+    html += '</tbody></table>';
+
+    // Evolution comparison if 2+ crawls
+    if (crawls.length >= 2) {
+      const cur = crawls[0].stats ? (typeof crawls[0].stats === 'string' ? JSON.parse(crawls[0].stats) : crawls[0].stats) : {};
+      const prev = crawls[1].stats ? (typeof crawls[1].stats === 'string' ? JSON.parse(crawls[1].stats) : crawls[1].stats) : {};
+      const d = (c, p, inv = false) => {
+        const diff = (c || 0) - (p || 0);
+        if (diff === 0) return '<span style="color:var(--text-muted)">—</span>';
+        const good = inv ? diff < 0 : diff > 0;
+        const color = good ? 'var(--success)' : 'var(--danger)';
+        const arrow = diff > 0 ? '▲' : '▼';
+        return `<span style="color:${color};font-weight:600">${arrow} ${Math.abs(diff)}</span>`;
+      };
+      html += `
+        <div style="margin-top:12px;padding:12px;background:var(--bg-tertiary);border-radius:8px">
+          <strong style="font-size:13px">Latest vs Previous:</strong>
+          <span style="margin-left:12px;font-size:12px">Pages: ${d(cur.crawled, prev.crawled)}</span>
+          <span style="margin-left:12px;font-size:12px">2xx: ${d(cur.status2xx, prev.status2xx)}</span>
+          <span style="margin-left:12px;font-size:12px">3xx: ${d(cur.status3xx, prev.status3xx, true)}</span>
+          <span style="margin-left:12px;font-size:12px">4xx: ${d(cur.status4xx, prev.status4xx, true)}</span>
+          <span style="margin-left:12px;font-size:12px">5xx: ${d(cur.status5xx, prev.status5xx, true)}</span>
+          <span style="margin-left:12px;font-size:12px">Errors: ${d(cur.errors, prev.errors, true)}</span>
+        </div>`;
+    }
+
+    detail.innerHTML = html;
+    detail.dataset.loaded = '1';
+  } catch (e) {
+    detail.innerHTML = '<p style="color:var(--danger)">Error loading history.</p>';
+  }
+};
 
 function statCard(label, value, colorClass) {
   return `<div class="stat-card"><div class="label">${label}</div><div class="value ${colorClass}">${value}</div></div>`;

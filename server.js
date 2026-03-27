@@ -495,6 +495,12 @@ app.delete('/api/crawls/:id', (req, res) => {
 });
 
 // Get crawl history for a domain (for evolution comparison)
+// List all saved projects (grouped by domain)
+app.get('/api/projects', (req, res) => {
+  const projects = db.getSavedProjects();
+  res.json(projects);
+});
+
 app.get('/api/projects/:domain/history', (req, res) => {
   const crawls = db.getCrawlsByDomain(req.params.domain, 20);
   res.json(crawls.map(c => ({ ...c, stats: JSON.parse(c.stats || '{}') })));
