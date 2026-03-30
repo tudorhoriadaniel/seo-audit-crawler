@@ -212,13 +212,6 @@ app.post('/api/crawls', (req, res) => {
   };
 
   crawler.onComplete = (summary) => {
-    // Store robotsTxt and sitemapData in stats for later retrieval
-    const statsWithExtra = {
-      ...summary.stats,
-      robotsTxt: summary.robotsTxt || null,
-      sitemapData: summary.sitemapData || null
-    };
-    db.updateCrawlStatus(crawlId, 'completed', statsWithExtra);
     activeCrawls.delete(crawlId);
 
     // Run analysis
@@ -231,7 +224,35 @@ app.post('/api/crawls', (req, res) => {
     });
     const analysis = analyzer.analyze();
 
-    io.to(crawlId).emit('complete', { stats: summary.stats, analysis });
+    // Extract issue metrics from analysis to store alongside crawler stats
+    const mt = analysis.metaTitlesReport || {};
+    const md = analysis.metaDescriptionsReport || {};
+    const hr = analysis.hreflangReport || {};
+    const cr = analysis.canonicalReport || {};
+    const ia = analysis.imageAnalysis || {};
+    const issues = analysis.issues || [];
+    const issueMetrics = {
+      missingTitles: mt.missing?.length || 0,
+      duplicateTitles: mt.duplicates?.length || 0,
+      missingDescriptions: md.missing?.length || 0,
+      duplicateDescriptions: md.duplicates?.length || 0,
+      hreflangIssues: hr.totalReturnLinkIssues || 0,
+      missingCanonicals: cr.missing || 0,
+      imagesWithAltIssues: ia.uniqueIssueImages || 0,
+      criticalIssues: issues.filter(i => i.severity === 'critical').length,
+      warnings: issues.filter(i => i.severity === 'warning').length
+    };
+
+    // Store robotsTxt, sitemapData, and issue metrics in stats for history comparison
+    const statsWithExtra = {
+      ...summary.stats,
+      ...issueMetrics,
+      robotsTxt: summary.robotsTxt || null,
+      sitemapData: summary.sitemapData || null
+    };
+    db.updateCrawlStatus(crawlId, 'completed', statsWithExtra);
+
+    io.to(crawlId).emit('complete', { stats: { ...summary.stats, ...issueMetrics }, analysis });
   };
 
   activeCrawls.set(crawlId, crawler);

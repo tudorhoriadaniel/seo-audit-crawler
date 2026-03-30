@@ -508,24 +508,49 @@ window.expandProject = async function(domain, card) {
     if (crawls.length >= 2) {
       const cur = crawls[0].stats ? (typeof crawls[0].stats === 'string' ? JSON.parse(crawls[0].stats) : crawls[0].stats) : {};
       const prev = crawls[1].stats ? (typeof crawls[1].stats === 'string' ? JSON.parse(crawls[1].stats) : crawls[1].stats) : {};
-      const d = (c, p, inv = false) => {
-        const diff = (c || 0) - (p || 0);
-        if (diff === 0) return '<span style="color:var(--text-muted)">—</span>';
-        const good = inv ? diff < 0 : diff > 0;
-        const color = good ? 'var(--success)' : 'var(--danger)';
-        const arrow = diff > 0 ? '▲' : '▼';
-        return `<span style="color:${color};font-weight:600">${arrow} ${Math.abs(diff)}</span>`;
+      const diffCell = (c, p, inv = false) => {
+        const cv = c || 0, pv = p || 0, diff = cv - pv;
+        const badge = diff === 0
+          ? `<span style="color:var(--text-muted);font-size:11px">—</span>`
+          : (() => { const good = inv ? diff < 0 : diff > 0; return `<span style="color:var(--${good?'success':'danger'});font-size:11px;font-weight:700">${diff > 0 ? '▲' : '▼'} ${Math.abs(diff)}</span>`; })();
+        return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:13px;font-weight:600">${cv}</span>${badge}</div>`;
       };
-      html += `
-        <div style="margin-top:12px;padding:12px;background:var(--bg-tertiary);border-radius:8px">
-          <strong style="font-size:13px">Latest vs Previous:</strong>
-          <span style="margin-left:12px;font-size:12px">Pages: ${d(cur.crawled, prev.crawled)}</span>
-          <span style="margin-left:12px;font-size:12px">2xx: ${d(cur.status2xx, prev.status2xx)}</span>
-          <span style="margin-left:12px;font-size:12px">3xx: ${d(cur.status3xx, prev.status3xx, true)}</span>
-          <span style="margin-left:12px;font-size:12px">4xx: ${d(cur.status4xx, prev.status4xx, true)}</span>
-          <span style="margin-left:12px;font-size:12px">5xx: ${d(cur.status5xx, prev.status5xx, true)}</span>
-          <span style="margin-left:12px;font-size:12px">Errors: ${d(cur.errors, prev.errors, true)}</span>
-        </div>`;
+      const noData = (label) => `<div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:12px;color:var(--text-muted)">—</span><span style="font-size:10px;color:var(--text-muted)">no data</span></div>`;
+      const hasIssueData = cur.missingTitles !== undefined || cur.missingDescriptions !== undefined;
+      html += `<div style="margin-top:16px;background:var(--bg-tertiary);border-radius:10px;padding:16px">
+        <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px">Latest vs Previous Crawl</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px">
+          ${[
+            ['Pages', cur.crawled, prev.crawled, false],
+            ['2xx', cur.status2xx, prev.status2xx, false],
+            ['3xx', cur.status3xx, prev.status3xx, true],
+            ['4xx', cur.status4xx, prev.status4xx, true],
+            ['5xx', cur.status5xx, prev.status5xx, true],
+            ['Errors', cur.errors, prev.errors, true],
+          ].map(([label, c, p, inv]) => `<div style="background:var(--bg-card);border-radius:8px;padding:10px 8px;text-align:center">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">${label}</div>
+            ${diffCell(c, p, inv)}
+          </div>`).join('')}
+        </div>
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 10px">SEO Issues</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px">
+          ${[
+            ['Missing Titles', cur.missingTitles, prev.missingTitles, true],
+            ['Duplicate Titles', cur.duplicateTitles, prev.duplicateTitles, true],
+            ['Missing Desc.', cur.missingDescriptions, prev.missingDescriptions, true],
+            ['Duplicate Desc.', cur.duplicateDescriptions, prev.duplicateDescriptions, true],
+            ['Hreflang Issues', cur.hreflangIssues, prev.hreflangIssues, true],
+            ['Missing Canonicals', cur.missingCanonicals, prev.missingCanonicals, true],
+            ['Image Alt Issues', cur.imagesWithAltIssues, prev.imagesWithAltIssues, true],
+            ['Critical Issues', cur.criticalIssues, prev.criticalIssues, true],
+            ['Warnings', cur.warnings, prev.warnings, true],
+          ].map(([label, c, p, inv]) => `<div style="background:var(--bg-card);border-radius:8px;padding:10px 8px;text-align:center">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">${label}</div>
+            ${c === undefined && p === undefined ? noData(label) : diffCell(c, p, inv)}
+          </div>`).join('')}
+        </div>
+        ${!hasIssueData ? '<p style="font-size:11px;color:var(--text-muted);margin-top:8px;text-align:center">SEO issue metrics will appear after the next crawl completes.</p>' : ''}
+      </div>`;
     }
 
     detail.innerHTML = html;
