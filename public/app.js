@@ -287,7 +287,7 @@ function renderDashboard(stats, analysis) {
       ${statCard('In Sitemap', o.pagesInSitemap, 'success')}
       ${statCard('Not In Sitemap', o.pagesNotInSitemap, o.pagesNotInSitemap > 0 ? 'warning' : 'success')}
       ${statCard('Structured Data', o.pagesWithStructuredData, 'info')}
-      ${statCard('Images Missing Alt', o.imagesWithoutAlt, o.imagesWithoutAlt > 0 ? 'warning' : 'success')}
+      ${(() => { const ia = analysis.imageAnalysis || {}; const total = (ia.missingAlt || 0) + (ia.emptyAlt || 0); return statCard('Images Alt Issues', total, total > 0 ? 'warning' : 'success'); })()}
       ${statCard('Blocked by Robots', o.blockedByRobots, o.blockedByRobots > 0 ? 'warning' : '')}
       ${statCard('Connection Errors', o.errors, o.errors > 0 ? 'danger' : 'success')}
     </div>
