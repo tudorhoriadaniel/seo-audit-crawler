@@ -588,10 +588,14 @@ function sortPages(col) {
 
 // Build duplicate lookup maps for filtering
 let _titleDups = new Set(), _descDups = new Set();
+function isNoindexPage(p) {
+  return (p.meta_robots || '').toLowerCase().includes('noindex');
+}
 function buildDupMaps(pages) {
   const tc = {}, dc = {};
   for (const p of pages) {
     if (p.status_code >= 300) continue;
+    if (isNoindexPage(p)) continue;
     if (p.title) { const k = p.title.trim().toLowerCase(); tc[k] = (tc[k]||0)+1; }
     if (p.meta_description) { const k = p.meta_description.trim().toLowerCase(); dc[k] = (dc[k]||0)+1; }
   }
@@ -621,19 +625,19 @@ function renderPagesTable(pages) {
   else if (sf === '5xx') filtered = filtered.filter(p => p.status_code >= 500);
   else if (sf) filtered = filtered.filter(p => String(p.status_code) === sf);
 
-  // Title filter
-  if (tf === 'missing') filtered = filtered.filter(p => !p.title && p.status_code < 300);
-  else if (tf === 'short') filtered = filtered.filter(p => p.title && (p.title_length||0) < 30);
-  else if (tf === 'long') filtered = filtered.filter(p => p.title && (p.title_length||0) > 60);
-  else if (tf === 'optimal') filtered = filtered.filter(p => p.title && (p.title_length||0) >= 30 && (p.title_length||0) <= 60);
-  else if (tf === 'duplicate') filtered = filtered.filter(p => p.title && _titleDups.has(p.title.trim().toLowerCase()));
+  // Title filter (exclude noindex pages from all title issue filters)
+  if (tf === 'missing') filtered = filtered.filter(p => !p.title && p.status_code < 300 && !isNoindexPage(p));
+  else if (tf === 'short') filtered = filtered.filter(p => p.title && (p.title_length||0) < 30 && !isNoindexPage(p));
+  else if (tf === 'long') filtered = filtered.filter(p => p.title && (p.title_length||0) > 60 && !isNoindexPage(p));
+  else if (tf === 'optimal') filtered = filtered.filter(p => p.title && (p.title_length||0) >= 30 && (p.title_length||0) <= 60 && !isNoindexPage(p));
+  else if (tf === 'duplicate') filtered = filtered.filter(p => p.title && _titleDups.has(p.title.trim().toLowerCase()) && !isNoindexPage(p));
 
-  // Desc filter
-  if (df === 'missing') filtered = filtered.filter(p => !p.meta_description && p.status_code < 300);
-  else if (df === 'short') filtered = filtered.filter(p => p.meta_description && (p.meta_description_length||0) < 70);
-  else if (df === 'long') filtered = filtered.filter(p => p.meta_description && (p.meta_description_length||0) > 160);
-  else if (df === 'optimal') filtered = filtered.filter(p => p.meta_description && (p.meta_description_length||0) >= 70 && (p.meta_description_length||0) <= 160);
-  else if (df === 'duplicate') filtered = filtered.filter(p => p.meta_description && _descDups.has(p.meta_description.trim().toLowerCase()));
+  // Desc filter (exclude noindex pages from all description issue filters)
+  if (df === 'missing') filtered = filtered.filter(p => !p.meta_description && p.status_code < 300 && !isNoindexPage(p));
+  else if (df === 'short') filtered = filtered.filter(p => p.meta_description && (p.meta_description_length||0) < 70 && !isNoindexPage(p));
+  else if (df === 'long') filtered = filtered.filter(p => p.meta_description && (p.meta_description_length||0) > 160 && !isNoindexPage(p));
+  else if (df === 'optimal') filtered = filtered.filter(p => p.meta_description && (p.meta_description_length||0) >= 70 && (p.meta_description_length||0) <= 160 && !isNoindexPage(p));
+  else if (df === 'duplicate') filtered = filtered.filter(p => p.meta_description && _descDups.has(p.meta_description.trim().toLowerCase()) && !isNoindexPage(p));
 
   // Directives filter
   if (dirf === 'noindex') filtered = filtered.filter(p => (p.meta_robots||'').toLowerCase().includes('noindex'));
