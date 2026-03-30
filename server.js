@@ -346,14 +346,44 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       data = (analysis.issues || []).map(i => ({ URL: i.url, Severity: i.severity, Category: i.category, Issue: i.issue }));
       sheetName = 'Issues';
       break;
-    case 'canonicals':
-      data = mapped.filter(p => p.statusCode < 300).map(p => ({ URL: p.url, Canonical: p.canonical || '', 'Self-Referencing': p.canonicalIsSelf ? 'Yes' : 'No' }));
-      sheetName = 'Canonicals';
-      break;
-    case 'hreflang':
-      data = mapped.filter(p => p.hreflangs?.length > 0).map(p => ({ URL: p.url, Hreflangs: p.hreflangs.map(h => `${h.lang}: ${h.href || h.url}`).join(' | ') }));
-      sheetName = 'Hreflang';
-      break;
+    case 'canonicals': {
+      const cr = analysis.canonicalReport || {};
+      const addSheet = (wb, rows, name) => {
+        if (!rows.length) return;
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const cols = Object.keys(rows[0]).map(k => ({ wch: Math.min(100, Math.max(k.length, ...rows.slice(0,100).map(r => String(r[k]||'').length)) + 2) }));
+        ws['!cols'] = cols;
+        XLSX.utils.book_append_sheet(wb, ws, name);
+      };
+      const wb2 = XLSX.utils.book_new();
+      addSheet(wb2, (cr.missingPages || []).map(u => ({ URL: u, Issue: 'Missing Canonical' })), 'Missing Canonical');
+      addSheet(wb2, (cr.canonicalizedPages || []).map(p => ({ URL: p.url, 'Canonical URL': p.canonical, Type: 'Canonicalized to Other' })), 'Canonicalized to Other');
+      addSheet(wb2, (cr.selfReferencingPages || []).map(u => ({ URL: u, 'Canonical URL': u, Type: 'Self-Referencing' })), 'Self-Referencing');
+      if (!wb2.SheetNames.length) XLSX.utils.book_append_sheet(wb2, XLSX.utils.json_to_sheet([{ Note: 'No canonical issues found' }]), 'Canonicals');
+      const buf2 = XLSX.write(wb2, { type: 'buffer', bookType: 'xlsx' });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename=canonicals.xlsx');
+      return res.send(buf2);
+    }
+    case 'hreflang': {
+      const hr = analysis.hreflangReport || {};
+      const addSheet = (wb, rows, name) => {
+        if (!rows.length) return;
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const cols = Object.keys(rows[0]).map(k => ({ wch: Math.min(100, Math.max(k.length, ...rows.slice(0,100).map(r => String(r[k]||'').length)) + 2) }));
+        ws['!cols'] = cols;
+        XLSX.utils.book_append_sheet(wb, ws, name);
+      };
+      const wb2 = XLSX.utils.book_new();
+      addSheet(wb2, (hr.returnLinkIssues || []).map(i => ({ 'From URL': i.from, 'To URL': i.to, Language: i.lang, Issue: i.message })), 'Return Link Issues');
+      const pagesRows = mapped.filter(p => p.hreflangs?.length > 0).map(p => ({ URL: p.url, Hreflangs: p.hreflangs.map(h => `${h.lang}: ${h.href || h.url || ''}`).join(' | '), Count: p.hreflangs.length }));
+      addSheet(wb2, pagesRows, 'All Hreflang Tags');
+      if (!wb2.SheetNames.length) XLSX.utils.book_append_sheet(wb2, XLSX.utils.json_to_sheet([{ Note: 'No hreflang data found' }]), 'Hreflang');
+      const buf2 = XLSX.write(wb2, { type: 'buffer', bookType: 'xlsx' });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename=hreflang.xlsx');
+      return res.send(buf2);
+    }
     case 'hreflang-canonical':
       data = (analysis.hreflangCanonicalConflicts?.conflicts || []).map(c => ({ URL: c.url, Canonical: c.canonical, Conflicts: (c.conflicts || []).map(cc => `${cc.type}: ${cc.message}`).join(' | ') }));
       sheetName = 'Hreflang vs Canonical';
@@ -366,17 +396,53 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       data = mapped.map(p => ({ URL: p.url, Status: p.statusCode, 'Final URL': p.finalUrl || '' }));
       sheetName = 'Status Codes';
       break;
-    case 'metatitles':
-      data = mapped.filter(p => p.statusCode < 300).map(p => ({ URL: p.url, Title: p.title || '', Length: p.titleLength || 0 }));
-      sheetName = 'Meta Titles';
-      break;
-    case 'metadescriptions':
-      data = mapped.filter(p => p.statusCode < 300).map(p => ({ URL: p.url, 'Meta Description': p.metaDescription || '', Length: p.metaDescriptionLength || 0 }));
-      sheetName = 'Meta Descriptions';
-      break;
+    case 'metatitles': {
+      const mt = analysis.metaTitlesReport || {};
+      const addSheet = (wb, rows, name) => {
+        if (!rows.length) return;
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const cols = Object.keys(rows[0]).map(k => ({ wch: Math.min(100, Math.max(k.length, ...rows.slice(0,100).map(r => String(r[k]||'').length)) + 2) }));
+        ws['!cols'] = cols;
+        XLSX.utils.book_append_sheet(wb, ws, name);
+      };
+      const wb2 = XLSX.utils.book_new();
+      addSheet(wb2, (mt.missing || []).map(p => ({ URL: p.url, Issue: 'Missing Title' })), 'Missing Title');
+      addSheet(wb2, (mt.tooShort || []).map(p => ({ URL: p.url, Title: p.title, Length: p.length, Issue: 'Too Short (<30 chars)' })), 'Too Short');
+      addSheet(wb2, (mt.tooLong || []).map(p => ({ URL: p.url, Title: p.title, Length: p.length, Issue: 'Too Long (>60 chars)' })), 'Too Long');
+      const dupRows = [];
+      for (const d of (mt.duplicates || [])) for (const u of d.urls) dupRows.push({ URL: u, Title: d.title, 'Group Count': d.count });
+      addSheet(wb2, dupRows, 'Duplicate Titles');
+      if (!wb2.SheetNames.length) XLSX.utils.book_append_sheet(wb2, XLSX.utils.json_to_sheet([{ Note: 'No meta title issues found' }]), 'Meta Titles');
+      const buf2 = XLSX.write(wb2, { type: 'buffer', bookType: 'xlsx' });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename=meta-titles-issues.xlsx');
+      return res.send(buf2);
+    }
+    case 'metadescriptions': {
+      const md = analysis.metaDescriptionsReport || {};
+      const addSheet = (wb, rows, name) => {
+        if (!rows.length) return;
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const cols = Object.keys(rows[0]).map(k => ({ wch: Math.min(100, Math.max(k.length, ...rows.slice(0,100).map(r => String(r[k]||'').length)) + 2) }));
+        ws['!cols'] = cols;
+        XLSX.utils.book_append_sheet(wb, ws, name);
+      };
+      const wb2 = XLSX.utils.book_new();
+      addSheet(wb2, (md.missing || []).map(p => ({ URL: p.url, Issue: 'Missing Meta Description' })), 'Missing Description');
+      addSheet(wb2, (md.tooShort || []).map(p => ({ URL: p.url, 'Meta Description': p.metaDescription, Length: p.length, Issue: 'Too Short (<70 chars)' })), 'Too Short');
+      addSheet(wb2, (md.tooLong || []).map(p => ({ URL: p.url, 'Meta Description': p.metaDescription, Length: p.length, Issue: 'Too Long (>160 chars)' })), 'Too Long');
+      const dupRows = [];
+      for (const d of (md.duplicates || [])) for (const u of d.urls) dupRows.push({ URL: u, 'Meta Description': d.description, 'Group Count': d.count });
+      addSheet(wb2, dupRows, 'Duplicate Descriptions');
+      if (!wb2.SheetNames.length) XLSX.utils.book_append_sheet(wb2, XLSX.utils.json_to_sheet([{ Note: 'No meta description issues found' }]), 'Meta Descriptions');
+      const buf2 = XLSX.write(wb2, { type: 'buffer', bookType: 'xlsx' });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename=meta-descriptions-issues.xlsx');
+      return res.send(buf2);
+    }
     case 'images':
-      data = (analysis.imageAnalysis?.issueImages || []).map(i => ({ 'Image URL': i.src, 'Found On': i.pageUrl, Issue: i.issue, Occurrences: i.occurrences }));
-      sheetName = 'Image Issues';
+      data = (analysis.imageAnalysis?.issueImages || []).map(i => ({ 'Image URL': i.src || '(no src)', 'Found On': i.pageUrl, Issue: i.issue, Occurrences: i.occurrences }));
+      sheetName = 'Image Alt Issues';
       break;
     case 'anchors':
       data = (analysis.anchorsReport?.emptyAnchors || []).map(a => ({ 'Origin Page': a.from, 'Destination URL': a.to, Nofollow: a.isNofollow ? 'Yes' : 'No' }));

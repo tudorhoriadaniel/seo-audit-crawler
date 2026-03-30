@@ -1979,8 +1979,15 @@ function renderSummary(analysis) {
 
 function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function truncate(s, len) { s = s || ''; return s.length > len ? s.substring(0, len) + '...' : s; }
+const _xlsxExportSections = new Set(['metatitles', 'metadescriptions', 'canonicals', 'hreflang', 'images']);
 function exportBtn(section) {
-  return ''; // Export buttons removed
+  if (!_xlsxExportSections.has(section)) return '';
+  return `<div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+    <button onclick="exportSection('${section}')" style="display:inline-flex;align-items:center;gap:6px;background:#1d6f42;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s" onmouseover="this.style.background='#238d53'" onmouseout="this.style.background='#1d6f42'">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 17 15 14"/></svg>
+      Export to Excel
+    </button>
+  </div>`;
 }
 function exportSection(section) {
   if (!currentCrawlId) return;
