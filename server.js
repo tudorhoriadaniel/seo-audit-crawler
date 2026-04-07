@@ -405,10 +405,16 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       res.setHeader('Content-Disposition', 'attachment; filename=hreflang.xlsx');
       return res.send(buf2);
     }
-    case 'hreflang-canonical':
-      data = (analysis.hreflangCanonicalConflicts?.conflicts || []).map(c => ({ URL: c.url, Canonical: c.canonical, Conflicts: (c.conflicts || []).map(cc => `${cc.type}: ${cc.message}`).join(' | ') }));
+    case 'hreflang-canonical': {
+      data = [];
+      for (const page of (analysis.hreflangCanonicalConflicts?.pages || [])) {
+        for (const c of (page.conflicts || [])) {
+          data.push({ URL: page.url, Canonical: page.canonical || '', 'Conflict Type': c.type, Severity: c.severity, Message: c.message });
+        }
+      }
       sheetName = 'Hreflang vs Canonical';
       break;
+    }
     case 'redirects':
       data = (analysis.redirectChains?.chains || []).map(r => ({ 'Original URL': r.originalUrl, 'Final URL': r.finalUrl, Hops: r.hops, Chain: (r.chain || []).map(c => `${c.statusCode}: ${c.url}`).join(' → ') }));
       sheetName = 'Redirects';

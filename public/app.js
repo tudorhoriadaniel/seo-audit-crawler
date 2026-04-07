@@ -1094,9 +1094,16 @@ function _renderCan() {
 }
 
 // ── Hreflang vs Canonical Conflicts ──
+let _conflictsData = null, _conflictsFilter = 'all';
 function renderConflicts(analysis) {
-  const r = analysis.hreflangCanonicalConflicts;
-  if (r.totalConflicts === 0) {
+  _conflictsData = analysis.hreflangCanonicalConflicts;
+  _conflictsFilter = 'all';
+  _renderConflicts();
+}
+function filterConflicts(f) { _conflictsFilter = (_conflictsFilter === f) ? 'all' : f; _renderConflicts(); }
+function _renderConflicts() {
+  const r = _conflictsData, f = _conflictsFilter;
+  if (!r || r.totalConflicts === 0) {
     $('#conflictsContent').innerHTML = `<div class="section-card" style="text-align:center;padding:40px">
       <div style="font-size:48px;margin-bottom:16px">✅</div>
       <h3>No Hreflang/Canonical Conflicts Found</h3>
@@ -1105,24 +1112,56 @@ function renderConflicts(analysis) {
     return;
   }
 
+  // Count conflicts by type
+  const typeCounts = {};
+  for (const page of r.pages) {
+    for (const c of page.conflicts) {
+      typeCounts[c.type] = (typeCounts[c.type] || 0) + 1;
+    }
+  }
+
+  const cb = (key, label, count, color) => {
+    const active = f === key ? 'border:2px solid #fff;' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
+    return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterConflicts('${key}')">${statCardInner(label, count)}</div>`;
+  };
+
+  const typeLabels = {
+    'missing_self_referencing_hreflang': 'Missing Self-Ref Hreflang',
+    'hreflang_self_points_to_different_url': 'Self Points to Different URL',
+    'hreflang_all_same_params': 'All Same Params',
+    'canonical_differs_from_page': 'Canonical Differs from Page',
+    'hreflang_page_canonical_all_differ': 'Three-Way Mismatch',
+    'hreflang_self_vs_canonical_mismatch': 'Self vs Canonical Mismatch',
+    'canonical_not_in_hreflangs': 'Canonical Not in Hreflangs',
+    'hreflang_inconsistent_params': 'Inconsistent Params',
+    'hreflang_shared_params': 'Shared Params'
+  };
+
   let html = `<div class="stats-grid">
-    ${statCard('Pages with Conflicts', r.totalPagesWithConflicts, 'danger')}
-    ${statCard('Total Conflicts', r.totalConflicts, 'danger')}
+    ${cb('all', 'All Conflicts', r.totalConflicts, 'danger')}
+    ${Object.entries(typeCounts).sort((a,b) => b[1] - a[1]).map(([type, count]) => {
+      const isWarning = type === 'missing_self_referencing_hreflang' || type === 'hreflang_inconsistent_params' || type === 'hreflang_shared_params';
+      return cb(type, typeLabels[type] || type, count, isWarning ? 'warning' : 'danger');
+    }).join('')}
   </div>
   <div class="section-card" style="border-left:4px solid var(--danger)">
     <h3>Why This Matters</h3>
     <p style="color:var(--text-muted);font-size:13px">When canonical tags and hreflang tags conflict, Google typically follows the canonical signal and may ignore hreflang annotations. This can cause the wrong language version to appear in search results for different regions.</p>
   </div>`;
 
-  for (const page of r.pages) {
-    const hasCritical = page.conflicts.some(c => c.severity === 'critical');
+  // Filter pages based on selected conflict type
+  const filteredPages = f === 'all' ? r.pages : r.pages.filter(p => p.conflicts.some(c => c.type === f));
+
+  for (const page of filteredPages) {
+    const visibleConflicts = f === 'all' ? page.conflicts : page.conflicts.filter(c => c.type === f);
+    const hasCritical = visibleConflicts.some(c => c.severity === 'critical');
     html += `<div class="conflict-card ${hasCritical ? '' : 'warning'}">
       <div class="conflict-url">${esc(page.url)}</div>
       <div style="margin-bottom:12px;font-size:13px;color:var(--text-muted)">
         Canonical: <strong>${esc(page.canonical || 'None')}</strong> |
         Hreflangs: ${(page.hreflangs || []).map(h => `<span class="badge badge-info">${esc(h.lang)}</span>`).join(' ')}
       </div>
-      ${page.conflicts.map(c => `<div class="conflict-item">
+      ${visibleConflicts.map(c => `<div class="conflict-item">
         <div class="conflict-type" style="color:var(--${c.severity === 'critical' ? 'danger' : c.severity === 'warning' ? 'warning' : 'info'})">${severityBadge(c.severity)} ${esc(c.type)}</div>
         <div style="margin-top:4px">${esc(c.message)}</div>
       </div>`).join('')}
@@ -2004,7 +2043,7 @@ function renderSummary(analysis) {
 
 function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function truncate(s, len) { s = s || ''; return s.length > len ? s.substring(0, len) + '...' : s; }
-const _xlsxExportSections = new Set(['metatitles', 'metadescriptions', 'canonicals', 'hreflang', 'images']);
+const _xlsxExportSections = new Set(['metatitles', 'metadescriptions', 'canonicals', 'hreflang', 'hreflang-canonical', 'images']);
 function exportBtn(section) {
   if (!_xlsxExportSections.has(section)) return '';
   return `<div style="display:flex;justify-content:flex-end;margin-bottom:12px">
