@@ -136,7 +136,7 @@ app.get('/api/crawls', (req, res) => {
 app.get('/api/crawls/:id/export-project', (req, res) => {
   const crawl = db.getCrawl(req.params.id);
   if (!crawl) return res.status(404).json({ error: 'Crawl not found' });
-  const pages = db.getPages(req.params.id);
+  const pages = db.getCrawlPages(req.params.id);
   const mapped = mapPagesForAnalysis(pages);
   const analyzer = new Analyzer(mapped, { robotsTxt: crawl.robots_txt, sitemapData: crawl.sitemap_data ? JSON.parse(crawl.sitemap_data) : null });
   const analysis = analyzer.analyze();
@@ -352,7 +352,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
   try {
   const crawl = db.getCrawl(req.params.id);
   if (!crawl) return res.status(404).json({ error: 'Crawl not found' });
-  const pages = db.getPages(req.params.id);
+  const pages = db.getCrawlPages(req.params.id);
   const mapped = mapPagesForAnalysis(pages);
   const Analyzer = require('./lib/analyzer');
   const analysis = new Analyzer(mapped).analyze();
