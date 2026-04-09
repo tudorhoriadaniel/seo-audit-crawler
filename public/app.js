@@ -1251,16 +1251,31 @@ function renderContent(analysis) {
 }
 
 // ── Images ──
+let _imgData = null, _imgFilter = 'all';
 function renderImages(analysis) {
-  const r = analysis.imageAnalysis;
+  _imgData = analysis.imageAnalysis;
+  _imgFilter = 'all';
+  _renderImagesUI();
+}
+function filterImg(f) { _imgFilter = (_imgFilter === f) ? 'all' : f; _renderImagesUI(); }
+function _renderImagesUI() {
+  const r = _imgData;
+  const f = _imgFilter;
+  const cb = (key, label, count, color) => {
+    const active = f === key ? 'border:2px solid #fff;' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
+    return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterImg('${key}')">${statCardInner(label, count)}</div>`;
+  };
   let html = `<div class="stats-grid">
-    ${statCard('Total Images', r.totalImages, '')}
-    ${statCard('Missing Alt Attr', r.missingAlt, r.missingAlt > 0 ? 'danger' : 'success')}
-    ${statCard('Empty Alt Text', r.emptyAlt, r.emptyAlt > 0 ? 'warning' : 'success')}
-    ${statCard('Unique Images with Issues', r.uniqueIssueImages || 0, r.uniqueIssueImages > 0 ? 'danger' : 'success')}
+    ${cb('all', 'Total Images', r.totalImages, '')}
+    ${cb('missingalt', 'Missing Alt Attr', r.missingAlt, r.missingAlt > 0 ? 'danger' : 'success')}
+    ${cb('emptyalt', 'Empty Alt Text', r.emptyAlt, r.emptyAlt > 0 ? 'warning' : 'success')}
+    ${cb('unique', 'Unique Images with Issues', r.uniqueIssueImages || 0, r.uniqueIssueImages > 0 ? 'danger' : 'success')}
   </div>`;
 
-  const issues = r.issueImages || [];
+  let issues = r.issueImages || [];
+  if (f === 'missingalt') issues = issues.filter(i => i.issue === 'Missing alt attribute');
+  else if (f === 'emptyalt') issues = issues.filter(i => i.issue !== 'Missing alt attribute');
+
   if (issues.length > 0) {
     html += `<div class="section-card"><h3>Images with Alt Issues (${issues.length} unique images)</h3>
       <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Each image URL is shown once with one example origin page. "Occurrences" shows how many times this image appears across the site.</p>
@@ -1274,7 +1289,7 @@ function renderImages(analysis) {
   } else {
     html += `<div class="section-card" style="text-align:center;padding:40px">
       <div style="font-size:48px;margin-bottom:16px">✅</div>
-      <h3>All Images Have Alt Text</h3>
+      <h3>${f === 'all' ? 'All Images Have Alt Text' : 'No images match this filter'}</h3>
     </div>`;
   }
 
@@ -2060,6 +2075,7 @@ function exportSection(section) {
   if (section === 'statuscodes' && _statusCodesActiveFilter !== 'all') filterParam = '?filter=' + _statusCodesActiveFilter;
   else if (section === 'metatitles' && _mtFilter !== 'all') filterParam = '?filter=' + _mtFilter;
   else if (section === 'metadescriptions' && _mdFilter !== 'all') filterParam = '?filter=' + _mdFilter;
+  else if (section === 'images' && _imgFilter !== 'all') filterParam = '?filter=' + _imgFilter;
   window.open(`/api/crawls/${currentCrawlId}/export-section/${section}${filterParam}`, '_blank');
 }
 function exportFilteredPages() {

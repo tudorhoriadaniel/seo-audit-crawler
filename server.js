@@ -363,10 +363,41 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
   let sheetName = section;
 
   switch (section) {
-    case 'issues':
-      data = (analysis.issues || []).map(i => ({ URL: i.url, Severity: i.severity, Category: i.category, Issue: i.issue }));
-      sheetName = 'Issues';
-      break;
+    case 'issues': {
+      const allIssues = analysis.issues || [];
+      if (allIssues.length === 0) {
+        data = [{ Note: 'No issues found' }];
+        sheetName = 'Issues';
+        break;
+      }
+      // Group issues by category into separate sheets
+      const byCategory = {};
+      for (const i of allIssues) {
+        const cat = i.category || 'Other';
+        if (!byCategory[cat]) byCategory[cat] = [];
+        byCategory[cat].push({ URL: i.url, Issue: i.message || i.issue || '', Severity: i.severity, Type: i.type || '' });
+      }
+      const addSheet = (wb, rows, name) => {
+        if (!rows.length) return;
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const cols = Object.keys(rows[0]).map(k => ({ wch: Math.min(100, Math.max(k.length, ...rows.slice(0,100).map(r => String(r[k]||'').length)) + 2) }));
+        ws['!cols'] = cols;
+        XLSX.utils.book_append_sheet(wb, ws, name);
+      };
+      const wb2 = XLSX.utils.book_new();
+      // Summary sheet first
+      const summaryRows = Object.keys(byCategory).sort().map(cat => ({ Category: cat, 'Issue Count': byCategory[cat].length, 'Critical': byCategory[cat].filter(i => i.Severity === 'critical').length, 'Warning': byCategory[cat].filter(i => i.Severity === 'warning').length, 'Info': byCategory[cat].filter(i => i.Severity === 'info').length }));
+      addSheet(wb2, summaryRows, 'Summary');
+      // One sheet per category
+      for (const cat of Object.keys(byCategory).sort()) {
+        const sn = cat.replace(/[\\/*?\[\]:]/g, '').substring(0, 31) || 'Other';
+        addSheet(wb2, byCategory[cat], sn);
+      }
+      const buf2 = XLSX.write(wb2, { type: 'buffer', bookType: 'xlsx' });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename=issues-by-category.xlsx');
+      return res.send(buf2);
+    }
     case 'canonicals': {
       const cr = analysis.canonicalReport || {};
       const addSheet = (wb, rows, name) => {
@@ -481,10 +512,15 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       res.setHeader('Content-Disposition', 'attachment; filename=meta-descriptions-issues.xlsx');
       return res.send(buf2);
     }
-    case 'images':
-      data = (analysis.imageAnalysis?.issueImages || []).map(i => ({ 'Image URL': i.src || '(no src)', 'Found On': i.pageUrl, Issue: i.issue, Occurrences: i.occurrences }));
-      sheetName = 'Image Alt Issues';
+    case 'images': {
+      let imgIssues = analysis.imageAnalysis?.issueImages || [];
+      const imgFilter = req.query.filter || 'all';
+      if (imgFilter === 'missingalt') imgIssues = imgIssues.filter(i => i.issue === 'Missing alt attribute');
+      else if (imgFilter === 'emptyalt') imgIssues = imgIssues.filter(i => i.issue !== 'Missing alt attribute');
+      data = imgIssues.map(i => ({ 'Image URL': i.src || '(no src)', 'Found On': i.pageUrl, Issue: i.issue, Occurrences: i.occurrences }));
+      sheetName = imgFilter === 'all' ? 'Image Alt Issues' : imgFilter === 'missingalt' ? 'Missing Alt Attr' : 'Empty Alt Text';
       break;
+    }
     case 'anchors':
       data = (analysis.anchorsReport?.emptyAnchors || []).map(a => ({ 'Origin Page': a.from, 'Destination URL': a.to, Nofollow: a.isNofollow ? 'Yes' : 'No' }));
       sheetName = 'Empty Anchors';
