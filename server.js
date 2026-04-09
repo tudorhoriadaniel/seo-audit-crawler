@@ -564,22 +564,94 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       const sc = analysis.statusCodesReport || {};
       const mt = analysis.metaTitlesReport || {};
       const md = analysis.metaDescriptionsReport || {};
-      data = [
+      const img = analysis.imageAnalysis || {};
+      const hdg = analysis.headingsReport || {};
+      const can = analysis.canonicalReport || {};
+      const hrf = analysis.hreflangReport || {};
+      const cnt = analysis.contentAnalysis || {};
+      const addSheet = (wb, rows, name) => {
+        if (!rows || !rows.length) return;
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const cols = Object.keys(rows[0]).map(k => ({ wch: Math.min(120, Math.max(k.length, ...rows.slice(0,100).map(r => String(r[k]||'').length)) + 2) }));
+        ws['!cols'] = cols;
+        XLSX.utils.book_append_sheet(wb, ws, name.substring(0, 31));
+      };
+      const wb2 = XLSX.utils.book_new();
+
+      // Summary overview sheet
+      addSheet(wb2, [
         { Category: 'Total Pages', Value: sc.total || 0 },
         { Category: '2xx Pages', Value: sc.groups?.['2xx']?.urls?.length || 0 },
         { Category: '3xx Redirects', Value: sc.groups?.['3xx']?.urls?.length || 0 },
         { Category: '4xx Errors', Value: sc.groups?.['4xx']?.urls?.length || 0 },
         { Category: '5xx Errors', Value: sc.groups?.['5xx']?.urls?.length || 0 },
         { Category: 'Missing Titles', Value: mt.missing?.length || 0 },
+        { Category: 'Too Short Titles (<30)', Value: mt.tooShort?.length || 0 },
+        { Category: 'Too Long Titles (>60)', Value: mt.tooLong?.length || 0 },
         { Category: 'Duplicate Titles', Value: mt.duplicates?.length || 0 },
         { Category: 'Missing Descriptions', Value: md.missing?.length || 0 },
+        { Category: 'Too Short Descriptions (<70)', Value: md.tooShort?.length || 0 },
+        { Category: 'Too Long Descriptions (>160)', Value: md.tooLong?.length || 0 },
         { Category: 'Duplicate Descriptions', Value: md.duplicates?.length || 0 },
-        { Category: 'Images Missing Alt', Value: analysis.imageAnalysis?.missingAlt || 0 },
+        { Category: 'Missing H1', Value: hdg.missingH1?.length || 0 },
+        { Category: 'Multiple H1s', Value: hdg.multipleH1?.length || 0 },
+        { Category: 'Missing Canonical', Value: can.missing || 0 },
+        { Category: 'Images Missing Alt', Value: img.missingAlt || 0 },
+        { Category: 'Thin Content (<300 words)', Value: (cnt.thinPages || []).length },
         { Category: 'Critical Issues', Value: (analysis.issues || []).filter(i => i.severity === 'critical').length },
         { Category: 'Warnings', Value: (analysis.issues || []).filter(i => i.severity === 'warning').length },
-      ];
-      sheetName = 'Summary';
-      break;
+      ], 'Summary');
+
+      // 4xx Errors
+      if (sc.groups?.['4xx']?.urls?.length > 0) addSheet(wb2, sc.groups['4xx'].urls.map(u => ({ URL: u.url, Status: u.statusCode })), '4xx Errors');
+      // 3xx Redirects
+      if (sc.groups?.['3xx']?.urls?.length > 0) addSheet(wb2, sc.groups['3xx'].urls.map(u => ({ URL: u.url, Status: u.statusCode, 'Redirects To': u.finalUrl || '' })), '3xx Redirects');
+      // Missing Titles
+      if (mt.missing?.length > 0) addSheet(wb2, mt.missing.map(p => ({ URL: p.url })), 'Missing Titles');
+      // Too Short Titles
+      if (mt.tooShort?.length > 0) addSheet(wb2, mt.tooShort.map(p => ({ URL: p.url, Title: p.title, Length: p.length })), 'Short Titles');
+      // Too Long Titles
+      if (mt.tooLong?.length > 0) addSheet(wb2, mt.tooLong.map(p => ({ URL: p.url, Title: p.title, Length: p.length })), 'Long Titles');
+      // Duplicate Titles
+      if (mt.duplicates?.length > 0) {
+        const dupRows = [];
+        for (const d of mt.duplicates) for (const u of d.urls) dupRows.push({ URL: u, Title: d.title, 'Group Count': d.count });
+        addSheet(wb2, dupRows, 'Duplicate Titles');
+      }
+      // Missing Descriptions
+      if (md.missing?.length > 0) addSheet(wb2, md.missing.map(p => ({ URL: p.url })), 'Missing Descriptions');
+      // Too Short Descriptions
+      if (md.tooShort?.length > 0) addSheet(wb2, md.tooShort.map(p => ({ URL: p.url, 'Meta Description': p.metaDescription, Length: p.length })), 'Short Descriptions');
+      // Too Long Descriptions
+      if (md.tooLong?.length > 0) addSheet(wb2, md.tooLong.map(p => ({ URL: p.url, 'Meta Description': p.metaDescription, Length: p.length })), 'Long Descriptions');
+      // Duplicate Descriptions
+      if (md.duplicates?.length > 0) {
+        const dupRows = [];
+        for (const d of md.duplicates) for (const u of d.urls) dupRows.push({ URL: u, 'Meta Description': d.description, 'Group Count': d.count });
+        addSheet(wb2, dupRows, 'Duplicate Descriptions');
+      }
+      // Missing H1
+      if (hdg.missingH1?.length > 0) addSheet(wb2, hdg.missingH1.map(p => ({ URL: p.url })), 'Missing H1');
+      // Multiple H1s
+      if (hdg.multipleH1?.length > 0) addSheet(wb2, hdg.multipleH1.map(p => ({ URL: p.url, 'H1 Count': p.h1Count, 'H1 Tags': (p.h1Tags || []).join(' | ') })), 'Multiple H1s');
+      // Missing Canonical
+      if (can.missingPages?.length > 0) addSheet(wb2, can.missingPages.map(u => ({ URL: u })), 'Missing Canonical');
+      // Canonicalized to Other
+      if (can.canonicalizedPages?.length > 0) addSheet(wb2, can.canonicalizedPages.map(p => ({ URL: p.url, 'Canonical URL': p.canonical })), 'Canonicalized to Other');
+      // Images Missing Alt
+      if (img.issueImages?.length > 0) addSheet(wb2, img.issueImages.map(i => ({ 'Image URL': i.src || '(no src)', 'Found On': i.pageUrl, Issue: i.issue, Occurrences: i.occurrences })), 'Image Alt Issues');
+      // Thin Content
+      if (cnt.thinPages?.length > 0) addSheet(wb2, cnt.thinPages.map(p => ({ URL: p.url, 'Word Count': p.wordCount })), 'Thin Content');
+      // Hreflang Return Link Issues
+      if (hrf.returnLinkIssues?.length > 0) addSheet(wb2, hrf.returnLinkIssues.map(i => ({ 'From URL': i.from, 'To URL': i.to, Language: i.lang, Issue: i.message })), 'Hreflang Issues');
+      // Redirects
+      const rdc = analysis.redirectChains?.chains || [];
+      if (rdc.length > 0) addSheet(wb2, rdc.map(r => ({ 'Original URL': r.originalUrl, 'Final URL': r.finalUrl, Hops: r.hops })), 'Redirect Chains');
+
+      const buf2 = XLSX.write(wb2, { type: 'buffer', bookType: 'xlsx' });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename=full-seo-audit.xlsx');
+      return res.send(buf2);
     }
     default:
       return res.status(400).json({ error: 'Unknown section' });
