@@ -569,6 +569,12 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       const can = analysis.canonicalReport || {};
       const hrf = analysis.hreflangReport || {};
       const cnt = analysis.contentAnalysis || {};
+      const _lnk = analysis.internalLinkAnalysis || {};
+      const _anch = analysis.anchorsReport || {};
+      const _sm = analysis.sitemapReport || {};
+      const _sec = analysis.securityReport || {};
+      const _sd = analysis.structuredDataReport || {};
+      const _aib = analysis.aiBotsReport || {};
       const addSheet = (wb, rows, name) => {
         if (!rows || !rows.length) return;
         const ws = XLSX.utils.json_to_sheet(rows);
@@ -598,6 +604,14 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
         { Category: 'Missing Canonical', Value: can.missing || 0 },
         { Category: 'Images Missing Alt', Value: img.missingAlt || 0 },
         { Category: 'Thin Content (<300 words)', Value: (cnt.thinPages || []).length },
+        { Category: 'Orphan Pages', Value: _lnk.orphanCount || 0 },
+        { Category: 'Links Without Anchor Text', Value: _anch.totalEmptyAnchors || 0 },
+        { Category: 'Pages with Schema', Value: _sd.pagesWithSD || 0 },
+        { Category: 'Pages without Schema', Value: _sd.pagesWithoutSD || 0 },
+        { Category: 'Sitemap Found', Value: _sm.found ? 'Yes' : 'No' },
+        { Category: 'Crawled NOT in Sitemap', Value: _sm.crawledNotInSitemapCount || 0 },
+        { Category: 'In Sitemap NOT Crawled', Value: _sm.inSitemapNotCrawledCount || 0 },
+        { Category: 'HTTPS', Value: _sec.isHttps ? 'Yes' : 'No' },
         { Category: 'Critical Issues', Value: (analysis.issues || []).filter(i => i.severity === 'critical').length },
         { Category: 'Warnings', Value: (analysis.issues || []).filter(i => i.severity === 'warning').length },
       ], 'Summary');
@@ -647,6 +661,33 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       // Redirects
       const rdc = analysis.redirectChains?.chains || [];
       if (rdc.length > 0) addSheet(wb2, rdc.map(r => ({ 'Original URL': r.originalUrl, 'Final URL': r.finalUrl, Hops: r.hops })), 'Redirect Chains');
+      // 5xx Errors
+      if (sc.groups?.['5xx']?.urls?.length > 0) addSheet(wb2, sc.groups['5xx'].urls.map(u => ({ URL: u.url, Status: u.statusCode })), '5xx Errors');
+      // Orphan Pages
+      if (_lnk.orphanPages?.length > 0) addSheet(wb2, _lnk.orphanPages.map(u => ({ URL: u })), 'Orphan Pages');
+      // Empty Anchor Links
+      if (_anch.emptyAnchors?.length > 0) addSheet(wb2, _anch.emptyAnchors.map(a => ({ 'Origin Page': a.from, 'Destination URL': a.to, Nofollow: a.isNofollow ? 'Yes' : 'No' })), 'Empty Anchor Links');
+      // Sitemap Issues
+      const smData = [];
+      if (_sm.crawledNotInSitemap?.length > 0) _sm.crawledNotInSitemap.forEach(u => smData.push({ URL: u, Issue: 'Crawled, not in sitemap' }));
+      if (_sm.inSitemapNotCrawled?.length > 0) _sm.inSitemapNotCrawled.forEach(u => smData.push({ URL: u, Issue: 'In sitemap, not crawled' }));
+      if (smData.length > 0) addSheet(wb2, smData, 'Sitemap Issues');
+      // Structured Data
+      const sdTypes = Object.entries(_sd.typeCounts || {});
+      if (sdTypes.length > 0) addSheet(wb2, sdTypes.map(([type, count]) => ({ 'Schema Type': type, Pages: count })), 'Structured Data');
+      // Pages without Schema
+      const noSD = mapped.filter(p => p.statusCode < 300 && !p.hasStructuredData && (!p.structuredData || p.structuredData.length === 0));
+      if (noSD.length > 0) addSheet(wb2, noSD.map(p => ({ URL: p.url })), 'No Structured Data');
+      // Security Headers
+      const secH = _sec.headers || {};
+      const secRows = mapped.filter(p => p.statusCode < 300).map(p => ({
+        URL: p.url,
+        HTTPS: p.url.startsWith('https') ? 'Yes' : 'No',
+        HSTS: p.securityHeaders?.['strict-transport-security'] ? 'Yes' : 'No',
+        'X-Frame-Options': p.securityHeaders?.['x-frame-options'] || 'Missing',
+        'X-Content-Type-Options': p.securityHeaders?.['x-content-type-options'] || 'Missing'
+      }));
+      if (secRows.length > 0) addSheet(wb2, secRows, 'Security Headers');
 
       const buf2 = XLSX.write(wb2, { type: 'buffer', bookType: 'xlsx' });
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
