@@ -1632,10 +1632,13 @@ function renderSitemaps(analysis) {
   }
 
   // Sitemaps found
+  const non200Count = (r.non200InSitemapCount || (r.sitemapUrlStatuses || []).filter(u => u.statusCode !== 200 && u.statusCode !== 'not_crawled').length);
+  const noindexInSmCount = (r.sitemapUrlStatuses || []).filter(u => u.isNoindex).length;
   let html = `<div class="stats-grid">
     ${statCard('Sitemap Files', r.files.length, 'info')}
     ${statCard('URLs in Sitemaps', r.totalSitemapUrls, '')}
-    ${statCard('Source', r.fromRobots ? 'robots.txt' : 'Auto-discovered', r.fromRobots ? 'success' : 'warning')}
+    ${statCard('Non-200 in Sitemap', non200Count, non200Count > 0 ? 'danger' : 'success')}
+    ${statCard('Noindex in Sitemap', noindexInSmCount, noindexInSmCount > 0 ? 'danger' : 'success')}
     ${statCard('Crawled Not in Sitemap', r.crawledNotInSitemapCount, r.crawledNotInSitemapCount > 0 ? 'warning' : 'success')}
     ${statCard('In Sitemap Not Crawled', r.inSitemapNotCrawledCount, r.inSitemapNotCrawledCount > 0 ? 'info' : '')}
   </div>`;

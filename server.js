@@ -669,9 +669,12 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       if (_anch.emptyAnchors?.length > 0) addSheet(wb2, _anch.emptyAnchors.map(a => ({ 'Origin Page': a.from, 'Destination URL': a.to, Nofollow: a.isNofollow ? 'Yes' : 'No' })), 'Empty Anchor Links');
       // Sitemap Issues
       const smData = [];
-      if (_sm.crawledNotInSitemap?.length > 0) _sm.crawledNotInSitemap.forEach(u => smData.push({ URL: u, Issue: 'Crawled, not in sitemap' }));
-      if (_sm.inSitemapNotCrawled?.length > 0) _sm.inSitemapNotCrawled.forEach(u => smData.push({ URL: u, Issue: 'In sitemap, not crawled' }));
+      if (_sm.non200InSitemap?.length > 0) _sm.non200InSitemap.forEach(u => smData.push({ URL: u.url, Status: u.statusCode, Issue: 'Non-200 URL in sitemap' }));
+      if (_sm.crawledNotInSitemap?.length > 0) _sm.crawledNotInSitemap.forEach(u => smData.push({ URL: u, Status: '', Issue: 'Crawled, not in sitemap' }));
+      if (_sm.inSitemapNotCrawled?.length > 0) _sm.inSitemapNotCrawled.forEach(u => smData.push({ URL: u, Status: '', Issue: 'In sitemap, not crawled' }));
       if (smData.length > 0) addSheet(wb2, smData, 'Sitemap Issues');
+      // Non-200 in Sitemap (dedicated sheet)
+      if (_sm.non200InSitemap?.length > 0) addSheet(wb2, _sm.non200InSitemap.map(u => ({ URL: u.url, Status: u.statusCode, Sitemap: u.sitemap || '' })), 'Non-200 in Sitemap');
       // Structured Data
       const sdTypes = Object.entries(_sd.typeCounts || {});
       if (sdTypes.length > 0) addSheet(wb2, sdTypes.map(([type, count]) => ({ 'Schema Type': type, Pages: count })), 'Structured Data');
