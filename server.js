@@ -419,12 +419,21 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       data = (analysis.redirectChains?.chains || []).map(r => ({ 'Original URL': r.originalUrl, 'Final URL': r.finalUrl, Hops: r.hops, Chain: (r.chain || []).map(c => `${c.statusCode}: ${c.url}`).join(' → ') }));
       sheetName = 'Redirects';
       break;
-    case 'statuscodes':
-      data = mapped.map(p => ({ URL: p.url, Status: p.statusCode, 'Final URL': p.finalUrl || '' }));
-      sheetName = 'Status Codes';
+    case 'statuscodes': {
+      const scFilter = req.query.filter || 'all';
+      let scPages = mapped;
+      if (scFilter === '2xx') scPages = mapped.filter(p => p.statusCode >= 200 && p.statusCode < 300);
+      else if (scFilter === '3xx') scPages = mapped.filter(p => p.statusCode >= 300 && p.statusCode < 400);
+      else if (scFilter === '4xx') scPages = mapped.filter(p => p.statusCode >= 400 && p.statusCode < 500);
+      else if (scFilter === '5xx') scPages = mapped.filter(p => p.statusCode >= 500);
+      else if (scFilter === 'error') scPages = mapped.filter(p => p.error);
+      data = scPages.map(p => ({ URL: p.url, Status: p.statusCode, 'Final URL': p.finalUrl || '' }));
+      sheetName = scFilter === 'all' ? 'Status Codes' : scFilter.toUpperCase() + ' Status Codes';
       break;
+    }
     case 'metatitles': {
       const mt = analysis.metaTitlesReport || {};
+      const mtFilter = req.query.filter || 'all';
       const addSheet = (wb, rows, name) => {
         if (!rows.length) return;
         const ws = XLSX.utils.json_to_sheet(rows);
@@ -433,12 +442,14 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
         XLSX.utils.book_append_sheet(wb, ws, name);
       };
       const wb2 = XLSX.utils.book_new();
-      addSheet(wb2, (mt.missing || []).map(p => ({ URL: p.url, Issue: 'Missing Title' })), 'Missing Title');
-      addSheet(wb2, (mt.tooShort || []).map(p => ({ URL: p.url, Title: p.title, Length: p.length, Issue: 'Too Short (<30 chars)' })), 'Too Short');
-      addSheet(wb2, (mt.tooLong || []).map(p => ({ URL: p.url, Title: p.title, Length: p.length, Issue: 'Too Long (>60 chars)' })), 'Too Long');
-      const dupRows = [];
-      for (const d of (mt.duplicates || [])) for (const u of d.urls) dupRows.push({ URL: u, Title: d.title, 'Group Count': d.count });
-      addSheet(wb2, dupRows, 'Duplicate Titles');
+      if (mtFilter === 'all' || mtFilter === 'missing') addSheet(wb2, (mt.missing || []).map(p => ({ URL: p.url, Issue: 'Missing Title' })), 'Missing Title');
+      if (mtFilter === 'all' || mtFilter === 'short') addSheet(wb2, (mt.tooShort || []).map(p => ({ URL: p.url, Title: p.title, Length: p.length, Issue: 'Too Short (<30 chars)' })), 'Too Short');
+      if (mtFilter === 'all' || mtFilter === 'long') addSheet(wb2, (mt.tooLong || []).map(p => ({ URL: p.url, Title: p.title, Length: p.length, Issue: 'Too Long (>60 chars)' })), 'Too Long');
+      if (mtFilter === 'all' || mtFilter === 'dup') {
+        const dupRows = [];
+        for (const d of (mt.duplicates || [])) for (const u of d.urls) dupRows.push({ URL: u, Title: d.title, 'Group Count': d.count });
+        addSheet(wb2, dupRows, 'Duplicate Titles');
+      }
       if (!wb2.SheetNames.length) XLSX.utils.book_append_sheet(wb2, XLSX.utils.json_to_sheet([{ Note: 'No meta title issues found' }]), 'Meta Titles');
       const buf2 = XLSX.write(wb2, { type: 'buffer', bookType: 'xlsx' });
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -447,6 +458,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
     }
     case 'metadescriptions': {
       const md = analysis.metaDescriptionsReport || {};
+      const mdFilter = req.query.filter || 'all';
       const addSheet = (wb, rows, name) => {
         if (!rows.length) return;
         const ws = XLSX.utils.json_to_sheet(rows);
@@ -455,12 +467,14 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
         XLSX.utils.book_append_sheet(wb, ws, name);
       };
       const wb2 = XLSX.utils.book_new();
-      addSheet(wb2, (md.missing || []).map(p => ({ URL: p.url, Issue: 'Missing Meta Description' })), 'Missing Description');
-      addSheet(wb2, (md.tooShort || []).map(p => ({ URL: p.url, 'Meta Description': p.metaDescription, Length: p.length, Issue: 'Too Short (<70 chars)' })), 'Too Short');
-      addSheet(wb2, (md.tooLong || []).map(p => ({ URL: p.url, 'Meta Description': p.metaDescription, Length: p.length, Issue: 'Too Long (>160 chars)' })), 'Too Long');
-      const dupRows = [];
-      for (const d of (md.duplicates || [])) for (const u of d.urls) dupRows.push({ URL: u, 'Meta Description': d.description, 'Group Count': d.count });
-      addSheet(wb2, dupRows, 'Duplicate Descriptions');
+      if (mdFilter === 'all' || mdFilter === 'missing') addSheet(wb2, (md.missing || []).map(p => ({ URL: p.url, Issue: 'Missing Meta Description' })), 'Missing Description');
+      if (mdFilter === 'all' || mdFilter === 'short') addSheet(wb2, (md.tooShort || []).map(p => ({ URL: p.url, 'Meta Description': p.metaDescription, Length: p.length, Issue: 'Too Short (<70 chars)' })), 'Too Short');
+      if (mdFilter === 'all' || mdFilter === 'long') addSheet(wb2, (md.tooLong || []).map(p => ({ URL: p.url, 'Meta Description': p.metaDescription, Length: p.length, Issue: 'Too Long (>160 chars)' })), 'Too Long');
+      if (mdFilter === 'all' || mdFilter === 'dup') {
+        const dupRows = [];
+        for (const d of (md.duplicates || [])) for (const u of d.urls) dupRows.push({ URL: u, 'Meta Description': d.description, 'Group Count': d.count });
+        addSheet(wb2, dupRows, 'Duplicate Descriptions');
+      }
       if (!wb2.SheetNames.length) XLSX.utils.book_append_sheet(wb2, XLSX.utils.json_to_sheet([{ Note: 'No meta description issues found' }]), 'Meta Descriptions');
       const buf2 = XLSX.write(wb2, { type: 'buffer', bookType: 'xlsx' });
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -553,6 +567,33 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
   res.send(buf);
   } catch (err) {
     console.error('Export error:', err);
+    res.status(500).json({ error: 'Export failed: ' + err.message });
+  }
+});
+
+// Export filtered pages (POST with row data from client)
+app.post('/api/crawls/:id/export-filtered-xlsx', (req, res) => {
+  try {
+    const { rows, sheetName, fileName } = req.body;
+    if (!rows || !rows.length) return res.status(400).json({ error: 'No data to export' });
+    const XLSX = require('xlsx');
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    if (rows.length > 0) {
+      const cols = Object.keys(rows[0]).map(k => {
+        const maxLen = Math.max(k.length, ...rows.slice(0, 100).map(r => String(r[k] || '').length));
+        return { wch: Math.min(100, maxLen + 2) };
+      });
+      ws['!cols'] = cols;
+    }
+    const sn = (sheetName || 'Filtered').replace(/[\\/*?\[\]:]/g, '').substring(0, 31);
+    XLSX.utils.book_append_sheet(wb, ws, sn);
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=${fileName || 'export'}.xlsx`);
+    res.send(buf);
+  } catch (err) {
+    console.error('Filtered export error:', err);
     res.status(500).json({ error: 'Export failed: ' + err.message });
   }
 });

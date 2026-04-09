@@ -263,6 +263,8 @@ $$('.export-menu a').forEach(a => {
     if (!currentCrawlId) return alert('No crawl data to export');
     if (a.dataset.format === 'pdf') {
       window.open(`/api/crawls/${currentCrawlId}/export-pdf`, '_blank');
+    } else if (a.dataset.format === 'xlsx-filtered') {
+      exportFilteredPages();
     } else {
       window.location.href = `/api/crawls/${currentCrawlId}/export/${a.dataset.format}`;
     }
@@ -2043,9 +2045,7 @@ function renderSummary(analysis) {
 
 function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function truncate(s, len) { s = s || ''; return s.length > len ? s.substring(0, len) + '...' : s; }
-const _xlsxExportSections = new Set(['metatitles', 'metadescriptions', 'canonicals', 'hreflang', 'hreflang-canonical', 'images']);
 function exportBtn(section) {
-  if (!_xlsxExportSections.has(section)) return '';
   return `<div style="display:flex;justify-content:flex-end;margin-bottom:12px">
     <button onclick="exportSection('${section}')" style="display:inline-flex;align-items:center;gap:6px;background:#1d6f42;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s" onmouseover="this.style.background='#238d53'" onmouseout="this.style.background='#1d6f42'">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 17 15 14"/></svg>
@@ -2055,7 +2055,101 @@ function exportBtn(section) {
 }
 function exportSection(section) {
   if (!currentCrawlId) return;
-  window.open(`/api/crawls/${currentCrawlId}/export-section/${section}`, '_blank');
+  // Pass active scorecard filter for tabs that have them
+  let filterParam = '';
+  if (section === 'statuscodes' && _statusCodesActiveFilter !== 'all') filterParam = '?filter=' + _statusCodesActiveFilter;
+  else if (section === 'metatitles' && _mtFilter !== 'all') filterParam = '?filter=' + _mtFilter;
+  else if (section === 'metadescriptions' && _mdFilter !== 'all') filterParam = '?filter=' + _mdFilter;
+  window.open(`/api/crawls/${currentCrawlId}/export-section/${section}${filterParam}`, '_blank');
+}
+function exportFilteredPages() {
+  if (!currentCrawlId || !pagesData) return alert('No crawl data to export');
+  // Re-apply current filters to get the filtered set (same logic as renderPagesTable)
+  buildDupMaps(pagesData);
+  const filter = ($('#pagesFilter')?.value || '').toLowerCase();
+  const sf = $('#pagesStatusFilter')?.value || '';
+  const tf = $('#pagesTitleFilter')?.value || '';
+  const df = $('#pagesDescFilter')?.value || '';
+  const dirf = $('#pagesDirectiveFilter')?.value || '';
+  const cf = $('#pagesCanonicalFilter')?.value || '';
+  const h1f = $('#pagesH1Filter')?.value || '';
+  const wf = $('#pagesWordFilter')?.value || '';
+  const hlf = $('#pagesHreflangFilter')?.value || '';
+  let filtered = pagesData;
+  if (filter) filtered = filtered.filter(p => (p.url||'').toLowerCase().includes(filter));
+  if (sf === '2xx') filtered = filtered.filter(p => p.status_code >= 200 && p.status_code < 300);
+  else if (sf === '3xx') filtered = filtered.filter(p => p.status_code >= 300 && p.status_code < 400);
+  else if (sf === '4xx') filtered = filtered.filter(p => p.status_code >= 400 && p.status_code < 500);
+  else if (sf === '5xx') filtered = filtered.filter(p => p.status_code >= 500);
+  else if (sf) filtered = filtered.filter(p => String(p.status_code) === sf);
+  if (tf === 'missing') filtered = filtered.filter(p => !p.title && p.status_code < 300 && !isNoindexPage(p));
+  else if (tf === 'short') filtered = filtered.filter(p => p.title && (p.title_length||0) < 30 && !isNoindexPage(p));
+  else if (tf === 'long') filtered = filtered.filter(p => p.title && (p.title_length||0) > 60 && !isNoindexPage(p));
+  else if (tf === 'optimal') filtered = filtered.filter(p => p.title && (p.title_length||0) >= 30 && (p.title_length||0) <= 60 && !isNoindexPage(p));
+  else if (tf === 'duplicate') filtered = filtered.filter(p => p.title && _titleDups.has(p.title.trim().toLowerCase()) && !isNoindexPage(p));
+  if (df === 'missing') filtered = filtered.filter(p => !p.meta_description && p.status_code < 300 && !isNoindexPage(p));
+  else if (df === 'short') filtered = filtered.filter(p => p.meta_description && (p.meta_description_length||0) < 70 && !isNoindexPage(p));
+  else if (df === 'long') filtered = filtered.filter(p => p.meta_description && (p.meta_description_length||0) > 160 && !isNoindexPage(p));
+  else if (df === 'optimal') filtered = filtered.filter(p => p.meta_description && (p.meta_description_length||0) >= 70 && (p.meta_description_length||0) <= 160 && !isNoindexPage(p));
+  else if (df === 'duplicate') filtered = filtered.filter(p => p.meta_description && _descDups.has(p.meta_description.trim().toLowerCase()) && !isNoindexPage(p));
+  if (dirf === 'noindex') filtered = filtered.filter(p => (p.meta_robots||'').toLowerCase().includes('noindex'));
+  else if (dirf === 'nofollow') filtered = filtered.filter(p => (p.meta_robots||'').toLowerCase().includes('nofollow'));
+  else if (dirf === 'index') filtered = filtered.filter(p => !(p.meta_robots||'').toLowerCase().includes('noindex'));
+  if (cf === 'self') filtered = filtered.filter(p => p.canonical_is_self);
+  else if (cf === 'other') filtered = filtered.filter(p => p.canonical && !p.canonical_is_self);
+  else if (cf === 'missing') filtered = filtered.filter(p => !p.canonical && p.status_code < 300);
+  if (h1f === 'missing') filtered = filtered.filter(p => (p.h1_count || 0) === 0 && p.status_code < 300);
+  else if (h1f === 'multiple') filtered = filtered.filter(p => (p.h1_count || 0) > 1);
+  else if (h1f === 'single') filtered = filtered.filter(p => (p.h1_count || 0) === 1);
+  if (wf === 'thin') filtered = filtered.filter(p => (p.word_count || 0) < 300 && p.status_code < 300);
+  else if (wf === 'short') filtered = filtered.filter(p => (p.word_count || 0) >= 300 && (p.word_count || 0) < 600);
+  else if (wf === 'medium') filtered = filtered.filter(p => (p.word_count || 0) >= 600 && (p.word_count || 0) < 1500);
+  else if (wf === 'long') filtered = filtered.filter(p => (p.word_count || 0) >= 1500);
+  if (hlf === 'has') filtered = filtered.filter(p => { try { return JSON.parse(p.hreflangs || '[]').length > 0; } catch { return false; } });
+  else if (hlf === 'none') filtered = filtered.filter(p => { try { return JSON.parse(p.hreflangs || '[]').length === 0; } catch { return true; } });
+
+  if (filtered.length === 0) return alert('No pages match the current filters');
+  // Build active filter label for sheet name
+  const labels = [];
+  if (sf) labels.push('Status:' + sf);
+  if (tf) labels.push('Title:' + tf);
+  if (df) labels.push('Desc:' + df);
+  if (dirf) labels.push('Dir:' + dirf);
+  if (cf) labels.push('Can:' + cf);
+  if (h1f) labels.push('H1:' + h1f);
+  if (wf) labels.push('Words:' + wf);
+  if (hlf) labels.push('HL:' + hlf);
+  if (filter) labels.push('URL:' + filter.substring(0, 20));
+  const filterLabel = labels.length ? labels.join(', ') : 'All';
+
+  // Map to export rows
+  const rows = filtered.map(p => ({
+    URL: p.url,
+    Status: p.status_code,
+    'Meta Title': p.title || '',
+    'Title Length': p.title_length || 0,
+    'Meta Description': p.meta_description || '',
+    'Desc Length': p.meta_description_length || 0,
+    H1: JSON.parse(p.h1 || '[]').join(' | '),
+    'H1 Count': p.h1_count || 0,
+    'H2 Count': p.h2_count || 0,
+    'Word Count': p.word_count || 0,
+    Canonical: p.canonical || '',
+    Directives: p.meta_robots || '',
+    'Response Time': p.response_time || 0,
+    Depth: p.depth || 0
+  }));
+  // POST to server for XLSX generation
+  fetch(`/api/crawls/${currentCrawlId}/export-filtered-xlsx`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rows, sheetName: 'Filtered (' + filterLabel + ')', fileName: 'filtered-pages' })
+  }).then(r => r.blob()).then(blob => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'filtered-pages.xlsx'; a.click();
+    URL.revokeObjectURL(url);
+  }).catch(err => alert('Export failed: ' + err.message));
 }
 function urlLink(url) {
   if (!url) return '-';
