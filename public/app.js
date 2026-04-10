@@ -794,7 +794,7 @@ function showPageDetail(url, pages) {
       ${detailItem('Images', `${p.images_total || 0} total, ${p.images_without_alt || 0} missing alt`)}
       ${detailItem('Meta Robots', p.meta_robots || 'None')}
       ${detailItem('HTML Lang', p.html_lang || 'None')}
-      ${detailItem('In Sitemap', p.in_sitemap ? 'Yes' : 'No')}
+      ${detailItem('In Sitemap', sitemapDetailValue(p.in_sitemap, p.url))}
       ${detailItem('Structured Data', JSON.parse(p.structured_data_types || '[]').join(', ') || 'None')}
       ${detailItem('OG Title', p.og_title || 'None')}
       ${detailItem('OG Image', p.og_image || 'None')}
@@ -874,6 +874,20 @@ document.addEventListener('contextmenu', (e) => {
 });
 
 // ── Inspect URL (full page detail with inbound links) ──
+function findSitemapsForUrl(url) {
+  const statuses = analysisData?.sitemapReport?.sitemapUrlStatuses || [];
+  const variants = new Set([url, url.endsWith('/') ? url.slice(0, -1) : url + '/']);
+  const matches = statuses.filter(s => variants.has(s.url) && s.sitemap);
+  const unique = [...new Set(matches.map(m => m.sitemap))];
+  return unique;
+}
+function sitemapDetailValue(inSitemap, url) {
+  if (!inSitemap) return 'No';
+  const sitemaps = findSitemapsForUrl(url);
+  if (sitemaps.length === 0) return 'Yes';
+  return 'Yes<div style="margin-top:6px;font-size:11px;color:var(--text-muted)">Found in:</div>' +
+    sitemaps.map(s => `<div style="font-size:11px;word-break:break-all"><a href="${esc(s)}" target="_blank" rel="noopener" style="color:var(--primary)">${esc(s)}</a></div>`).join('');
+}
 function inspectUrl(url) {
   hideUrlMenu();
   if (!pagesData.length) return alert('No crawl data available');
@@ -933,7 +947,7 @@ function inspectUrl(url) {
         ${detailItem('Images', `${p.images_total || 0} total, ${p.images_without_alt || 0} missing alt`)}
         ${detailItem('Meta Robots', p.meta_robots || 'index, follow')}
         ${detailItem('HTML Lang', p.html_lang || 'None')}
-        ${detailItem('In Sitemap', p.in_sitemap ? 'Yes' : 'No')}
+        ${detailItem('In Sitemap', sitemapDetailValue(p.in_sitemap, p.url))}
         ${detailItem('Structured Data', sdt.join(', ') || 'None')}
         ${detailItem('OG Title', p.og_title || 'None')}
         ${detailItem('OG Image', p.og_image || 'None')}
