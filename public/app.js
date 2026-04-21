@@ -91,6 +91,7 @@ function renderAll(analysis) {
   renderSecurity(analysis);
   renderInternalLinks(analysis);
   renderAiBots(analysis);
+  renderSearchEngines(analysis);
   renderSitemaps(analysis);
   renderStatusCodes(analysis);
   renderAnchors(analysis);
@@ -236,6 +237,7 @@ socket.on('complete', (data) => {
   renderSecurity(data.analysis);
   renderLinks(data.analysis);
   renderAiBots(data.analysis);
+  renderSearchEngines(data.analysis);
   renderSitemaps(data.analysis);
   renderStatusCodes(data.analysis);
   renderAnchors(data.analysis);
@@ -1404,6 +1406,7 @@ window.loadCrawl = async function(id) {
   renderSecurity(analysis);
   renderLinks(analysis);
   renderAiBots(analysis);
+  renderSearchEngines(analysis);
   renderSitemaps(analysis);
   renderStatusCodes(analysis);
   renderAnchors(analysis);
@@ -1855,6 +1858,93 @@ function renderAiBots(analysis) {
   </div>`;
 
   $('#aibotsContent').innerHTML = html;
+}
+
+// ── Search Engines (Google / Bing bots in robots.txt) ──
+function renderSearchEngines(analysis) {
+  const r = analysis.searchEnginesReport;
+  if (!r || !r.hasRobotsTxt) {
+    $('#searchenginesContent').innerHTML = `<div class="section-card" style="text-align:center;padding:40px">
+      <div style="font-size:48px;margin-bottom:16px">🔍</div>
+      <h3>No robots.txt Found</h3>
+      <p style="color:var(--text-muted)">This site does not have a robots.txt file. All search engine crawlers are allowed by default.</p>
+    </div>`;
+    return;
+  }
+
+  const blocked = r.bots.filter(b => b.status === 'blocked');
+  const partial = r.bots.filter(b => b.status === 'partial');
+  const allowed = r.bots.filter(b => b.status === 'allowed');
+  const notMentioned = r.bots.filter(b => b.status === 'not_mentioned');
+  const critical = r.criticalBlocked || [];
+
+  let html = '';
+
+  // Critical warning banner — Googlebot or Bingbot blocked
+  if (critical.length > 0) {
+    const names = critical.map(b => `<strong>${esc(b.name)}</strong> (${esc(b.statusLabel)})`).join(', ');
+    html += `<div class="section-card" style="border-left:4px solid var(--danger);background:color-mix(in srgb, var(--danger) 8%, transparent)">
+      <h3 style="color:var(--danger);margin-bottom:8px">⚠️ Critical: Search engine crawler blocked</h3>
+      <p style="margin-bottom:8px">${names} ${critical.length === 1 ? 'is' : 'are'} disallowed by this site's <code>robots.txt</code>.</p>
+      <p style="color:var(--text-muted);font-size:13px;margin:0">Blocking the main Google or Bing crawler prevents organic indexing — pages will not appear in search results. Review the <code>User-agent</code> and <code>Disallow</code> rules below.</p>
+    </div>`;
+  }
+
+  html += `<div class="stats-grid">
+    ${statCard('Search Bots Checked', r.totalBots, '')}
+    ${statCard('Blocked', blocked.length, blocked.length > 0 ? 'danger' : '')}
+    ${statCard('Partially Blocked', partial.length, partial.length > 0 ? 'warning' : '')}
+    ${statCard('Allowed / Not Mentioned', allowed.length + notMentioned.length, 'success')}
+  </div>`;
+
+  const botRow = (b, badgeClass) => `<tr>
+    <td><strong>${esc(b.name)}</strong>${b.critical ? ' <span class="badge badge-warning" style="font-size:10px">main crawler</span>' : ''}</td>
+    <td>${esc(b.engine)}</td>
+    <td style="white-space:normal;max-width:320px">${esc(b.description)}</td>
+    <td><span class="badge ${badgeClass}">${esc(b.statusLabel)}</span></td>
+    <td style="font-size:11px">${(b.rules || []).map(rr => `${rr.type}: ${esc(rr.path)}`).join('<br>') || '—'}</td>
+  </tr>`;
+
+  if (blocked.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--danger)">
+      <h3 style="color:var(--danger)">Blocked Search Bots (${blocked.length})</h3>
+      <table><thead><tr><th>Bot</th><th>Engine</th><th>Description</th><th>Status</th><th>Rules</th></tr></thead>
+      <tbody>${blocked.map(b => botRow(b, 'badge-danger')).join('')}</tbody></table></div>`;
+  }
+
+  if (partial.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--warning)">
+      <h3 style="color:var(--warning)">Partially Blocked Search Bots (${partial.length})</h3>
+      <table><thead><tr><th>Bot</th><th>Engine</th><th>Description</th><th>Status</th><th>Rules</th></tr></thead>
+      <tbody>${partial.map(b => botRow(b, 'badge-warning')).join('')}</tbody></table></div>`;
+  }
+
+  if (allowed.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--success)">
+      <h3 style="color:var(--success)">Explicitly Allowed Search Bots (${allowed.length})</h3>
+      <table><thead><tr><th>Bot</th><th>Engine</th><th>Description</th><th>Status</th><th>Rules</th></tr></thead>
+      <tbody>${allowed.map(b => botRow(b, 'badge-success')).join('')}</tbody></table></div>`;
+  }
+
+  if (notMentioned.length > 0) {
+    html += `<div class="section-card">
+      <h3>Not Mentioned in robots.txt (${notMentioned.length})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These bots aren't specifically referenced and fall back to the <code>User-agent: *</code> rules (or allowed by default if no wildcard).</p>
+      <table><thead><tr><th>Bot</th><th>Engine</th><th>Description</th><th>Status</th></tr></thead>
+      <tbody>${notMentioned.map(b => `<tr>
+        <td><strong>${esc(b.name)}</strong>${b.critical ? ' <span class="badge badge-warning" style="font-size:10px">main crawler</span>' : ''}</td>
+        <td>${esc(b.engine)}</td>
+        <td style="white-space:normal;max-width:320px">${esc(b.description)}</td>
+        <td><span class="badge badge-success">Allowed</span></td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  html += `<div class="section-card">
+    <h3>Raw robots.txt</h3>
+    <pre style="background:var(--bg);padding:16px;border-radius:8px;overflow-x:auto;font-size:12px;max-height:400px;overflow-y:auto;white-space:pre-wrap">${esc(r.rawRobotsTxt)}</pre>
+  </div>`;
+
+  $('#searchenginesContent').innerHTML = html;
 }
 
 // ── Headings ──
