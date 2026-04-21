@@ -1359,10 +1359,51 @@ function renderSecurity(analysis) {
 // ── Internal Links ──
 function renderLinks(analysis) {
   const r = analysis.internalLinkAnalysis;
+  const cd = r.crawlDepth || { total: 0, buckets: [], within3ClicksPct: 0 };
+
   let html = `<div class="stats-grid">
     ${statCard('Orphan Pages', r.orphanCount, r.orphanCount > 0 ? 'warning' : 'success')}
     ${statCard('Avg Internal Links', r.avgInternalLinks, '')}
+    ${statCard('Within 3 Clicks', cd.within3ClicksPct + '%', cd.within3ClicksPct >= 80 ? 'success' : cd.within3ClicksPct >= 50 ? 'warning' : 'danger')}
   </div>`;
+
+  // Pages Crawl Depth — distribution of pages by click-distance from homepage
+  if (cd.total > 0) {
+    const deep = cd.buckets.find(b => b.key === '4+');
+    const deepPct = deep ? deep.percentage : 0;
+    html += `<div class="section-card"><h3>Pages Crawl Depth</h3>
+      <p style="color:var(--text-muted);margin-bottom:16px;font-size:13px">
+        How many clicks from the homepage each page sits at. As a rule of thumb, important pages should be reachable within 3 clicks — deeper pages get less crawl budget and less link equity.
+        ${deepPct > 30 ? `<strong style="color:var(--warning)"> ${deepPct}% of pages are 4+ clicks deep — consider flattening the site structure.</strong>` : ''}
+      </p>
+      <div class="pie-chart-container">
+        ${renderPieChart(cd.buckets, 200)}
+        <div class="pie-legend">
+          ${cd.buckets.map(b => `<div class="pie-legend-item">
+            <div class="pie-legend-dot" style="background:${b.color}"></div>
+            <span class="pie-legend-label">${esc(b.label)}</span>
+            <span class="pie-legend-count">${b.count.toLocaleString()} (${b.percentage}%)</span>
+          </div>`).join('')}
+          <div class="pie-legend-item" style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px;font-weight:600">
+            <div class="pie-legend-dot" style="background:transparent"></div>
+            <span class="pie-legend-label">Total</span>
+            <span class="pie-legend-count">${cd.total.toLocaleString()} pages</span>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+    // List the deepest pages so the user can act on them
+    const deepUrls = deep && deep.urls ? deep.urls : [];
+    if (deepUrls.length > 0) {
+      html += `<div class="section-card"><h3>Pages 4+ Clicks Deep (${deep.count.toLocaleString()})</h3>
+        <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Consider adding internal links from higher-level pages to make these easier to discover.</p>
+        <table><thead><tr><th>URL</th></tr></thead>
+        <tbody>${deepUrls.slice(0, 100).map(u => `<tr><td>${urlLink(u)}</td></tr>`).join('')}</tbody></table>
+        ${deepUrls.length > 100 ? `<p style="color:var(--text-muted);font-size:12px;margin-top:8px">Showing 100 of ${deep.count.toLocaleString()}</p>` : ''}
+      </div>`;
+    }
+  }
 
   if (r.orphanPages.length > 0) {
     html += `<div class="section-card"><h3>Orphan Pages (${r.orphanCount})</h3>
