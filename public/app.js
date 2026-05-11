@@ -44,6 +44,7 @@ $$('.nav-link').forEach(link => {
     $(`#view-${view}`).classList.add('active');
     // Load saved projects when navigating to that view
     if (view === 'saved-projects') loadSavedProjects();
+    if (view === 'gsc') loadGscView();
   });
 });
 
@@ -2387,3 +2388,337 @@ const tableObserver = new MutationObserver(() => {
 });
 const vc = document.getElementById('viewsContainer');
 if (vc) tableObserver.observe(vc, { childList: true, subtree: true });
+
+// ── Google Search Console tab ─────────────────────────────────────────────
+const gscState = {
+  status: null,
+  sites: [],
+  selectedSite: localStorage.getItem('gsc-selected-site') || '',
+  lastResult: null
+};
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+function gscDateNDaysAgo(days) {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+async function loadGscView() {
+  const container = document.getElementById('gscContent');
+  container.innerHTML = '<p style="color:var(--text-muted);padding:20px">Loading…</p>';
+
+  // Surface OAuth redirect notices
+  const params = new URLSearchParams(location.search);
+  if (params.get('gsc') === 'error') {
+    const reason = params.get('reason') || 'unknown error';
+    container.insertAdjacentHTML('afterbegin',
+      `<div style="background:rgba(220,38,38,.08);border:1px solid var(--danger);color:var(--danger);padding:12px 16px;border-radius:8px;margin-bottom:16px">
+         Could not connect to Google: ${escapeHtml(reason)}
+       </div>`);
+    history.replaceState({}, '', location.pathname);
+  } else if (params.get('gsc') === 'connected') {
+    history.replaceState({}, '', location.pathname);
+  }
+
+  try {
+    const r = await fetch('/api/gsc/status');
+    if (!r.ok) throw new Error('status ' + r.status);
+    gscState.status = await r.json();
+  } catch (e) {
+    container.innerHTML = `<div style="padding:20px;color:var(--danger)">Failed to load GSC status: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  if (!gscState.status.configured) {
+    container.innerHTML = `
+      <div style="padding:20px;max-width:780px">
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:20px">
+          <h3 style="margin-bottom:12px">Google OAuth is not configured</h3>
+          <p style="color:var(--text-muted);margin-bottom:12px">
+            To enable Search Console login, set the following environment variables on the server and restart:
+          </p>
+          <pre style="background:var(--bg-input);border:1px solid var(--border);padding:12px;border-radius:6px;font-size:12px;overflow:auto">GOOGLE_CLIENT_ID=…apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=…
+GOOGLE_REDIRECT_URI=${location.origin}/api/gsc/oauth/callback</pre>
+          <p style="color:var(--text-muted);font-size:13px;margin-top:12px">
+            Create an OAuth 2.0 Client (type: Web application) in Google Cloud Console,
+            enable the <b>Search Console API</b>, then add the redirect URI above to the client.
+          </p>
+        </div>
+      </div>`;
+    return;
+  }
+
+  if (!gscState.status.connected) {
+    container.innerHTML = `
+      <div style="padding:40px;text-align:center;max-width:520px;margin:0 auto">
+        <div style="font-size:48px;margin-bottom:12px">🔐</div>
+        <h3 style="margin-bottom:8px">Connect Google Search Console</h3>
+        <p style="color:var(--text-muted);margin-bottom:24px">
+          Sign in with the Google account that has access to your Search Console properties.
+          We request read-only access (<code>webmasters.readonly</code>).
+        </p>
+        <a href="/api/gsc/auth/start" class="btn btn-primary" style="display:inline-flex;align-items:center;gap:10px;padding:10px 22px;border-radius:8px;background:var(--primary);color:#fff;text-decoration:none;font-weight:600">
+          <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.7 4.7-6.2 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.6 6.1 29.6 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 13 24 13c3.1 0 5.9 1.2 8 3l5.7-5.7C34.6 6.1 29.6 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.5 0 10.4-2.1 14.1-5.5l-6.5-5.5C29.5 34.7 26.9 36 24 36c-5.1 0-9.5-3.3-11.2-7.9l-6.5 5C9.6 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4 5.5l6.5 5.5C42 35 44 30 44 24c0-1.3-.1-2.6-.4-3.5z"/></svg>
+          Sign in with Google
+        </a>
+      </div>`;
+    return;
+  }
+
+  renderGscConnectedShell();
+  await loadGscSites();
+}
+
+function renderGscConnectedShell() {
+  const today = gscDateNDaysAgo(2);          // GSC data is ~2 days delayed
+  const start = gscDateNDaysAgo(30);
+  document.getElementById('gscContent').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr;gap:16px;padding:20px">
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div>
+          <div style="font-size:12px;color:var(--text-muted)">Signed in as</div>
+          <div style="font-weight:600">${escapeHtml(gscState.status.email || 'Google account')}</div>
+        </div>
+        <button id="gscLogout" class="btn btn-secondary" style="padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Disconnect</button>
+      </div>
+
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;align-items:end">
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Property</label>
+            <select id="gscSite" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)"><option value="">Loading sites…</option></select>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Start date</label>
+            <input type="date" id="gscStart" value="${start}" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">End date</label>
+            <input type="date" id="gscEnd" value="${today}" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Dimension</label>
+            <select id="gscDimension" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+              <option value="query">Query</option>
+              <option value="page">Page</option>
+              <option value="country">Country</option>
+              <option value="device">Device</option>
+              <option value="date">Date</option>
+              <option value="searchAppearance">Search appearance</option>
+              <option value="query,page">Query + Page</option>
+              <option value="page,query">Page + Query</option>
+              <option value="date,query">Date + Query</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Search type</label>
+            <select id="gscType" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+              <option value="web">Web</option>
+              <option value="image">Image</option>
+              <option value="video">Video</option>
+              <option value="news">News</option>
+              <option value="discover">Discover</option>
+              <option value="googleNews">Google News</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Rows</label>
+            <input type="number" id="gscRowLimit" value="1000" min="1" max="25000" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          </div>
+          <div>
+            <button id="gscRun" class="btn btn-primary" style="width:100%;padding:9px;border-radius:6px;background:var(--primary);color:#fff;border:none;cursor:pointer;font-weight:600">Fetch data</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap;align-items:center">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted)">
+            <input type="checkbox" id="gscFresh"> Include fresh (recent) data
+          </label>
+          <input type="text" id="gscFilter" placeholder="Filter rows in table…" style="flex:1;min-width:200px;padding:7px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          <button id="gscExport" class="btn btn-secondary" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export CSV</button>
+        </div>
+      </div>
+
+      <div id="gscTotals" style="display:none;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px"></div>
+
+      <div id="gscResults"></div>
+    </div>
+  `;
+
+  document.getElementById('gscLogout').addEventListener('click', gscLogout);
+  document.getElementById('gscRun').addEventListener('click', runGscQuery);
+  document.getElementById('gscExport').addEventListener('click', exportGscCsv);
+  document.getElementById('gscFilter').addEventListener('input', renderGscResults);
+  document.getElementById('gscSite').addEventListener('change', (e) => {
+    gscState.selectedSite = e.target.value;
+    localStorage.setItem('gsc-selected-site', gscState.selectedSite);
+  });
+}
+
+async function loadGscSites() {
+  const sel = document.getElementById('gscSite');
+  try {
+    const r = await fetch('/api/gsc/sites');
+    if (!r.ok) throw new Error((await r.json()).error || 'failed');
+    const { sites } = await r.json();
+    gscState.sites = sites || [];
+    if (!gscState.sites.length) {
+      sel.innerHTML = '<option value="">No properties found for this account</option>';
+      return;
+    }
+    sel.innerHTML = gscState.sites.map(s => {
+      const sel = s.siteUrl === gscState.selectedSite ? ' selected' : '';
+      return `<option value="${escapeHtml(s.siteUrl)}"${sel}>${escapeHtml(s.siteUrl)} (${escapeHtml(s.permissionLevel || '')})</option>`;
+    }).join('');
+    if (!gscState.selectedSite || !gscState.sites.some(s => s.siteUrl === gscState.selectedSite)) {
+      gscState.selectedSite = gscState.sites[0].siteUrl;
+      sel.value = gscState.selectedSite;
+      localStorage.setItem('gsc-selected-site', gscState.selectedSite);
+    }
+  } catch (e) {
+    sel.innerHTML = `<option value="">Error: ${escapeHtml(e.message)}</option>`;
+  }
+}
+
+async function gscLogout() {
+  if (!confirm('Disconnect this Google account from the SEO tool?')) return;
+  await fetch('/api/gsc/logout', { method: 'POST' });
+  loadGscView();
+}
+
+async function runGscQuery() {
+  const siteUrl = document.getElementById('gscSite').value;
+  const startDate = document.getElementById('gscStart').value;
+  const endDate = document.getElementById('gscEnd').value;
+  const dimensionsRaw = document.getElementById('gscDimension').value;
+  const dimensions = dimensionsRaw.split(',').map(s => s.trim()).filter(Boolean);
+  const searchType = document.getElementById('gscType').value;
+  const rowLimit = parseInt(document.getElementById('gscRowLimit').value) || 1000;
+  const dataState = document.getElementById('gscFresh').checked ? 'all' : 'final';
+
+  if (!siteUrl) { alert('Select a property first.'); return; }
+
+  const btn = document.getElementById('gscRun');
+  btn.disabled = true; btn.textContent = 'Loading…';
+  const results = document.getElementById('gscResults');
+  results.innerHTML = '<p style="color:var(--text-muted);padding:20px">Querying Google Search Console…</p>';
+
+  try {
+    const r = await fetch('/api/gsc/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteUrl, startDate, endDate, dimensions, rowLimit, searchType, dataState })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Query failed');
+    gscState.lastResult = { rows: data.rows || [], dimensions, siteUrl, startDate, endDate };
+    renderGscTotals();
+    renderGscResults();
+  } catch (e) {
+    results.innerHTML = `<div style="padding:20px;color:var(--danger)">${escapeHtml(e.message)}</div>`;
+    gscState.lastResult = null;
+    document.getElementById('gscTotals').style.display = 'none';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Fetch data';
+  }
+}
+
+function renderGscTotals() {
+  const totalsEl = document.getElementById('gscTotals');
+  if (!gscState.lastResult || !gscState.lastResult.rows.length) {
+    totalsEl.style.display = 'none';
+    return;
+  }
+  let clicks = 0, impressions = 0;
+  for (const row of gscState.lastResult.rows) {
+    clicks += row.clicks || 0;
+    impressions += row.impressions || 0;
+  }
+  const ctr = impressions ? (clicks / impressions) : 0;
+  const avgPos = gscState.lastResult.rows.reduce((a, r) => a + (r.position || 0), 0) / gscState.lastResult.rows.length;
+  const card = (label, value) => `
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:14px">
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">${label}</div>
+      <div style="font-size:22px;font-weight:700;margin-top:4px">${value}</div>
+    </div>`;
+  totalsEl.style.display = 'grid';
+  totalsEl.innerHTML =
+    card('Clicks', clicks.toLocaleString()) +
+    card('Impressions', impressions.toLocaleString()) +
+    card('CTR', (ctr * 100).toFixed(2) + '%') +
+    card('Avg. position', avgPos.toFixed(1));
+}
+
+function renderGscResults() {
+  const wrap = document.getElementById('gscResults');
+  if (!gscState.lastResult) { wrap.innerHTML = ''; return; }
+  const { rows, dimensions } = gscState.lastResult;
+  if (!rows.length) {
+    wrap.innerHTML = '<div style="padding:20px;color:var(--text-muted)">No rows returned for this query.</div>';
+    return;
+  }
+  const filter = (document.getElementById('gscFilter').value || '').toLowerCase();
+  const filtered = filter
+    ? rows.filter(r => (r.keys || []).some(k => String(k).toLowerCase().includes(filter)))
+    : rows;
+
+  const headers = [...dimensions, 'Clicks', 'Impressions', 'CTR', 'Position'];
+  const body = filtered.map(r => {
+    const keys = (r.keys || []).map(k => `<td>${escapeHtml(k)}</td>`).join('');
+    const ctr = ((r.ctr || 0) * 100).toFixed(2) + '%';
+    return `<tr>${keys}<td style="text-align:right">${(r.clicks || 0).toLocaleString()}</td><td style="text-align:right">${(r.impressions || 0).toLocaleString()}</td><td style="text-align:right">${ctr}</td><td style="text-align:right">${(r.position || 0).toFixed(1)}</td></tr>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <div class="table-container" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="background:var(--bg-hover)">
+            ${headers.map((h, i) => `<th style="padding:10px 12px;text-align:${i >= dimensions.length ? 'right' : 'left'};border-bottom:1px solid var(--border);font-weight:600">${escapeHtml(h)}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+    <div style="padding:10px 4px;color:var(--text-muted);font-size:12px">Showing ${filtered.length.toLocaleString()} of ${rows.length.toLocaleString()} rows.</div>
+  `;
+}
+
+function exportGscCsv() {
+  if (!gscState.lastResult || !gscState.lastResult.rows.length) {
+    alert('Run a query first.');
+    return;
+  }
+  const { rows, dimensions, siteUrl, startDate, endDate } = gscState.lastResult;
+  const headers = [...dimensions, 'clicks', 'impressions', 'ctr', 'position'];
+  const escape = (v) => {
+    const s = String(v == null ? '' : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    const keys = r.keys || [];
+    lines.push([...keys, r.clicks || 0, r.impressions || 0, r.ctr || 0, r.position || 0].map(escape).join(','));
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const safeHost = (siteUrl || 'gsc').replace(/[^a-z0-9]/gi, '_');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `gsc_${safeHost}_${startDate}_${endDate}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// If page loaded via OAuth redirect (#gsc), auto-open the tab.
+if (location.hash === '#gsc' || new URLSearchParams(location.search).get('gsc')) {
+  document.addEventListener('DOMContentLoaded', () => {
+    const link = document.querySelector('.nav-link[data-view="gsc"]');
+    if (link) link.click();
+  });
+}
