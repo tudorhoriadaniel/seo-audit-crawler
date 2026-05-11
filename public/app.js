@@ -2422,9 +2422,12 @@ async function loadGscView() {
   const params = new URLSearchParams(location.search);
   if (params.get('gsc') === 'error') {
     const reason = params.get('reason') || 'unknown error';
+    const friendly = reason === 'missing_scope_webmasters'
+      ? `You signed in but didn't grant Search Console access. Click <b>Sign in with Google</b> again and make sure the <b>"View Search Console data for your verified sites"</b> checkbox is ticked on Google's consent screen.`
+      : `Could not connect to Google: ${escapeHtml(reason)}`;
     container.insertAdjacentHTML('afterbegin',
       `<div style="background:rgba(220,38,38,.08);border:1px solid var(--danger);color:var(--danger);padding:12px 16px;border-radius:8px;margin-bottom:16px">
-         Could not connect to Google: ${escapeHtml(reason)}
+         ${friendly}
        </div>`);
     history.replaceState({}, '', location.pathname);
   } else if (params.get('gsc') === 'connected') {
@@ -2647,8 +2650,31 @@ async function loadGscSites() {
     // If we auto-matched the crawled site, fetch data straight away.
     if (matched) runGscQuery();
   } catch (e) {
-    sel.innerHTML = `<option value="">Error: ${escapeHtml(e.message)}</option>`;
+    sel.innerHTML = `<option value="">Error</option>`;
+    showGscApiError(e.message);
   }
+}
+
+function showGscApiError(message) {
+  const lower = String(message || '').toLowerCase();
+  const insufficient = lower.includes('insufficient') && lower.includes('scope');
+  const html = insufficient
+    ? `<div style="background:rgba(217,119,6,.08);border:1px solid var(--warning);color:var(--text);padding:14px 16px;border-radius:8px;margin-top:12px">
+         <div style="font-weight:600;margin-bottom:6px">Search Console access wasn't granted</div>
+         <div style="font-size:13px;color:var(--text-muted);margin-bottom:10px">
+           Your Google sign-in succeeded but the token doesn't include the <code>webmasters.readonly</code> scope.
+           Disconnect, sign in again, and tick the <b>"View Search Console data for your verified sites"</b> checkbox on Google's consent screen.
+         </div>
+         <button id="gscReconnect" class="btn btn-primary" style="padding:8px 16px;border-radius:6px;background:var(--primary);color:#fff;border:none;cursor:pointer;font-weight:600">Disconnect &amp; reconnect</button>
+       </div>`
+    : `<div style="background:rgba(220,38,38,.08);border:1px solid var(--danger);color:var(--danger);padding:12px 16px;border-radius:8px;margin-top:12px">${escapeHtml(message)}</div>`;
+  const totals = document.getElementById('gscTotals');
+  if (totals) totals.insertAdjacentHTML('beforebegin', html);
+  const btn = document.getElementById('gscReconnect');
+  if (btn) btn.addEventListener('click', async () => {
+    await fetch('/api/gsc/logout', { method: 'POST' });
+    location.href = '/api/gsc/auth/start';
+  });
 }
 
 function renderGscMatchBanner(host, matched) {
