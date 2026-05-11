@@ -9,6 +9,7 @@ const Analyzer = require('./lib/analyzer');
 const CrawlDatabase = require('./lib/database');
 const Exporter = require('./lib/exporter');
 const gsc = require('./lib/gsc');
+const contentAnalyzer = require('./lib/content-analyzer');
 
 const app = express();
 const server = http.createServer(app);
@@ -925,6 +926,21 @@ app.post('/api/gsc/query', async (req, res) => {
     res.json(data);
   } catch (e) {
     res.status(500).json({ error: e.response?.data?.error?.message || e.message });
+  }
+});
+
+// On-demand keyword coverage analysis. Pulls the page's live HTML and
+// counts where the given queries appear (title, H1, headings, body).
+// Used by the Content Strategy tab when a row is expanded.
+app.post('/api/content-analysis', async (req, res) => {
+  const { url, queries } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'url is required' });
+  if (!Array.isArray(queries)) return res.status(400).json({ error: 'queries must be an array' });
+  try {
+    const data = await contentAnalyzer.analyse(url, queries.slice(0, 100));
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
