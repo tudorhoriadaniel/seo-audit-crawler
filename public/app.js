@@ -3042,6 +3042,7 @@ function renderStrategyShell() {
             <input type="checkbox" id="csQuickWins" disabled> Quick wins only
           </label>
           <button id="csExport" class="btn btn-secondary" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export CSV</button>
+          <button id="csExportPpt" class="btn btn-secondary" title="One slide per opportunity, with action items based on the coverage gaps" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export PPT</button>
         </div>
         <div id="csAnalyseProgress" style="display:none;margin-top:8px;font-size:12px;color:var(--text-muted)"></div>
       </div>
@@ -3053,6 +3054,7 @@ function renderStrategyShell() {
 
   document.getElementById('csRun').addEventListener('click', runStrategyQuery);
   document.getElementById('csExport').addEventListener('click', exportStrategyCsv);
+  document.getElementById('csExportPpt').addEventListener('click', exportStrategyPpt);
   document.getElementById('csTextFilter').addEventListener('input', renderStrategyTable);
   document.getElementById('csAnalyse').addEventListener('click', analyseAllCoverage);
   document.getElementById('csQuickWins').addEventListener('change', renderStrategyTable);
@@ -3688,4 +3690,267 @@ function exportStrategyCsv() {
   a.download = `content-strategy_${safe}_${startDate}_${endDate}.csv`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ── PowerPoint export ─────────────────────────────────────────────────────
+// One slide per opportunity, plus a cover + summary. Auto-generates action
+// items per page based on the keyword-coverage gaps so the deck is ready
+// to present to a client.
+
+async function loadPptxLib() {
+  if (window.PptxGenJS) return;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js';
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Failed to load the PowerPoint library (network?). Try again in a moment.'));
+    document.head.appendChild(s);
+  });
+}
+
+function deriveActions(r) {
+  const actions = [];
+  const cov = r.coverage && Array.isArray(r.coverage.queries) ? r.coverage : null;
+  const crawl = r.crawl;
+
+  if (cov) {
+    const missing = cov.queries.filter(q => !q.presentSomewhere);
+    if (missing.length) {
+      const top = missing.slice(0, 5).map(q => q.query).join(', ');
+      actions.push(`Add a section covering: ${top}${missing.length > 5 ? ` (+${missing.length - 5} more)` : ''}.`);
+    }
+    const notInTitle = cov.queries.filter(q => !q.phrase.inTitle && q.presentSomewhere);
+    if (notInTitle.length) {
+      const top = notInTitle.slice(0, 2).map(q => q.query).join(' / ');
+      actions.push(`Rewrite the page title to include: ${top}.`);
+    }
+    const notInH1 = cov.queries.filter(q => !q.phrase.inH1 && !q.phrase.inHeadings && q.phrase.bodyOccurrences > 0);
+    if (notInH1.length) {
+      const top = notInH1.slice(0, 2).map(q => q.query).join(' / ');
+      actions.push(`Surface in an H1 or H2: ${top}.`);
+    }
+    if (cov.wordCount && cov.wordCount < 500) {
+      actions.push(`Page is thin (${cov.wordCount} words). Expand to 800–1200 words covering the queries above.`);
+    }
+  }
+  if (crawl && (!crawl.h1Count || crawl.h1Count === 0)) {
+    actions.push('Page has no H1 heading — add one that contains the main query.');
+  } else if (crawl && crawl.h1Count > 1) {
+    actions.push(`Page has ${crawl.h1Count} H1s — keep a single H1.`);
+  }
+  if (crawl && crawl.titleLength && (crawl.titleLength < 30 || crawl.titleLength > 65)) {
+    actions.push(`Title length (${crawl.titleLength} ch) is outside the 30–60 sweet spot — rewrite it.`);
+  }
+  if (r.band.id === 'push' || r.band.id === 'striking') {
+    actions.push('Boost internal links from related pages using the target keywords as anchor text.');
+  }
+  if (!actions.length) {
+    actions.push('Refresh content, expand topical coverage, and strengthen internal linking with target-keyword anchors.');
+  }
+  return actions;
+}
+
+async function exportStrategyPpt() {
+  if (!csState.rows.length) { alert('Run a query first.'); return; }
+  const bands = activeBandIds();
+  const textFilter = (document.getElementById('csTextFilter').value || '').toLowerCase();
+  const quickWinsOnly = !!document.getElementById('csQuickWins')?.checked;
+  const rows = csState.rows.filter(r =>
+    bands.has(r.band.id) &&
+    (!textFilter || r.page.toLowerCase().includes(textFilter)) &&
+    (!quickWinsOnly || r.isQuickWin === true)
+  );
+  if (!rows.length) { alert('No opportunities match the current filters.'); return; }
+  if (rows.length > 60 && !confirm(`This will create ${rows.length + 2} slides — that can take a minute. Continue?`)) return;
+
+  const btn = document.getElementById('csExportPpt');
+  btn.disabled = true;
+  const originalLabel = btn.textContent;
+  btn.textContent = 'Loading…';
+  try {
+    await loadPptxLib();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = originalLabel;
+    alert(e.message);
+    return;
+  }
+  btn.textContent = 'Building deck…';
+
+  const siteUrl = document.getElementById('csSite').value || 'site';
+  const startDate = document.getElementById('csStart').value;
+  const endDate = document.getElementById('csEnd').value;
+
+  const pptx = new window.PptxGenJS();
+  pptx.layout = 'LAYOUT_WIDE';                  // 13.333 × 7.5 in
+  pptx.author = 'Converta SEO';
+  pptx.company = 'Converta';
+  pptx.title = `Content Strategy — ${siteUrl}`;
+
+  const COLORS = {
+    bg: 'FFFFFF', text: '1A1D2E', muted: '6B7085', border: 'D1D5E0',
+    primary: '6366F1', success: '16A34A', warning: 'D97706', danger: 'DC2626'
+  };
+  const bandColor = (b) => ({ push: '16A34A', striking: '2563EB', page2: '6366F1', deep: 'D97706', deeper: 'DC2626' }[b.id] || '6366F1');
+
+  // ── Cover slide ────────────────────────────────────────────────────────
+  const cover = pptx.addSlide();
+  cover.background = { color: COLORS.bg };
+  cover.addText('Content Strategy', { x: 0.6, y: 0.7, w: 12, h: 1.0, fontSize: 40, bold: true, color: COLORS.text });
+  cover.addText(`${siteUrl}`, { x: 0.6, y: 1.7, w: 12, h: 0.45, fontSize: 20, color: COLORS.primary });
+  cover.addText(`Search Console data — ${startDate} → ${endDate}`, { x: 0.6, y: 2.15, w: 12, h: 0.4, fontSize: 14, color: COLORS.muted });
+
+  // Headline KPIs
+  const totalImpr = rows.reduce((s, r) => s + r.impressions, 0);
+  const totalPot = Math.round(rows.reduce((s, r) => s + r.potentialClicks, 0));
+  const analysed = rows.filter(r => r.coverage && Array.isArray(r.coverage.queries)).length;
+  const quickWins = rows.filter(r => r.isQuickWin === true).length;
+  const kpis = [
+    { label: 'Opportunities', value: rows.length.toLocaleString() },
+    { label: 'Total impressions', value: totalImpr.toLocaleString() },
+    { label: 'Estimated extra clicks', value: '+' + totalPot.toLocaleString() },
+    { label: analysed ? 'Quick wins' : 'Pages analysed', value: analysed ? quickWins.toLocaleString() : '0' }
+  ];
+  kpis.forEach((k, i) => {
+    const x = 0.6 + i * 3.15;
+    cover.addShape(pptx.ShapeType.rect, { x, y: 3.2, w: 2.95, h: 1.4, fill: { color: 'F5F6FA' }, line: { color: COLORS.border, width: 0.5 } });
+    cover.addText(k.label, { x: x + 0.15, y: 3.3, w: 2.7, h: 0.4, fontSize: 11, color: COLORS.muted, bold: true });
+    cover.addText(k.value, { x: x + 0.15, y: 3.7, w: 2.7, h: 0.8, fontSize: 28, bold: true, color: COLORS.text });
+  });
+  cover.addText('Prepared by Converta · seo.converta.ro', { x: 0.6, y: 6.9, w: 12, h: 0.4, fontSize: 10, color: COLORS.muted });
+
+  // ── Summary slide: breakdown by band ───────────────────────────────────
+  const summary = pptx.addSlide();
+  summary.background = { color: COLORS.bg };
+  summary.addText('Opportunities by band', { x: 0.6, y: 0.5, w: 12, h: 0.6, fontSize: 24, bold: true, color: COLORS.text });
+  summary.addText('Each band groups pages by their current Google rank. Lower bands = easier wins.', { x: 0.6, y: 1.1, w: 12, h: 0.4, fontSize: 12, color: COLORS.muted });
+
+  STRATEGY_BANDS.forEach((band, idx) => {
+    const inBand = rows.filter(r => r.band.id === band.id);
+    const impr = inBand.reduce((s, r) => s + r.impressions, 0);
+    const pot = Math.round(inBand.reduce((s, r) => s + r.potentialClicks, 0));
+    const y = 1.7 + idx * 1.05;
+    summary.addShape(pptx.ShapeType.rect, { x: 0.6, y, w: 12.1, h: 0.85, fill: { color: 'F5F6FA' }, line: { color: COLORS.border, width: 0.5 } });
+    summary.addShape(pptx.ShapeType.rect, { x: 0.6, y, w: 0.18, h: 0.85, fill: { color: bandColor(band) }, line: { type: 'none' } });
+    summary.addText(band.label, { x: 0.95, y: y + 0.05, w: 3.5, h: 0.4, fontSize: 16, bold: true, color: COLORS.text });
+    summary.addText(`Positions ${band.min === 1.5 ? 2 : Math.ceil(band.min)}–${Math.floor(band.max)} · target rank ${band.target}`, { x: 0.95, y: y + 0.45, w: 3.5, h: 0.3, fontSize: 11, color: COLORS.muted });
+    summary.addText(`${inBand.length}`, { x: 4.7, y: y + 0.15, w: 1.5, h: 0.55, fontSize: 22, bold: true, color: COLORS.text, align: 'center' });
+    summary.addText('opportunities', { x: 4.7, y: y + 0.55, w: 1.5, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'center' });
+    summary.addText(impr.toLocaleString(), { x: 6.4, y: y + 0.15, w: 2.5, h: 0.55, fontSize: 22, bold: true, color: COLORS.text, align: 'center' });
+    summary.addText('impressions', { x: 6.4, y: y + 0.55, w: 2.5, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'center' });
+    summary.addText('+' + pot.toLocaleString(), { x: 9.1, y: y + 0.15, w: 3.4, h: 0.55, fontSize: 22, bold: true, color: COLORS.primary, align: 'center' });
+    summary.addText(`estimated extra clicks at rank ${band.target}`, { x: 9.1, y: y + 0.55, w: 3.4, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'center' });
+  });
+
+  // ── Per-opportunity slides ─────────────────────────────────────────────
+  for (let idx = 0; idx < rows.length; idx++) {
+    const r = rows[idx];
+    const s = pptx.addSlide();
+    s.background = { color: COLORS.bg };
+    const bc = bandColor(r.band);
+
+    // Header bar
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.55, fill: { color: bc }, line: { type: 'none' } });
+    s.addText(`${idx + 1}/${rows.length}  ·  ${r.band.label}  ·  position ${r.position.toFixed(1)}`, { x: 0.6, y: 0.08, w: 8, h: 0.4, fontSize: 13, color: 'FFFFFF', bold: true });
+    if (r.isQuickWin) {
+      s.addShape(pptx.ShapeType.roundRect, { x: 11.6, y: 0.08, w: 1.45, h: 0.38, fill: { color: 'FFFFFF' }, line: { type: 'none' }, rectRadius: 0.18 });
+      s.addText('⚡ Quick win', { x: 11.6, y: 0.08, w: 1.45, h: 0.38, fontSize: 11, color: bc, bold: true, align: 'center' });
+    }
+
+    // Page URL (clickable) + crawl info
+    const truncatedUrl = r.page.length > 95 ? r.page.slice(0, 92) + '…' : r.page;
+    s.addText(truncatedUrl, { x: 0.6, y: 0.7, w: 12, h: 0.5, fontSize: 16, bold: true, color: COLORS.text, hyperlink: { url: r.page } });
+    if (r.crawl && r.crawl.title) {
+      s.addText(`${r.crawl.title}`, { x: 0.6, y: 1.18, w: 12, h: 0.32, fontSize: 11, color: COLORS.muted, italic: true });
+    }
+
+    // Metric tiles
+    const metrics = [
+      { label: 'Impressions', value: r.impressions.toLocaleString() },
+      { label: 'Clicks', value: r.clicks.toLocaleString() },
+      { label: 'CTR', value: (r.ctr * 100).toFixed(2) + '%' },
+      { label: `Potential @ rank ${r.targetPos}`, value: '+' + Math.round(r.potentialClicks).toLocaleString(), highlight: true }
+    ];
+    metrics.forEach((m, i) => {
+      const x = 0.6 + i * 3.15;
+      s.addShape(pptx.ShapeType.rect, { x, y: 1.6, w: 2.95, h: 1.0, fill: { color: m.highlight ? 'EEF0F6' : 'F5F6FA' }, line: { color: COLORS.border, width: 0.5 } });
+      s.addText(m.label, { x: x + 0.12, y: 1.68, w: 2.7, h: 0.3, fontSize: 10, color: COLORS.muted, bold: true });
+      s.addText(m.value, { x: x + 0.12, y: 1.98, w: 2.7, h: 0.55, fontSize: 22, bold: true, color: m.highlight ? COLORS.primary : COLORS.text });
+    });
+
+    // Top queries table (up to 10 by impressions)
+    const topQ = Array.isArray(r.topQueries) ? r.topQueries.slice(0, 10) : [];
+    const coverageByQuery = {};
+    if (r.coverage && Array.isArray(r.coverage.queries)) {
+      for (const q of r.coverage.queries) coverageByQuery[q.query] = q;
+    }
+    const headerRow = [
+      { text: 'Query',       options: { bold: true, fill: { color: 'F5F6FA' } } },
+      { text: 'Impressions', options: { bold: true, fill: { color: 'F5F6FA' }, align: 'right' } },
+      { text: 'Clicks',      options: { bold: true, fill: { color: 'F5F6FA' }, align: 'right' } },
+      { text: 'Position',    options: { bold: true, fill: { color: 'F5F6FA' }, align: 'right' } },
+      { text: 'In page?',    options: { bold: true, fill: { color: 'F5F6FA' } } }
+    ];
+    const queryRows = topQ.map(q => {
+      const c = coverageByQuery[q.query];
+      let where, whereColor = COLORS.muted;
+      if (c) {
+        if (!c.presentSomewhere) { where = 'missing'; whereColor = COLORS.danger; }
+        else {
+          const parts = [];
+          if (c.phrase.inTitle) parts.push('title');
+          if (c.phrase.inH1) parts.push('H1');
+          if (c.phrase.inHeadings) parts.push('Hn');
+          if (c.phrase.bodyOccurrences > 0) parts.push(`body ${c.phrase.bodyOccurrences}×`);
+          where = parts.join(' · ');
+          whereColor = COLORS.success;
+        }
+      } else {
+        where = r.coverage ? '(error)' : '(not analysed)';
+      }
+      return [
+        { text: q.query, options: { fontSize: 10 } },
+        { text: q.impressions.toLocaleString(), options: { fontSize: 10, align: 'right' } },
+        { text: q.clicks.toLocaleString(), options: { fontSize: 10, align: 'right' } },
+        { text: q.position.toFixed(1), options: { fontSize: 10, align: 'right' } },
+        { text: where, options: { fontSize: 10, color: whereColor, bold: !c || !c.presentSomewhere ? true : false } }
+      ];
+    });
+    if (queryRows.length) {
+      s.addTable([headerRow, ...queryRows], {
+        x: 0.6, y: 2.8, w: 7.8, colW: [3.0, 1.3, 1.0, 1.0, 1.5],
+        fontFace: 'Calibri', fontSize: 10, color: COLORS.text,
+        border: { type: 'solid', color: COLORS.border, pt: 0.5 },
+        rowH: 0.28
+      });
+    } else {
+      s.addText('No query data fetched for this page yet — expand the row in the tool first.',
+        { x: 0.6, y: 2.8, w: 7.8, h: 0.5, fontSize: 11, italic: true, color: COLORS.muted });
+    }
+
+    // Action items panel (right side)
+    s.addShape(pptx.ShapeType.rect, { x: 8.7, y: 2.8, w: 4.0, h: 4.0, fill: { color: 'F5F6FA' }, line: { color: COLORS.border, width: 0.5 } });
+    s.addText('Action items', { x: 8.85, y: 2.9, w: 3.8, h: 0.35, fontSize: 14, bold: true, color: COLORS.text });
+    const actions = deriveActions(r);
+    const bullets = actions.map(a => ({ text: a, options: { bullet: { code: '25CF' }, breakLine: true } }));
+    s.addText(bullets, { x: 8.85, y: 3.3, w: 3.8, h: 3.4, fontSize: 11, color: COLORS.text, paraSpaceAfter: 6 });
+
+    // Coverage chip strip (below the queries table)
+    if (r.coverage && Array.isArray(r.coverage.queries)) {
+      const cov = r.coverage;
+      const inT = cov.queries.filter(q => q.phrase.inTitle).length;
+      const inH1 = cov.queries.filter(q => q.phrase.inH1).length;
+      const inB = cov.queries.filter(q => q.phrase.bodyOccurrences > 0).length;
+      const total = cov.queries.length;
+      const txt = `Live page: ${cov.wordCount.toLocaleString()} words · ${inT}/${total} queries in title · ${inH1}/${total} in H1 · ${inB}/${total} in body`;
+      s.addText(txt, { x: 0.6, y: 6.6, w: 7.8, h: 0.35, fontSize: 11, color: COLORS.muted, italic: true });
+    }
+
+    // Footer
+    s.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.6, y: 7.05, w: 12.1, h: 0.3, fontSize: 9, color: COLORS.muted });
+  }
+
+  const safe = siteUrl.replace(/[^a-z0-9]/gi, '_');
+  await pptx.writeFile({ fileName: `content-strategy_${safe}_${startDate}_${endDate}.pptx` });
+
+  btn.disabled = false; btn.textContent = originalLabel;
 }
