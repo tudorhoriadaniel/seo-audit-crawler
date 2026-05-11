@@ -66,9 +66,15 @@ app.get('/logout', (req, res) => {
   res.redirect('/login');
 });
 
-// Auth middleware — protect everything except /login and /api/health
+// Auth middleware — protect everything except /login, /api/health, and the
+// GSC OAuth callback (Google's redirect back loses the SameSite=Strict cookie;
+// the random `state` param provides CSRF protection on that route).
 app.use((req, res, next) => {
-  if (req.path === '/login' || req.path === '/api/health') return next();
+  if (
+    req.path === '/login' ||
+    req.path === '/api/health' ||
+    req.path === '/api/gsc/oauth/callback'
+  ) return next();
   const cookies = cookieParser(req);
   if (cookies.seo_auth === '1') return next();
   // For API calls return 401, for pages redirect to login
