@@ -72,6 +72,11 @@ $('#urlInput').addEventListener('change', () => {
     const saved = localStorage.getItem('seo-save-' + u.hostname);
     $('#optSaveProject').checked = saved === '1';
   } catch { /* ignore */ }
+  // If the GSC tab is currently visible, re-evaluate which property matches.
+  const gscView = document.getElementById('view-gsc');
+  if (gscView && gscView.classList.contains('active') && typeof loadGscView === 'function') {
+    loadGscView();
+  }
 });
 
 // ── Start Crawl ──
@@ -2561,6 +2566,52 @@ function renderGscConnectedShell() {
   });
 }
 
+// Returns the hostname of the site currently being crawled / queued in the
+// top URL bar — or null. Used to auto-pick the matching GSC property.
+function getCurrentSiteHost() {
+  let raw = (document.getElementById('urlInput') || {}).value || '';
+  raw = raw.trim();
+  if (!raw && analysisData && analysisData.startUrl) raw = analysisData.startUrl;
+  if (!raw) return null;
+  try {
+    if (!/^https?:\/\//i.test(raw)) raw = 'https://' + raw;
+    return new URL(raw).hostname.replace(/^www\./, '').toLowerCase();
+  } catch { return null; }
+}
+
+// Score how well a GSC property matches a host. Higher = better.
+// Handles `sc-domain:example.com` and URL-prefix properties like
+// `https://example.com/` / `https://www.example.com/` / subpaths.
+function scoreGscMatch(siteUrl, host) {
+  if (!host) return 0;
+  const s = String(siteUrl);
+  if (s.startsWith('sc-domain:')) {
+    const d = s.slice('sc-domain:'.length).toLowerCase();
+    if (d === host) return 100;
+    if (host.endsWith('.' + d)) return 80;
+    if (d.endsWith('.' + host)) return 60;
+    return 0;
+  }
+  try {
+    const u = new URL(s);
+    const h = u.hostname.replace(/^www\./, '').toLowerCase();
+    if (h === host) return 90;
+    if (host.endsWith('.' + h)) return 70;
+    if (h.endsWith('.' + host)) return 50;
+  } catch { /* ignore */ }
+  return 0;
+}
+
+function findMatchingGscSite(sites, host) {
+  if (!sites || !sites.length || !host) return null;
+  let best = null, bestScore = 0;
+  for (const s of sites) {
+    const score = scoreGscMatch(s.siteUrl, host);
+    if (score > bestScore) { best = s; bestScore = score; }
+  }
+  return bestScore > 0 ? best : null;
+}
+
 async function loadGscSites() {
   const sel = document.getElementById('gscSite');
   try {
@@ -2570,19 +2621,48 @@ async function loadGscSites() {
     gscState.sites = sites || [];
     if (!gscState.sites.length) {
       sel.innerHTML = '<option value="">No properties found for this account</option>';
+      renderGscMatchBanner(null, null);
       return;
     }
-    sel.innerHTML = gscState.sites.map(s => {
-      const sel = s.siteUrl === gscState.selectedSite ? ' selected' : '';
-      return `<option value="${escapeHtml(s.siteUrl)}"${sel}>${escapeHtml(s.siteUrl)} (${escapeHtml(s.permissionLevel || '')})</option>`;
-    }).join('');
-    if (!gscState.selectedSite || !gscState.sites.some(s => s.siteUrl === gscState.selectedSite)) {
-      gscState.selectedSite = gscState.sites[0].siteUrl;
-      sel.value = gscState.selectedSite;
-      localStorage.setItem('gsc-selected-site', gscState.selectedSite);
+
+    const host = getCurrentSiteHost();
+    const matched = findMatchingGscSite(gscState.sites, host);
+    // Prefer the auto-matched property; otherwise fall back to the
+    // previously-selected one; otherwise the first site.
+    let target = gscState.selectedSite;
+    if (matched) target = matched.siteUrl;
+    if (!target || !gscState.sites.some(s => s.siteUrl === target)) {
+      target = gscState.sites[0].siteUrl;
     }
+    gscState.selectedSite = target;
+    localStorage.setItem('gsc-selected-site', target);
+
+    sel.innerHTML = gscState.sites.map(s => {
+      const isSel = s.siteUrl === target ? ' selected' : '';
+      return `<option value="${escapeHtml(s.siteUrl)}"${isSel}>${escapeHtml(s.siteUrl)} (${escapeHtml(s.permissionLevel || '')})</option>`;
+    }).join('');
+
+    renderGscMatchBanner(host, matched);
+
+    // If we auto-matched the crawled site, fetch data straight away.
+    if (matched) runGscQuery();
   } catch (e) {
     sel.innerHTML = `<option value="">Error: ${escapeHtml(e.message)}</option>`;
+  }
+}
+
+function renderGscMatchBanner(host, matched) {
+  const id = 'gscMatchBanner';
+  let el = document.getElementById(id);
+  if (!host) { if (el) el.remove(); return; }
+  const msg = matched
+    ? `Showing data for <b>${escapeHtml(matched.siteUrl)}</b> — auto-matched from <b>${escapeHtml(host)}</b> in the URL bar.`
+    : `<b>${escapeHtml(host)}</b> is in the URL bar but no matching Search Console property was found in your account. You can pick one manually above.`;
+  const html = `<div id="${id}" style="background:${matched ? 'rgba(99,102,241,.08)' : 'rgba(217,119,6,.08)'};border:1px solid ${matched ? 'var(--primary)' : 'var(--warning)'};color:var(--text);padding:10px 14px;border-radius:8px;font-size:13px">${msg}</div>`;
+  if (el) { el.outerHTML = html; }
+  else {
+    const totals = document.getElementById('gscTotals');
+    if (totals) totals.insertAdjacentHTML('beforebegin', html);
   }
 }
 
