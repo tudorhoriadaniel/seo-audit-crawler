@@ -2917,7 +2917,8 @@ const csState = {
   selectedSite: localStorage.getItem('gsc-selected-site') || '',
   rows: [],         // enriched rows for the table
   expanded: new Set(),
-  crawlPages: null  // URL → { title, h1Count, wordCount } from active crawl
+  crawlPages: null, // URL → { title, h1Count, wordCount } from active crawl
+  querySort: { key: 'impressions', dir: 'desc' }   // sort for the per-page queries table
 };
 
 async function loadStrategyView() {
@@ -3482,9 +3483,33 @@ function renderStrategyQueriesFor(page) {
     for (const q of cov.queries) coverageByQuery[q.query] = q;
   }
 
+  // Where-score: 0–4, number of sections (title/H1/Hn/body) the phrase appears in.
+  const whereScore = (c) => c ? ((c.phrase.inTitle?1:0) + (c.phrase.inH1?1:0) + (c.phrase.inHeadings?1:0) + (c.phrase.bodyOccurrences>0?1:0)) : -1;
+  const valueFor = (q, key) => {
+    const c = coverageByQuery[q.query];
+    switch (key) {
+      case 'query':       return (q.query || '').toLowerCase();
+      case 'impressions': return q.impressions || 0;
+      case 'clicks':      return q.clicks || 0;
+      case 'ctr':         return q.ctr || 0;
+      case 'position':    return q.position || 0;
+      case 'inBody':      return c ? (c.phrase.bodyOccurrences || 0) : -1;
+      case 'density':     return c ? (c.density || 0) : -1;
+      case 'where':       return whereScore(c);
+      default:            return 0;
+    }
+  };
+  const { key: sortKey, dir: sortDir } = csState.querySort;
+  const sortedQueries = row.topQueries.slice().sort((a, b) => {
+    const va = valueFor(a, sortKey), vb = valueFor(b, sortKey);
+    if (va < vb) return sortDir === 'asc' ? -1 : 1;
+    if (va > vb) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
   const yesPill = (ok, label) => `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:600;background:${ok ? 'rgba(22,163,74,.15)' : 'rgba(220,38,38,.12)'};color:${ok ? 'var(--success)' : 'var(--danger)'}">${ok ? '✓' : '✗'} ${label}</span>`;
 
-  const rows = row.topQueries.map(q => {
+  const rows = sortedQueries.map(q => {
     const c = coverageByQuery[q.query];
     let badges = '';
     let bodyCount = '';
@@ -3558,6 +3583,9 @@ function renderStrategyQueriesFor(page) {
       </div>`;
   }
 
+  const arrow = (k) => sortKey === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+  const th = (k, label, align) => `<th data-sort="${k}" data-page="${escapeHtml(row.page)}" style="padding:6px 10px;text-align:${align};cursor:pointer;user-select:none${sortKey === k ? ';color:var(--primary)' : ''}">${escapeHtml(label)}${arrow(k)}</th>`;
+
   target.innerHTML = `
     ${crawlBlock}
     ${coverageBlock}
@@ -3565,19 +3593,37 @@ function renderStrategyQueriesFor(page) {
     <div style="overflow:auto;border:1px solid var(--border);border-radius:6px;background:var(--bg-card)">
       <table style="width:100%;border-collapse:collapse;font-size:12px">
         <thead><tr style="background:var(--bg-hover)">
-          <th style="padding:6px 10px;text-align:left">Query</th>
-          <th style="padding:6px 10px;text-align:right">Impressions</th>
-          <th style="padding:6px 10px;text-align:right">Clicks</th>
-          <th style="padding:6px 10px;text-align:right">CTR</th>
-          <th style="padding:6px 10px;text-align:right">Position</th>
-          <th style="padding:6px 10px;text-align:right">In body</th>
-          <th style="padding:6px 10px;text-align:right">Density</th>
-          <th style="padding:6px 10px;text-align:left">Where</th>
+          ${th('query', 'Query', 'left')}
+          ${th('impressions', 'Impressions', 'right')}
+          ${th('clicks', 'Clicks', 'right')}
+          ${th('ctr', 'CTR', 'right')}
+          ${th('position', 'Position', 'right')}
+          ${th('inBody', 'In body', 'right')}
+          ${th('density', 'Density', 'right')}
+          ${th('where', 'Where', 'left')}
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
   `;
+
+  // Wire click-to-sort on the header cells of this expansion only.
+  target.querySelectorAll('th[data-sort]').forEach(thEl => {
+    thEl.addEventListener('click', () => {
+      const key = thEl.dataset.sort;
+      // String columns default to asc; numeric columns default to desc.
+      const numericDefaultDesc = key !== 'query';
+      if (csState.querySort.key === key) {
+        csState.querySort.dir = csState.querySort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        csState.querySort.key = key;
+        csState.querySort.dir = numericDefaultDesc ? 'desc' : 'asc';
+      }
+      // Re-render every currently expanded row's queries table so the
+      // sort is consistent across the page.
+      for (const p of csState.expanded) renderStrategyQueriesFor(p);
+    });
+  });
 }
 
 function exportStrategyCsv() {
