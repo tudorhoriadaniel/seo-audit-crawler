@@ -45,6 +45,7 @@ $$('.nav-link').forEach(link => {
     // Load saved projects when navigating to that view
     if (view === 'saved-projects') loadSavedProjects();
     if (view === 'gsc') loadGscView();
+    if (view === 'strategy') loadStrategyView();
   });
 });
 
@@ -2501,6 +2502,7 @@ function renderGscConnectedShell() {
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;align-items:end">
           <div>
             <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Property</label>
+            <input type="text" id="gscSiteFilter" placeholder="Filter properties…" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:6px;font-size:13px">
             <select id="gscSite" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)"><option value="">Loading sites…</option></select>
           </div>
           <div>
@@ -2566,6 +2568,28 @@ function renderGscConnectedShell() {
   document.getElementById('gscSite').addEventListener('change', (e) => {
     gscState.selectedSite = e.target.value;
     localStorage.setItem('gsc-selected-site', gscState.selectedSite);
+  });
+  wireSelectFilter('gscSiteFilter', 'gscSite');
+}
+
+// Generic helper: filter the visible <option>s of a <select> from a text input.
+function wireSelectFilter(filterInputId, selectId) {
+  const input = document.getElementById(filterInputId);
+  const sel = document.getElementById(selectId);
+  if (!input || !sel) return;
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    let firstVisible = null;
+    for (const opt of sel.options) {
+      const match = !q || opt.textContent.toLowerCase().includes(q);
+      opt.hidden = !match;
+      if (match && !firstVisible) firstVisible = opt;
+    }
+    // If the current selection is hidden by the filter, move to first match.
+    if (sel.selectedOptions[0] && sel.selectedOptions[0].hidden && firstVisible) {
+      sel.value = firstVisible.value;
+      sel.dispatchEvent(new Event('change'));
+    }
   });
 }
 
@@ -2852,3 +2876,519 @@ if (location.hash === '#gsc' || new URLSearchParams(location.search).get('gsc'))
     }
   } catch { /* ignore — user can re-crawl */ }
 })();
+
+// ── Content Strategy tab ─────────────────────────────────────────────────
+// Opportunity bands: pages outside position 1 grouped by current ranking.
+// targetPos is the rank we estimate the page could realistically reach with
+// content/internal-linking work — used to compute potential-clicks uplift.
+const STRATEGY_BANDS = [
+  { id: 'push',     label: 'Push to #1',         min: 1.5,  max: 3.5,  target: 1,  color: '#16a34a' },
+  { id: 'striking', label: 'Striking distance',  min: 3.5,  max: 10.5, target: 3,  color: '#2563eb' },
+  { id: 'page2',    label: 'Page 2',             min: 10.5, max: 20.5, target: 5,  color: '#6366f1' },
+  { id: 'deep',     label: 'Hidden volume',      min: 20.5, max: 30.5, target: 10, color: '#d97706' },
+  { id: 'deeper',   label: 'Deep but searched',  min: 30.5, max: 40.5, target: 10, color: '#dc2626' }
+];
+
+// Rough CTR-by-position curve (averaged from public studies — Advanced Web
+// Ranking / Sistrix / Backlinko 2023). Good enough for uplift estimation.
+const CTR_BY_POS = {
+  1: 0.30, 2: 0.16, 3: 0.10, 4: 0.07, 5: 0.05,
+  6: 0.04, 7: 0.03, 8: 0.025, 9: 0.022, 10: 0.020,
+  11: 0.012, 12: 0.011, 13: 0.010, 14: 0.009, 15: 0.009,
+  16: 0.008, 17: 0.008, 18: 0.007, 19: 0.007, 20: 0.007,
+  21: 0.006, 22: 0.005, 23: 0.005, 24: 0.005, 25: 0.005,
+  26: 0.004, 27: 0.004, 28: 0.004, 29: 0.004, 30: 0.004,
+  31: 0.003, 32: 0.003, 33: 0.003, 34: 0.003, 35: 0.003,
+  36: 0.002, 37: 0.002, 38: 0.002, 39: 0.002, 40: 0.002
+};
+
+function ctrAtPosition(p) {
+  if (p == null) return 0;
+  const rounded = Math.max(1, Math.min(40, Math.round(p)));
+  return CTR_BY_POS[rounded] ?? 0.001;
+}
+
+function bandForPosition(p) {
+  return STRATEGY_BANDS.find(b => p >= b.min && p < b.max) || null;
+}
+
+const csState = {
+  sites: [],
+  selectedSite: localStorage.getItem('gsc-selected-site') || '',
+  rows: [],         // enriched rows for the table
+  expanded: new Set(),
+  crawlPages: null  // URL → { title, h1Count, wordCount } from active crawl
+};
+
+async function loadStrategyView() {
+  const container = document.getElementById('strategyContent');
+  container.innerHTML = '<p style="color:var(--text-muted);padding:20px">Loading…</p>';
+
+  let status;
+  try {
+    const r = await fetch('/api/gsc/status');
+    status = await r.json();
+  } catch (e) {
+    container.innerHTML = `<div style="padding:20px;color:var(--danger)">Failed to load GSC status: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  if (!status.configured || !status.connected) {
+    container.innerHTML = `
+      <div style="padding:40px;text-align:center;max-width:520px;margin:0 auto">
+        <div style="font-size:48px;margin-bottom:12px">📈</div>
+        <h3 style="margin-bottom:8px">Content Strategy needs Search Console</h3>
+        <p style="color:var(--text-muted);margin-bottom:20px">
+          This tab finds pages that already get search impressions but rank below position 1.
+          Connect Google Search Console first.
+        </p>
+        <a href="#" class="btn btn-primary" id="strategyGoToGsc" style="display:inline-block;padding:10px 22px;border-radius:8px;background:var(--primary);color:#fff;text-decoration:none;font-weight:600">Open Search Console tab</a>
+      </div>`;
+    document.getElementById('strategyGoToGsc').addEventListener('click', (e) => {
+      e.preventDefault();
+      document.querySelector('.nav-link[data-view="gsc"]').click();
+    });
+    return;
+  }
+
+  renderStrategyShell();
+  await Promise.all([loadStrategySites(), loadStrategyCrawlPages()]);
+}
+
+// Build a URL → crawl-metadata lookup if there's a completed crawl loaded.
+async function loadStrategyCrawlPages() {
+  csState.crawlPages = null;
+  if (!currentCrawlId) return;
+  try {
+    const r = await fetch(`/api/crawls/${currentCrawlId}/pages?limit=10000`);
+    if (!r.ok) return;
+    const pages = await r.json();
+    const map = new Map();
+    for (const p of pages || []) {
+      const norm = normaliseUrlForJoin(p.url);
+      if (norm) map.set(norm, {
+        title: p.title || '',
+        titleLength: p.title_length || 0,
+        h1Count: p.h1_count || 0,
+        wordCount: p.word_count || 0,
+        statusCode: p.status_code || 0
+      });
+      const finalNorm = normaliseUrlForJoin(p.final_url);
+      if (finalNorm && finalNorm !== norm) map.set(finalNorm, map.get(norm));
+    }
+    csState.crawlPages = map;
+  } catch { /* ignore */ }
+}
+
+function normaliseUrlForJoin(u) {
+  if (!u) return null;
+  try {
+    const url = new URL(u);
+    let path = url.pathname.replace(/\/+$/, '') || '/';
+    return (url.protocol + '//' + url.host.replace(/^www\./, '') + path).toLowerCase();
+  } catch { return null; }
+}
+
+function renderStrategyShell() {
+  const today = gscDateNDaysAgo(2);
+  const start = gscDateNDaysAgo(28);
+  const bandCheckboxes = STRATEGY_BANDS.map(b => `
+    <label style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--border);border-radius:999px;background:var(--bg-input);font-size:12px;cursor:pointer">
+      <input type="checkbox" class="strategy-band" data-band="${b.id}" checked> <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${b.color}"></span> ${escapeHtml(b.label)} <span style="color:var(--text-muted)">(${b.min === 1.5 ? 2 : Math.ceil(b.min)}–${Math.floor(b.max)})</span>
+    </label>`).join('');
+
+  document.getElementById('strategyContent').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr;gap:16px;padding:20px">
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;align-items:end">
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Property</label>
+            <input type="text" id="csSiteFilter" placeholder="Filter properties…" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:6px;font-size:13px">
+            <select id="csSite" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)"><option value="">Loading sites…</option></select>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Start date</label>
+            <input type="date" id="csStart" value="${start}" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">End date</label>
+            <input type="date" id="csEnd" value="${today}" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Search type</label>
+            <select id="csType" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+              <option value="web">Web</option><option value="image">Image</option>
+              <option value="video">Video</option><option value="news">News</option>
+              <option value="discover">Discover</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Min impressions</label>
+            <input type="number" id="csMinImpressions" value="100" min="0" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          </div>
+          <div>
+            <button id="csRun" class="btn btn-primary" style="width:100%;padding:9px;border-radius:6px;background:var(--primary);color:#fff;border:none;cursor:pointer;font-weight:600">Find opportunities</button>
+          </div>
+        </div>
+        <div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <span style="font-size:12px;color:var(--text-muted);margin-right:4px">Bands:</span>
+          ${bandCheckboxes}
+        </div>
+        <div style="display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;align-items:center">
+          <input type="text" id="csTextFilter" placeholder="Filter rows (URL or query)…" style="flex:1;min-width:200px;padding:7px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          <button id="csExport" class="btn btn-secondary" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export CSV</button>
+        </div>
+      </div>
+
+      <div id="csSummary" style="display:none;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px"></div>
+      <div id="csTable"></div>
+    </div>
+  `;
+
+  document.getElementById('csRun').addEventListener('click', runStrategyQuery);
+  document.getElementById('csExport').addEventListener('click', exportStrategyCsv);
+  document.getElementById('csTextFilter').addEventListener('input', renderStrategyTable);
+  document.getElementById('csSite').addEventListener('change', (e) => {
+    csState.selectedSite = e.target.value;
+    localStorage.setItem('gsc-selected-site', csState.selectedSite);
+  });
+  for (const cb of document.querySelectorAll('.strategy-band')) {
+    cb.addEventListener('change', renderStrategyTable);
+  }
+  wireSelectFilter('csSiteFilter', 'csSite');
+}
+
+async function loadStrategySites() {
+  const sel = document.getElementById('csSite');
+  try {
+    const r = await fetch('/api/gsc/sites');
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || 'failed');
+    }
+    const { sites } = await r.json();
+    csState.sites = sites || [];
+    if (!csState.sites.length) {
+      sel.innerHTML = '<option value="">No properties found</option>';
+      return;
+    }
+
+    const host = getCurrentSiteHost();
+    const matched = findMatchingGscSite(csState.sites, host);
+    let target = csState.selectedSite;
+    if (matched) target = matched.siteUrl;
+    if (!target || !csState.sites.some(s => s.siteUrl === target)) target = csState.sites[0].siteUrl;
+    csState.selectedSite = target;
+    localStorage.setItem('gsc-selected-site', target);
+
+    sel.innerHTML = csState.sites.map(s => {
+      const isSel = s.siteUrl === target ? ' selected' : '';
+      return `<option value="${escapeHtml(s.siteUrl)}"${isSel}>${escapeHtml(s.siteUrl)} (${escapeHtml(s.permissionLevel || '')})</option>`;
+    }).join('');
+
+    if (matched) runStrategyQuery();
+  } catch (e) {
+    sel.innerHTML = `<option value="">Error: ${escapeHtml(e.message)}</option>`;
+  }
+}
+
+async function runStrategyQuery() {
+  const siteUrl = document.getElementById('csSite').value;
+  const startDate = document.getElementById('csStart').value;
+  const endDate = document.getElementById('csEnd').value;
+  const searchType = document.getElementById('csType').value;
+  const minImpressions = parseInt(document.getElementById('csMinImpressions').value) || 0;
+  if (!siteUrl) { alert('Select a property first.'); return; }
+
+  const btn = document.getElementById('csRun');
+  btn.disabled = true; btn.textContent = 'Loading…';
+  document.getElementById('csTable').innerHTML = '<p style="color:var(--text-muted);padding:20px">Querying Search Console for opportunities…</p>';
+  document.getElementById('csSummary').style.display = 'none';
+
+  try {
+    const r = await fetch('/api/gsc/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        siteUrl, startDate, endDate,
+        dimensions: ['page'],
+        rowLimit: 25000,
+        searchType
+      })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Query failed');
+
+    csState.rows = (data.rows || [])
+      .map(row => {
+        const page = (row.keys || [])[0] || '';
+        const impressions = row.impressions || 0;
+        const clicks = row.clicks || 0;
+        const position = row.position || 0;
+        const ctr = row.ctr || 0;
+        if (position < 1.5 || position > 40.5) return null;       // ignore #1 and ranks past 40
+        if (impressions < minImpressions) return null;
+        const band = bandForPosition(position);
+        if (!band) return null;
+        const targetCtr = ctrAtPosition(band.target);
+        const potentialClicks = Math.max(0, impressions * targetCtr - clicks);
+        const crawl = csState.crawlPages ? csState.crawlPages.get(normaliseUrlForJoin(page)) : null;
+        return {
+          page, impressions, clicks, position, ctr,
+          band, potentialClicks, targetPos: band.target,
+          crawl: crawl || null,
+          topQueries: null   // lazy-loaded on expand
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.potentialClicks - a.potentialClicks);
+
+    csState.expanded.clear();
+    renderStrategySummary();
+    renderStrategyTable();
+  } catch (e) {
+    document.getElementById('csTable').innerHTML = `<div style="padding:20px;color:var(--danger)">${escapeHtml(e.message)}</div>`;
+    csState.rows = [];
+  } finally {
+    btn.disabled = false; btn.textContent = 'Find opportunities';
+  }
+}
+
+function renderStrategySummary() {
+  const wrap = document.getElementById('csSummary');
+  if (!csState.rows.length) { wrap.style.display = 'none'; return; }
+  const total = csState.rows.length;
+  const totalPotential = csState.rows.reduce((s, r) => s + r.potentialClicks, 0);
+  const totalImpressions = csState.rows.reduce((s, r) => s + r.impressions, 0);
+  const byBand = {};
+  for (const b of STRATEGY_BANDS) byBand[b.id] = 0;
+  for (const r of csState.rows) byBand[r.band.id]++;
+
+  const card = (label, value, hint) => `
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:14px">
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">${label}</div>
+      <div style="font-size:22px;font-weight:700;margin-top:4px">${value}</div>
+      ${hint ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">${hint}</div>` : ''}
+    </div>`;
+  const bandChips = STRATEGY_BANDS.map(b =>
+    `<div style="display:flex;align-items:center;gap:6px;font-size:12px">
+       <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${b.color}"></span>
+       <b>${byBand[b.id]}</b> <span style="color:var(--text-muted)">${escapeHtml(b.label)}</span>
+     </div>`).join('');
+
+  wrap.style.display = 'grid';
+  wrap.innerHTML =
+    card('Opportunities', total.toLocaleString()) +
+    card('Total impressions', totalImpressions.toLocaleString()) +
+    card('Estimated extra clicks', Math.round(totalPotential).toLocaleString(), 'if moved to target rank') +
+    `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:14px">
+       <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">By band</div>
+       <div style="display:flex;flex-direction:column;gap:5px">${bandChips}</div>
+     </div>`;
+}
+
+function activeBandIds() {
+  return new Set(Array.from(document.querySelectorAll('.strategy-band'))
+    .filter(cb => cb.checked).map(cb => cb.dataset.band));
+}
+
+function renderStrategyTable() {
+  const wrap = document.getElementById('csTable');
+  if (!csState.rows.length) { wrap.innerHTML = '<div style="padding:20px;color:var(--text-muted)">No opportunities. Try lowering "Min impressions" or expanding bands.</div>'; return; }
+
+  const bands = activeBandIds();
+  const textFilter = (document.getElementById('csTextFilter').value || '').toLowerCase();
+  const filtered = csState.rows.filter(r => bands.has(r.band.id) && (!textFilter || r.page.toLowerCase().includes(textFilter)));
+
+  if (!filtered.length) {
+    wrap.innerHTML = '<div style="padding:20px;color:var(--text-muted)">No rows match the current filters.</div>';
+    return;
+  }
+
+  const rowsHtml = filtered.map((r, idx) => {
+    const isOpen = csState.expanded.has(r.page);
+    const crawl = r.crawl;
+    const crawlTags = crawl ? `
+      <span style="color:var(--text-muted);font-size:12px">·</span>
+      <span style="font-size:12px;color:var(--text-muted)" title="From the active crawl">
+        ${crawl.wordCount} words · ${crawl.h1Count} H1${crawl.h1Count === 1 ? '' : 's'} · title ${crawl.titleLength}ch
+      </span>` : '';
+    const main = `
+      <tr data-page="${escapeHtml(r.page)}" style="cursor:pointer">
+        <td style="padding:10px 12px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${r.band.color}" title="${escapeHtml(r.band.label)}"></span>
+            <a href="${escapeHtml(r.page)}" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none;word-break:break-all" onclick="event.stopPropagation()">${escapeHtml(r.page)}</a>
+            ${crawlTags}
+          </div>
+          ${crawl && crawl.title ? `<div style="font-size:12px;color:var(--text-muted);margin-top:3px">${escapeHtml(crawl.title)}</div>` : ''}
+        </td>
+        <td style="padding:10px 12px;font-size:12px"><span style="background:${r.band.color}22;color:${r.band.color};padding:2px 8px;border-radius:999px;font-weight:600">${escapeHtml(r.band.label)}</span></td>
+        <td style="padding:10px 12px;text-align:right">${r.impressions.toLocaleString()}</td>
+        <td style="padding:10px 12px;text-align:right">${r.clicks.toLocaleString()}</td>
+        <td style="padding:10px 12px;text-align:right">${(r.ctr * 100).toFixed(2)}%</td>
+        <td style="padding:10px 12px;text-align:right">${r.position.toFixed(1)}</td>
+        <td style="padding:10px 12px;text-align:right"><b>+${Math.round(r.potentialClicks).toLocaleString()}</b><div style="font-size:11px;color:var(--text-muted)">if @${r.targetPos}</div></td>
+        <td style="padding:10px 12px;text-align:center;color:var(--text-muted)">${isOpen ? '▾' : '▸'}</td>
+      </tr>`;
+    const expansion = isOpen ? `
+      <tr data-expansion="${escapeHtml(r.page)}">
+        <td colspan="8" style="background:var(--bg-hover);padding:14px 18px">
+          <div id="csQueries-${idx}" style="font-size:13px;color:var(--text-muted)">Loading top queries…</div>
+        </td>
+      </tr>` : '';
+    return main + expansion;
+  }).join('');
+
+  wrap.innerHTML = `
+    <div class="table-container" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="background:var(--bg-hover)">
+            <th style="padding:10px 12px;text-align:left;border-bottom:1px solid var(--border)">Page</th>
+            <th style="padding:10px 12px;text-align:left;border-bottom:1px solid var(--border)">Band</th>
+            <th style="padding:10px 12px;text-align:right;border-bottom:1px solid var(--border)">Impressions</th>
+            <th style="padding:10px 12px;text-align:right;border-bottom:1px solid var(--border)">Clicks</th>
+            <th style="padding:10px 12px;text-align:right;border-bottom:1px solid var(--border)">CTR</th>
+            <th style="padding:10px 12px;text-align:right;border-bottom:1px solid var(--border)">Position</th>
+            <th style="padding:10px 12px;text-align:right;border-bottom:1px solid var(--border)">Potential clicks</th>
+            <th style="padding:10px 12px;border-bottom:1px solid var(--border)"></th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+    <div style="padding:10px 4px;color:var(--text-muted);font-size:12px">Showing ${filtered.length.toLocaleString()} of ${csState.rows.length.toLocaleString()} opportunities. Potential-clicks estimate uses an average CTR-by-position curve and is a rough upper-bound.</div>
+  `;
+
+  // Row click → toggle expansion + load queries on first open.
+  wrap.querySelectorAll('tr[data-page]').forEach((tr, idx) => {
+    const page = tr.dataset.page;
+    tr.addEventListener('click', async () => {
+      if (csState.expanded.has(page)) {
+        csState.expanded.delete(page);
+      } else {
+        csState.expanded.add(page);
+      }
+      renderStrategyTable();
+      if (csState.expanded.has(page)) {
+        const row = csState.rows.find(r => r.page === page);
+        if (row && !row.topQueries) await loadStrategyQueries(row);
+        renderStrategyQueriesFor(page);
+      }
+    });
+  });
+
+  // Re-fill expanded blocks already known (after re-render they're "Loading…").
+  for (const page of csState.expanded) renderStrategyQueriesFor(page);
+}
+
+async function loadStrategyQueries(row) {
+  const siteUrl = document.getElementById('csSite').value;
+  const startDate = document.getElementById('csStart').value;
+  const endDate = document.getElementById('csEnd').value;
+  const searchType = document.getElementById('csType').value;
+  try {
+    const r = await fetch('/api/gsc/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        siteUrl, startDate, endDate,
+        dimensions: ['query'],
+        rowLimit: 50,
+        searchType,
+        dimensionFilterGroups: [{ filters: [{ dimension: 'page', operator: 'equals', expression: row.page }] }]
+      })
+    });
+    const data = await r.json();
+    row.topQueries = (data.rows || []).map(x => ({
+      query: (x.keys || [])[0] || '',
+      impressions: x.impressions || 0,
+      clicks: x.clicks || 0,
+      position: x.position || 0,
+      ctr: x.ctr || 0
+    }));
+  } catch (e) {
+    row.topQueries = { error: e.message };
+  }
+}
+
+function renderStrategyQueriesFor(page) {
+  const row = csState.rows.find(r => r.page === page);
+  const tr = document.querySelector(`tr[data-expansion="${CSS.escape(page)}"]`);
+  if (!row || !tr) return;
+  const target = tr.querySelector('td > div');
+  if (!target) return;
+  if (!row.topQueries) { target.textContent = 'Loading top queries…'; return; }
+  if (row.topQueries.error) { target.innerHTML = `<span style="color:var(--danger)">Error loading queries: ${escapeHtml(row.topQueries.error)}</span>`; return; }
+  if (!row.topQueries.length) { target.textContent = 'No queries for this page in the selected date range.'; return; }
+
+  const rows = row.topQueries.map(q => `
+    <tr>
+      <td style="padding:6px 10px">${escapeHtml(q.query)}</td>
+      <td style="padding:6px 10px;text-align:right">${q.impressions.toLocaleString()}</td>
+      <td style="padding:6px 10px;text-align:right">${q.clicks.toLocaleString()}</td>
+      <td style="padding:6px 10px;text-align:right">${(q.ctr * 100).toFixed(2)}%</td>
+      <td style="padding:6px 10px;text-align:right">${q.position.toFixed(1)}</td>
+    </tr>`).join('');
+
+  const crawl = row.crawl;
+  const crawlBlock = crawl ? `
+    <div style="margin-bottom:10px;padding:10px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;font-size:12px">
+      <b style="color:var(--text)">From your crawl:</b>
+      <span style="color:var(--text-muted)">title</span> "${escapeHtml(crawl.title || '(missing)')}" (${crawl.titleLength}ch) ·
+      <span style="color:var(--text-muted)">H1s</span> ${crawl.h1Count} ·
+      <span style="color:var(--text-muted)">words</span> ${crawl.wordCount} ·
+      <span style="color:var(--text-muted)">status</span> ${crawl.statusCode}
+    </div>` : (currentCrawlId
+      ? `<div style="margin-bottom:10px;padding:8px 12px;background:var(--bg-card);border:1px dashed var(--border);border-radius:6px;font-size:12px;color:var(--text-muted)">This URL isn't in your latest crawl — likely an orphan page or not linked from the homepage.</div>`
+      : '');
+
+  target.innerHTML = `
+    ${crawlBlock}
+    <div style="font-weight:600;margin-bottom:6px">Top queries driving this page</div>
+    <div style="overflow:auto;border:1px solid var(--border);border-radius:6px;background:var(--bg-card)">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:var(--bg-hover)">
+          <th style="padding:6px 10px;text-align:left">Query</th>
+          <th style="padding:6px 10px;text-align:right">Impressions</th>
+          <th style="padding:6px 10px;text-align:right">Clicks</th>
+          <th style="padding:6px 10px;text-align:right">CTR</th>
+          <th style="padding:6px 10px;text-align:right">Position</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function exportStrategyCsv() {
+  if (!csState.rows.length) { alert('Run a query first.'); return; }
+  const bands = activeBandIds();
+  const textFilter = (document.getElementById('csTextFilter').value || '').toLowerCase();
+  const rows = csState.rows.filter(r => bands.has(r.band.id) && (!textFilter || r.page.toLowerCase().includes(textFilter)));
+  const headers = ['page','band','impressions','clicks','ctr','position','potential_clicks','target_position','title','word_count'];
+  const escape = (v) => {
+    const s = String(v == null ? '' : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    lines.push([
+      r.page, r.band.label, r.impressions, r.clicks, r.ctr, r.position,
+      Math.round(r.potentialClicks), r.targetPos,
+      r.crawl ? r.crawl.title : '',
+      r.crawl ? r.crawl.wordCount : ''
+    ].map(escape).join(','));
+  }
+  const siteUrl = document.getElementById('csSite').value || 'site';
+  const startDate = document.getElementById('csStart').value;
+  const endDate = document.getElementById('csEnd').value;
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const safe = siteUrl.replace(/[^a-z0-9]/gi, '_');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `content-strategy_${safe}_${startDate}_${endDate}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
