@@ -868,6 +868,13 @@ app.get('/api/gsc/oauth/callback', async (req, res) => {
     if (!tokens.refresh_token) {
       return res.redirect('/?gsc=error&reason=no_refresh_token');
     }
+    const grantedScopes = (tokens.scope || '').split(/\s+/);
+    if (!grantedScopes.includes('https://www.googleapis.com/auth/webmasters.readonly')) {
+      // User didn't grant Search Console access. Revoke the partial grant
+      // so the next attempt starts clean, and surface a clear error.
+      await gsc.revokeToken(tokens.refresh_token);
+      return res.redirect('/?gsc=error&reason=missing_scope_webmasters');
+    }
     const email = await gsc.fetchUserEmail(tokens.access_token);
     db.kvSet(GSC_TOKEN_KEY, { ...tokens, email, connected_at: new Date().toISOString() });
     res.redirect('/?gsc=connected#gsc');
