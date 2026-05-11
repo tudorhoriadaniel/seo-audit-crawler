@@ -2828,3 +2828,27 @@ if (location.hash === '#gsc' || new URLSearchParams(location.search).get('gsc'))
     if (link) link.click();
   });
 }
+
+// Auto-restore the previously-loaded crawl after a full page reload (e.g.
+// after the OAuth round-trip). sessionStorage keeps the crawl id per tab;
+// only re-hydrate if that crawl is still on the server and is completed.
+// If the URL says we returned to a specific tab (e.g. ?gsc=...), restore
+// that tab after loadCrawl forces the dashboard view.
+(async function restoreCrawlOnBoot() {
+  const id = sessionStorage.getItem('currentCrawlId');
+  if (!id) return;
+  const returningToGsc = location.hash === '#gsc' || new URLSearchParams(location.search).get('gsc');
+  try {
+    const r = await fetch(`/api/crawls/${id}`);
+    if (!r.ok) { sessionStorage.removeItem('currentCrawlId'); return; }
+    const crawl = await r.json();
+    if (!crawl || crawl.status !== 'completed') return;
+    if (typeof window.loadCrawl === 'function') {
+      await window.loadCrawl(id);
+      if (returningToGsc) {
+        const link = document.querySelector('.nav-link[data-view="gsc"]');
+        if (link) link.click();
+      }
+    }
+  } catch { /* ignore — user can re-crawl */ }
+})();
