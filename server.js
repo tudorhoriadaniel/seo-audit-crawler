@@ -8,6 +8,7 @@ const CrawlerEngine = require('./lib/crawler-engine');
 const Analyzer = require('./lib/analyzer');
 const CrawlDatabase = require('./lib/database');
 const Exporter = require('./lib/exporter');
+const gsc = require('./lib/gsc');
 
 const app = express();
 const server = http.createServer(app);
@@ -808,6 +809,121 @@ app.patch('/api/crawls/:id/saved', (req, res) => {
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', activeCrawls: activeCrawls.size });
+});
+
+// ── Google Search Console integration ──
+const GSC_TOKEN_KEY = 'gsc:tokens';
+const GSC_STATE_KEY = 'gsc:oauth_state';
+
+async function getGscTokensOrError(res) {
+  const tokens = db.kvGet(GSC_TOKEN_KEY);
+  if (!tokens || !tokens.refresh_token) {
+    res.status(401).json({ error: 'Not connected to Google Search Console' });
+    return null;
+  }
+  try {
+    return await gsc.getValidAccessToken(tokens, (updated) => db.kvSet(GSC_TOKEN_KEY, updated));
+  } catch (e) {
+    res.status(401).json({ error: 'GSC token refresh failed: ' + e.message });
+    return null;
+  }
+}
+
+app.get('/api/gsc/status', (req, res) => {
+  const tokens = db.kvGet(GSC_TOKEN_KEY);
+  const configured = gsc.isConfigured();
+  res.json({
+    configured,
+    connected: !!(tokens && tokens.refresh_token),
+    email: tokens ? tokens.email || null : null,
+    connectedAt: tokens ? tokens.connected_at || null : null
+  });
+});
+
+app.get('/api/gsc/auth/start', (req, res) => {
+  if (!gsc.isConfigured()) {
+    return res.status(500).send('Google OAuth not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI environment variables.');
+  }
+  const state = gsc.generateState();
+  db.kvSet(GSC_STATE_KEY, { state, created_at: Date.now() });
+  res.redirect(gsc.buildAuthUrl(state));
+});
+
+app.get('/api/gsc/oauth/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+  if (error) return res.redirect('/?gsc=error&reason=' + encodeURIComponent(String(error)));
+  const stored = db.kvGet(GSC_STATE_KEY);
+  if (!stored || stored.state !== state) {
+    return res.redirect('/?gsc=error&reason=state_mismatch');
+  }
+  db.kvDelete(GSC_STATE_KEY);
+  try {
+    const tokens = await gsc.exchangeCodeForTokens(code);
+    if (!tokens.refresh_token) {
+      return res.redirect('/?gsc=error&reason=no_refresh_token');
+    }
+    const email = await gsc.fetchUserEmail(tokens.access_token);
+    db.kvSet(GSC_TOKEN_KEY, { ...tokens, email, connected_at: new Date().toISOString() });
+    res.redirect('/?gsc=connected#gsc');
+  } catch (e) {
+    res.redirect('/?gsc=error&reason=' + encodeURIComponent(e.message));
+  }
+});
+
+app.post('/api/gsc/logout', async (req, res) => {
+  const tokens = db.kvGet(GSC_TOKEN_KEY);
+  if (tokens && tokens.refresh_token) await gsc.revokeToken(tokens.refresh_token);
+  db.kvDelete(GSC_TOKEN_KEY);
+  res.json({ ok: true });
+});
+
+app.get('/api/gsc/sites', async (req, res) => {
+  const tokens = await getGscTokensOrError(res);
+  if (!tokens) return;
+  try {
+    const sites = await gsc.listSites(tokens.access_token);
+    res.json({ sites });
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data?.error?.message || e.message });
+  }
+});
+
+app.post('/api/gsc/query', async (req, res) => {
+  const tokens = await getGscTokensOrError(res);
+  if (!tokens) return;
+  const { siteUrl, startDate, endDate, dimensions, rowLimit, searchType, dataState, dimensionFilterGroups } = req.body || {};
+  if (!siteUrl || !startDate || !endDate) {
+    return res.status(400).json({ error: 'siteUrl, startDate and endDate are required' });
+  }
+  try {
+    const body = {
+      startDate,
+      endDate,
+      dimensions: dimensions && dimensions.length ? dimensions : ['query'],
+      rowLimit: Math.min(parseInt(rowLimit) || 1000, 25000),
+      startRow: 0
+    };
+    if (searchType) body.type = searchType;
+    if (dataState) body.dataState = dataState;
+    if (dimensionFilterGroups) body.dimensionFilterGroups = dimensionFilterGroups;
+    const data = await gsc.searchAnalyticsQuery(tokens.access_token, siteUrl, body);
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data?.error?.message || e.message });
+  }
+});
+
+app.get('/api/gsc/sitemaps', async (req, res) => {
+  const tokens = await getGscTokensOrError(res);
+  if (!tokens) return;
+  const siteUrl = req.query.siteUrl;
+  if (!siteUrl) return res.status(400).json({ error: 'siteUrl is required' });
+  try {
+    const sitemaps = await gsc.listSitemaps(tokens.access_token, siteUrl);
+    res.json({ sitemaps });
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data?.error?.message || e.message });
+  }
 });
 
 // SPA fallback
