@@ -3310,7 +3310,35 @@ async function loadStrategyQueries(row) {
     }));
   } catch (e) {
     row.topQueries = { error: e.message };
+    return;
   }
+
+  // Kick off the keyword-coverage analysis in parallel. The queries table
+  // renders immediately; coverage badges appear when this resolves.
+  loadStrategyCoverage(row);
+}
+
+async function loadStrategyCoverage(row) {
+  if (!Array.isArray(row.topQueries) || !row.topQueries.length) return;
+  row.coverage = { loading: true };
+  renderStrategyQueriesFor(row.page);
+  try {
+    const r = await fetch('/api/content-analysis', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: row.page,
+        queries: row.topQueries.map(q => q.query)
+      })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'analysis failed');
+    if (data.error) throw new Error(data.error);
+    row.coverage = data;
+  } catch (e) {
+    row.coverage = { error: e.message };
+  }
+  renderStrategyQueriesFor(row.page);
 }
 
 function renderStrategyQueriesFor(page) {
@@ -3323,14 +3351,46 @@ function renderStrategyQueriesFor(page) {
   if (row.topQueries.error) { target.innerHTML = `<span style="color:var(--danger)">Error loading queries: ${escapeHtml(row.topQueries.error)}</span>`; return; }
   if (!row.topQueries.length) { target.textContent = 'No queries for this page in the selected date range.'; return; }
 
-  const rows = row.topQueries.map(q => `
-    <tr>
-      <td style="padding:6px 10px">${escapeHtml(q.query)}</td>
-      <td style="padding:6px 10px;text-align:right">${q.impressions.toLocaleString()}</td>
-      <td style="padding:6px 10px;text-align:right">${q.clicks.toLocaleString()}</td>
-      <td style="padding:6px 10px;text-align:right">${(q.ctr * 100).toFixed(2)}%</td>
-      <td style="padding:6px 10px;text-align:right">${q.position.toFixed(1)}</td>
-    </tr>`).join('');
+  // Build a query → coverage lookup once.
+  const coverageByQuery = {};
+  const cov = row.coverage;
+  if (cov && Array.isArray(cov.queries)) {
+    for (const q of cov.queries) coverageByQuery[q.query] = q;
+  }
+
+  const yesPill = (ok, label) => `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:600;background:${ok ? 'rgba(22,163,74,.15)' : 'rgba(220,38,38,.12)'};color:${ok ? 'var(--success)' : 'var(--danger)'}">${ok ? '✓' : '✗'} ${label}</span>`;
+
+  const rows = row.topQueries.map(q => {
+    const c = coverageByQuery[q.query];
+    let badges = '';
+    let bodyCount = '';
+    let density = '';
+    if (cov && cov.loading) {
+      badges = '<span style="color:var(--text-muted);font-size:11px">analysing…</span>';
+    } else if (c) {
+      badges = [
+        yesPill(c.phrase.inTitle, 'title'),
+        yesPill(c.phrase.inH1, 'H1'),
+        yesPill(c.phrase.inHeadings, 'Hn'),
+        yesPill(c.phrase.bodyOccurrences > 0, `body${c.phrase.bodyOccurrences > 0 ? ' (' + c.phrase.bodyOccurrences + '×)' : ''}`)
+      ].join(' ');
+      bodyCount = c.phrase.bodyOccurrences > 0 ? c.phrase.bodyOccurrences + '×'
+                  : (c.looseMatch.bodyAllWords ? '<span title="All words present individually but not as the exact phrase" style="color:var(--warning)">words only</span>'
+                                               : '<span style="color:var(--danger)">0</span>');
+      density = c.phrase.bodyOccurrences > 0 ? c.density.toFixed(2) + '%' : '—';
+    }
+    return `
+      <tr>
+        <td style="padding:6px 10px">${escapeHtml(q.query)}</td>
+        <td style="padding:6px 10px;text-align:right">${q.impressions.toLocaleString()}</td>
+        <td style="padding:6px 10px;text-align:right">${q.clicks.toLocaleString()}</td>
+        <td style="padding:6px 10px;text-align:right">${(q.ctr * 100).toFixed(2)}%</td>
+        <td style="padding:6px 10px;text-align:right">${q.position.toFixed(1)}</td>
+        <td style="padding:6px 10px;text-align:right">${bodyCount}</td>
+        <td style="padding:6px 10px;text-align:right">${density}</td>
+        <td style="padding:6px 10px;display:flex;gap:4px;flex-wrap:wrap">${badges}</td>
+      </tr>`;
+  }).join('');
 
   const crawl = row.crawl;
   const crawlBlock = crawl ? `
@@ -3344,8 +3404,39 @@ function renderStrategyQueriesFor(page) {
       ? `<div style="margin-bottom:10px;padding:8px 12px;background:var(--bg-card);border:1px dashed var(--border);border-radius:6px;font-size:12px;color:var(--text-muted)">This URL isn't in your latest crawl — likely an orphan page or not linked from the homepage.</div>`
       : '');
 
+  // Coverage summary above the query table.
+  let coverageBlock = '';
+  if (cov && cov.loading) {
+    coverageBlock = `<div style="margin-bottom:10px;padding:10px 12px;background:var(--bg-card);border:1px dashed var(--border);border-radius:6px;font-size:12px;color:var(--text-muted)">Fetching live page to analyse keyword coverage…</div>`;
+  } else if (cov && cov.error) {
+    coverageBlock = `<div style="margin-bottom:10px;padding:10px 12px;background:rgba(220,38,38,.08);border:1px solid var(--danger);color:var(--danger);border-radius:6px;font-size:12px">Could not analyse page content: ${escapeHtml(cov.error)}</div>`;
+  } else if (cov && cov.queries) {
+    const totalQ = cov.queries.length;
+    const inTitle = cov.queries.filter(q => q.phrase.inTitle).length;
+    const inH1 = cov.queries.filter(q => q.phrase.inH1).length;
+    const inBody = cov.queries.filter(q => q.phrase.bodyOccurrences > 0).length;
+    const absent = cov.queries.filter(q => !q.presentSomewhere);
+    const absentImpressions = absent.reduce((sum, q) => {
+      const t = row.topQueries.find(x => x.query === q.query);
+      return sum + (t ? t.impressions : 0);
+    }, 0);
+    const tone = (n, total) => n === 0 ? 'var(--danger)' : (n < total / 2 ? 'var(--warning)' : 'var(--success)');
+    coverageBlock = `
+      <div style="margin-bottom:10px;padding:12px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;font-size:13px">
+        <div style="font-weight:600;margin-bottom:6px">Keyword coverage <span style="color:var(--text-muted);font-weight:400;font-size:12px">— live page has ${cov.wordCount.toLocaleString()} words</span></div>
+        <div style="display:flex;gap:18px;flex-wrap:wrap">
+          <div><span style="color:${tone(inTitle, totalQ)};font-weight:700">${inTitle}</span><span style="color:var(--text-muted)"> / ${totalQ} queries in <b>title</b></span></div>
+          <div><span style="color:${tone(inH1, totalQ)};font-weight:700">${inH1}</span><span style="color:var(--text-muted)"> / ${totalQ} in <b>H1</b></span></div>
+          <div><span style="color:${tone(inBody, totalQ)};font-weight:700">${inBody}</span><span style="color:var(--text-muted)"> / ${totalQ} in <b>body</b></span></div>
+          ${absent.length ? `<div style="color:var(--danger)"><b>${absent.length}</b> queries not on page <span style="color:var(--text-muted)">(${absentImpressions.toLocaleString()} impressions)</span></div>` : ''}
+        </div>
+        ${absent.length ? `<div style="margin-top:8px;font-size:12px;color:var(--text-muted)">Missing: ${absent.slice(0, 6).map(q => '<code style="background:rgba(220,38,38,.08);color:var(--danger);padding:1px 6px;border-radius:3px">' + escapeHtml(q.query) + '</code>').join(' ')}${absent.length > 6 ? ` <span>and ${absent.length - 6} more</span>` : ''}</div>` : ''}
+      </div>`;
+  }
+
   target.innerHTML = `
     ${crawlBlock}
+    ${coverageBlock}
     <div style="font-weight:600;margin-bottom:6px">Top queries driving this page</div>
     <div style="overflow:auto;border:1px solid var(--border);border-radius:6px;background:var(--bg-card)">
       <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -3355,6 +3446,9 @@ function renderStrategyQueriesFor(page) {
           <th style="padding:6px 10px;text-align:right">Clicks</th>
           <th style="padding:6px 10px;text-align:right">CTR</th>
           <th style="padding:6px 10px;text-align:right">Position</th>
+          <th style="padding:6px 10px;text-align:right">In body</th>
+          <th style="padding:6px 10px;text-align:right">Density</th>
+          <th style="padding:6px 10px;text-align:left">Where</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
