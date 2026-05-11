@@ -3485,8 +3485,9 @@ function renderStrategyQueriesFor(page) {
     for (const q of cov.queries) coverageByQuery[q.query] = q;
   }
 
-  // Where-score: 0–4, number of sections (title/H1/Hn/body) the phrase appears in.
-  const whereScore = (c) => c ? ((c.phrase.inTitle?1:0) + (c.phrase.inH1?1:0) + (c.phrase.inHeadings?1:0) + (c.phrase.bodyOccurrences>0?1:0)) : -1;
+  // Where-score: 0–5, number of sections the phrase appears in
+  // (title / meta description / H1 / Hn / body).
+  const whereScore = (c) => c ? ((c.phrase.inTitle?1:0) + (c.phrase.inMetaDescription?1:0) + (c.phrase.inH1?1:0) + (c.phrase.inHeadings?1:0) + (c.phrase.bodyOccurrences>0?1:0)) : -1;
   const valueFor = (q, key) => {
     const c = coverageByQuery[q.query];
     switch (key) {
@@ -3521,6 +3522,7 @@ function renderStrategyQueriesFor(page) {
     } else if (c) {
       badges = [
         yesPill(c.phrase.inTitle, 'title'),
+        yesPill(c.phrase.inMetaDescription, 'desc'),
         yesPill(c.phrase.inH1, 'H1'),
         yesPill(c.phrase.inHeadings, 'Hn'),
         yesPill(c.phrase.bodyOccurrences > 0, `body${c.phrase.bodyOccurrences > 0 ? ' (' + c.phrase.bodyOccurrences + '×)' : ''}`)
@@ -3564,6 +3566,7 @@ function renderStrategyQueriesFor(page) {
   } else if (cov && cov.queries) {
     const totalQ = cov.queries.length;
     const inTitle = cov.queries.filter(q => q.phrase.inTitle).length;
+    const inMeta = cov.queries.filter(q => q.phrase.inMetaDescription).length;
     const inH1 = cov.queries.filter(q => q.phrase.inH1).length;
     const inBody = cov.queries.filter(q => q.phrase.bodyOccurrences > 0).length;
     const absent = cov.queries.filter(q => !q.presentSomewhere);
@@ -3572,11 +3575,16 @@ function renderStrategyQueriesFor(page) {
       return sum + (t ? t.impressions : 0);
     }, 0);
     const tone = (n, total) => n === 0 ? 'var(--danger)' : (n < total / 2 ? 'var(--warning)' : 'var(--success)');
+    const metaLen = cov.metaDescriptionLength || 0;
+    const metaHint = metaLen === 0 ? ' <span style="color:var(--danger);font-weight:600">(missing)</span>'
+                   : (metaLen > 160 ? ` <span style="color:var(--warning)">(${metaLen}ch — over 160)</span>`
+                                    : (metaLen < 70 ? ` <span style="color:var(--warning)">(${metaLen}ch — under 70)</span>` : ` <span style="color:var(--text-muted)">(${metaLen}ch)</span>`));
     coverageBlock = `
       <div style="margin-bottom:10px;padding:12px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;font-size:13px">
         <div style="font-weight:600;margin-bottom:6px">Keyword coverage <span style="color:var(--text-muted);font-weight:400;font-size:12px">— live page has ${cov.wordCount.toLocaleString()} words</span></div>
         <div style="display:flex;gap:18px;flex-wrap:wrap">
           <div><span style="color:${tone(inTitle, totalQ)};font-weight:700">${inTitle}</span><span style="color:var(--text-muted)"> / ${totalQ} queries in <b>title</b></span></div>
+          <div><span style="color:${tone(inMeta, totalQ)};font-weight:700">${inMeta}</span><span style="color:var(--text-muted)"> / ${totalQ} in <b>meta description</b>${metaHint}</span></div>
           <div><span style="color:${tone(inH1, totalQ)};font-weight:700">${inH1}</span><span style="color:var(--text-muted)"> / ${totalQ} in <b>H1</b></span></div>
           <div><span style="color:${tone(inBody, totalQ)};font-weight:700">${inBody}</span><span style="color:var(--text-muted)"> / ${totalQ} in <b>body</b></span></div>
           ${absent.length ? `<div style="color:var(--danger)"><b>${absent.length}</b> queries not on page <span style="color:var(--text-muted)">(${absentImpressions.toLocaleString()} impressions)</span></div>` : ''}
@@ -3642,7 +3650,8 @@ function exportStrategyCsv() {
     'page','band','impressions','clicks','ctr','position','potential_clicks','target_position',
     'crawl_title','crawl_word_count',
     'coverage_analysed','page_word_count','queries_analysed',
-    'queries_in_title','queries_in_h1','queries_in_body',
+    'queries_in_title','queries_in_meta_description','queries_in_h1','queries_in_body',
+    'meta_description_length',
     'missing_queries_count','missing_queries_impressions','missing_queries_top','quick_win'
   ];
   const escape = (v) => {
@@ -3652,14 +3661,16 @@ function exportStrategyCsv() {
   const lines = [headers.join(',')];
   for (const r of rows) {
     const cov = r.coverage && Array.isArray(r.coverage.queries) ? r.coverage : null;
-    let pageWords = '', qAnalysed = '', inTitle = '', inH1 = '', inBody = '';
+    let pageWords = '', qAnalysed = '', inTitle = '', inMeta = '', inH1 = '', inBody = '', metaLen = '';
     let missingCount = '', missingImpressions = '', missingTop = '';
     if (cov) {
       pageWords = cov.wordCount || 0;
       qAnalysed = cov.queries.length;
       inTitle = cov.queries.filter(q => q.phrase.inTitle).length;
+      inMeta = cov.queries.filter(q => q.phrase.inMetaDescription).length;
       inH1 = cov.queries.filter(q => q.phrase.inH1).length;
       inBody = cov.queries.filter(q => q.phrase.bodyOccurrences > 0).length;
+      metaLen = cov.metaDescriptionLength || 0;
       const missing = cov.queries.filter(q => !q.presentSomewhere);
       missingCount = missing.length;
       // Sum impressions of missing queries by matching them back to topQueries.
@@ -3675,7 +3686,8 @@ function exportStrategyCsv() {
       r.crawl ? r.crawl.title : '',
       r.crawl ? r.crawl.wordCount : '',
       cov ? 'yes' : 'no',
-      pageWords, qAnalysed, inTitle, inH1, inBody,
+      pageWords, qAnalysed, inTitle, inMeta, inH1, inBody,
+      metaLen,
       missingCount, missingImpressions, missingTop,
       r.isQuickWin === true ? 'yes' : (r.isQuickWin === false ? 'no' : '')
     ].map(escape).join(','));
@@ -3723,6 +3735,20 @@ function deriveActions(r) {
     if (notInTitle.length) {
       const top = notInTitle.slice(0, 2).map(q => q.query).join(' / ');
       actions.push(`Rewrite the page title to include: ${top}.`);
+    }
+    if (cov.metaDescriptionLength === 0) {
+      actions.push('Add a meta description (~150 characters) that includes the top ranking queries.');
+    } else {
+      const notInMeta = cov.queries.filter(q => !q.phrase.inMetaDescription && q.presentSomewhere);
+      if (notInMeta.length) {
+        const top = notInMeta.slice(0, 2).map(q => q.query).join(' / ');
+        actions.push(`Rewrite the meta description to include: ${top}.`);
+      }
+      if (cov.metaDescriptionLength > 160) {
+        actions.push(`Meta description is ${cov.metaDescriptionLength}ch — trim under 160ch to avoid truncation.`);
+      } else if (cov.metaDescriptionLength < 70) {
+        actions.push(`Meta description is only ${cov.metaDescriptionLength}ch — expand to ~120–155ch with the main keywords.`);
+      }
     }
     const notInH1 = cov.queries.filter(q => !q.phrase.inH1 && !q.phrase.inHeadings && q.phrase.bodyOccurrences > 0);
     if (notInH1.length) {
@@ -3898,6 +3924,7 @@ async function exportStrategyPpt() {
         else {
           const parts = [];
           if (c.phrase.inTitle) parts.push('title');
+          if (c.phrase.inMetaDescription) parts.push('desc');
           if (c.phrase.inH1) parts.push('H1');
           if (c.phrase.inHeadings) parts.push('Hn');
           if (c.phrase.bodyOccurrences > 0) parts.push(`body ${c.phrase.bodyOccurrences}×`);
@@ -3938,11 +3965,13 @@ async function exportStrategyPpt() {
     if (r.coverage && Array.isArray(r.coverage.queries)) {
       const cov = r.coverage;
       const inT = cov.queries.filter(q => q.phrase.inTitle).length;
+      const inM = cov.queries.filter(q => q.phrase.inMetaDescription).length;
       const inH1 = cov.queries.filter(q => q.phrase.inH1).length;
       const inB = cov.queries.filter(q => q.phrase.bodyOccurrences > 0).length;
       const total = cov.queries.length;
-      const txt = `Live page: ${cov.wordCount.toLocaleString()} words · ${inT}/${total} queries in title · ${inH1}/${total} in H1 · ${inB}/${total} in body`;
-      s.addText(txt, { x: 0.6, y: 6.6, w: 7.8, h: 0.35, fontSize: 11, color: COLORS.muted, italic: true });
+      const metaTag = cov.metaDescriptionLength === 0 ? ' (missing description)' : '';
+      const txt = `Live page: ${cov.wordCount.toLocaleString()} words · ${inT}/${total} queries in title · ${inM}/${total} in meta description${metaTag} · ${inH1}/${total} in H1 · ${inB}/${total} in body`;
+      s.addText(txt, { x: 0.6, y: 6.6, w: 7.8, h: 0.35, fontSize: 10, color: COLORS.muted, italic: true });
     }
 
     // Footer
