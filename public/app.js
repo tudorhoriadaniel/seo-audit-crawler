@@ -3720,60 +3720,70 @@ async function loadPptxLib() {
   });
 }
 
+// Returns an array of { text, priority, icon } objects so the PPT can
+// colour-code action items by priority.
+//   critical  — fixes that block ranking (missing core terms, no meta desc)
+//   important — on-page edits that should ship next (title/H1/desc rewrites)
+//   recommended — supporting work (internal links, content expansion)
 function deriveActions(r) {
   const actions = [];
   const cov = r.coverage && Array.isArray(r.coverage.queries) ? r.coverage : null;
   const crawl = r.crawl;
+  const push = (priority, text) => actions.push({ priority, text });
 
   if (cov) {
     const missing = cov.queries.filter(q => !q.presentSomewhere);
     if (missing.length) {
       const top = missing.slice(0, 5).map(q => q.query).join(', ');
-      actions.push(`Add a section covering: ${top}${missing.length > 5 ? ` (+${missing.length - 5} more)` : ''}.`);
-    }
-    const notInTitle = cov.queries.filter(q => !q.phrase.inTitle && q.presentSomewhere);
-    if (notInTitle.length) {
-      const top = notInTitle.slice(0, 2).map(q => q.query).join(' / ');
-      actions.push(`Rewrite the page title to include: ${top}.`);
+      push('critical', `Write content covering the missing terms: ${top}${missing.length > 5 ? ` (+${missing.length - 5} more)` : ''}.`);
     }
     if (cov.metaDescriptionLength === 0) {
-      actions.push('Add a meta description (~150 characters) that includes the top ranking queries.');
+      push('critical', 'Add a meta description (~150 characters) that includes the top ranking queries.');
     } else {
       const notInMeta = cov.queries.filter(q => !q.phrase.inMetaDescription && q.presentSomewhere);
       if (notInMeta.length) {
         const top = notInMeta.slice(0, 2).map(q => q.query).join(' / ');
-        actions.push(`Rewrite the meta description to include: ${top}.`);
+        push('important', `Rewrite the meta description to include: ${top}.`);
       }
       if (cov.metaDescriptionLength > 160) {
-        actions.push(`Meta description is ${cov.metaDescriptionLength}ch — trim under 160ch to avoid truncation.`);
+        push('important', `Meta description is ${cov.metaDescriptionLength}ch — trim under 160ch to avoid SERP truncation.`);
       } else if (cov.metaDescriptionLength < 70) {
-        actions.push(`Meta description is only ${cov.metaDescriptionLength}ch — expand to ~120–155ch with the main keywords.`);
+        push('important', `Meta description is only ${cov.metaDescriptionLength}ch — expand to ~120–155ch with the main keywords.`);
       }
+    }
+    const notInTitle = cov.queries.filter(q => !q.phrase.inTitle && q.presentSomewhere);
+    if (notInTitle.length) {
+      const top = notInTitle.slice(0, 2).map(q => q.query).join(' / ');
+      push('important', `Rewrite the page title to lead with: ${top}.`);
     }
     const notInH1 = cov.queries.filter(q => !q.phrase.inH1 && !q.phrase.inHeadings && q.phrase.bodyOccurrences > 0);
     if (notInH1.length) {
       const top = notInH1.slice(0, 2).map(q => q.query).join(' / ');
-      actions.push(`Surface in an H1 or H2: ${top}.`);
+      push('important', `Surface in an H1 or H2: ${top}.`);
     }
     if (cov.wordCount && cov.wordCount < 500) {
-      actions.push(`Page is thin (${cov.wordCount} words). Expand to 800–1200 words covering the queries above.`);
+      push('recommended', `Page is thin (${cov.wordCount} words). Expand to 800–1200 words covering the queries above.`);
     }
   }
   if (crawl && (!crawl.h1Count || crawl.h1Count === 0)) {
-    actions.push('Page has no H1 heading — add one that contains the main query.');
+    push('critical', 'Page has no H1 heading — add one that contains the main query.');
   } else if (crawl && crawl.h1Count > 1) {
-    actions.push(`Page has ${crawl.h1Count} H1s — keep a single H1.`);
+    push('important', `Page has ${crawl.h1Count} H1s — keep a single H1.`);
   }
   if (crawl && crawl.titleLength && (crawl.titleLength < 30 || crawl.titleLength > 65)) {
-    actions.push(`Title length (${crawl.titleLength} ch) is outside the 30–60 sweet spot — rewrite it.`);
+    push('important', `Title length (${crawl.titleLength} ch) is outside the 30–60 sweet spot — rewrite it.`);
   }
   if (r.band.id === 'push' || r.band.id === 'striking') {
-    actions.push('Boost internal links from related pages using the target keywords as anchor text.');
+    push('recommended', 'Boost internal links from related pages using the target keywords as anchor text.');
+  } else if (r.band.id === 'page2') {
+    push('recommended', 'Add internal links from high-authority pages with target-keyword anchors.');
   }
   if (!actions.length) {
-    actions.push('Refresh content, expand topical coverage, and strengthen internal linking with target-keyword anchors.');
+    push('recommended', 'Refresh content, expand topical coverage, and strengthen internal linking with target-keyword anchors.');
   }
-  return actions;
+  // Stable priority order: critical → important → recommended
+  const order = { critical: 0, important: 1, recommended: 2 };
+  return actions.sort((a, b) => order[a.priority] - order[b.priority]);
 }
 
 async function exportStrategyPpt() {
@@ -3814,168 +3824,304 @@ async function exportStrategyPpt() {
 
   const COLORS = {
     bg: 'FFFFFF', text: '1A1D2E', muted: '6B7085', border: 'D1D5E0',
-    primary: '6366F1', success: '16A34A', warning: 'D97706', danger: 'DC2626'
+    panelBg: 'F8F9FC', panelAccent: 'EEF0F6',
+    primary: '6366F1', primaryDark: '4F46E5',
+    success: '16A34A', warning: 'D97706', danger: 'DC2626'
   };
   const bandColor = (b) => ({ push: '16A34A', striking: '2563EB', page2: '6366F1', deep: 'D97706', deeper: 'DC2626' }[b.id] || '6366F1');
+  const trunc = (s, n) => (s || '').length > n ? s.slice(0, n - 1) + '…' : (s || '');
 
   // ── Cover slide ────────────────────────────────────────────────────────
+  // Numbers are computed against the FULL csState.rows so the headline
+  // figures match what the user sees in the tool, even if filters are
+  // applied to the per-opportunity slides.
+  const allRows = csState.rows;
+  const totalImpr = allRows.reduce((s, r) => s + r.impressions, 0);
+  const totalPot = Math.round(allRows.reduce((s, r) => s + r.potentialClicks, 0));
+  const totalAnalysed = allRows.filter(r => r.coverage && Array.isArray(r.coverage.queries)).length;
+  const totalQuickWins = allRows.filter(r => r.isQuickWin === true).length;
+
+  const filterDescParts = [];
+  if (quickWinsOnly) filterDescParts.push('quick wins only');
+  if (textFilter) filterDescParts.push(`filter "${textFilter}"`);
+  if (bands.size < STRATEGY_BANDS.length) {
+    const labels = STRATEGY_BANDS.filter(b => bands.has(b.id)).map(b => b.label);
+    filterDescParts.push('bands: ' + labels.join(', '));
+  }
+  const filterDesc = filterDescParts.length ? filterDescParts.join(' · ') : 'no filters';
+
   const cover = pptx.addSlide();
   cover.background = { color: COLORS.bg };
-  cover.addText('Content Strategy', { x: 0.6, y: 0.7, w: 12, h: 1.0, fontSize: 40, bold: true, color: COLORS.text });
-  cover.addText(`${siteUrl}`, { x: 0.6, y: 1.7, w: 12, h: 0.45, fontSize: 20, color: COLORS.primary });
-  cover.addText(`Search Console data — ${startDate} → ${endDate}`, { x: 0.6, y: 2.15, w: 12, h: 0.4, fontSize: 14, color: COLORS.muted });
+  // Gradient-feel header bar
+  cover.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 1.2, fill: { color: COLORS.primary }, line: { type: 'none' } });
+  cover.addShape(pptx.ShapeType.rect, { x: 0, y: 1.2, w: 13.333, h: 0.08, fill: { color: COLORS.primaryDark }, line: { type: 'none' } });
+  cover.addText('Content Strategy', { x: 0.6, y: 0.18, w: 12, h: 0.65, fontSize: 36, bold: true, color: 'FFFFFF' });
+  cover.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.6, y: 0.78, w: 12, h: 0.4, fontSize: 14, color: 'E0E2F4' });
 
-  // Headline KPIs
-  const totalImpr = rows.reduce((s, r) => s + r.impressions, 0);
-  const totalPot = Math.round(rows.reduce((s, r) => s + r.potentialClicks, 0));
-  const analysed = rows.filter(r => r.coverage && Array.isArray(r.coverage.queries)).length;
-  const quickWins = rows.filter(r => r.isQuickWin === true).length;
+  cover.addText('Search opportunity audit', { x: 0.6, y: 1.7, w: 12, h: 0.5, fontSize: 22, bold: true, color: COLORS.text });
+  cover.addText('Pages already ranking on Google but below position 1, with on-page coverage gaps and recommended fixes.',
+    { x: 0.6, y: 2.18, w: 12, h: 0.45, fontSize: 13, color: COLORS.muted });
+
   const kpis = [
-    { label: 'Opportunities', value: rows.length.toLocaleString() },
-    { label: 'Total impressions', value: totalImpr.toLocaleString() },
-    { label: 'Estimated extra clicks', value: '+' + totalPot.toLocaleString() },
-    { label: analysed ? 'Quick wins' : 'Pages analysed', value: analysed ? quickWins.toLocaleString() : '0' }
+    { label: 'Opportunities', value: allRows.length.toLocaleString(), color: COLORS.text },
+    { label: 'Total impressions', value: totalImpr.toLocaleString(), color: COLORS.text },
+    { label: 'Estimated extra clicks', value: '+' + totalPot.toLocaleString(), color: COLORS.primary },
+    { label: 'Quick wins identified', value: totalAnalysed ? totalQuickWins.toLocaleString() : '–', color: COLORS.success }
   ];
   kpis.forEach((k, i) => {
     const x = 0.6 + i * 3.15;
-    cover.addShape(pptx.ShapeType.rect, { x, y: 3.2, w: 2.95, h: 1.4, fill: { color: 'F5F6FA' }, line: { color: COLORS.border, width: 0.5 } });
-    cover.addText(k.label, { x: x + 0.15, y: 3.3, w: 2.7, h: 0.4, fontSize: 11, color: COLORS.muted, bold: true });
-    cover.addText(k.value, { x: x + 0.15, y: 3.7, w: 2.7, h: 0.8, fontSize: 28, bold: true, color: COLORS.text });
+    cover.addShape(pptx.ShapeType.roundRect, { x, y: 3.0, w: 2.95, h: 1.7, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.75 }, rectRadius: 0.12 });
+    cover.addText(k.label, { x: x + 0.18, y: 3.15, w: 2.7, h: 0.4, fontSize: 11, color: COLORS.muted, bold: true });
+    cover.addText(k.value, { x: x + 0.18, y: 3.55, w: 2.7, h: 0.95, fontSize: 36, bold: true, color: k.color });
   });
-  cover.addText('Prepared by Converta · seo.converta.ro', { x: 0.6, y: 6.9, w: 12, h: 0.4, fontSize: 10, color: COLORS.muted });
+
+  // What's in this deck
+  cover.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 5.0, w: 12.13, h: 1.55, fill: { color: COLORS.panelAccent }, line: { type: 'none' }, rectRadius: 0.12 });
+  cover.addText('What\'s in this deck', { x: 0.85, y: 5.1, w: 12, h: 0.4, fontSize: 13, bold: true, color: COLORS.primaryDark });
+  cover.addText(`${rows.length} opportunity slide${rows.length === 1 ? '' : 's'} (filters: ${filterDesc}) — sorted by estimated extra clicks. Each slide shows the page, its current title / meta description / H1, the queries it ranks for, the on-page coverage gaps, and prioritised action items.`,
+    { x: 0.85, y: 5.45, w: 11.7, h: 1.0, fontSize: 12, color: COLORS.text });
+
+  cover.addText('Prepared by Converta  ·  seo.converta.ro', { x: 0.6, y: 6.95, w: 12, h: 0.4, fontSize: 10, color: COLORS.muted });
 
   // ── Summary slide: breakdown by band ───────────────────────────────────
+  // Stats use the FULL csState.rows so all bands always show real numbers,
+  // independent of the filter the user has in the tool when exporting.
   const summary = pptx.addSlide();
   summary.background = { color: COLORS.bg };
-  summary.addText('Opportunities by band', { x: 0.6, y: 0.5, w: 12, h: 0.6, fontSize: 24, bold: true, color: COLORS.text });
-  summary.addText('Each band groups pages by their current Google rank. Lower bands = easier wins.', { x: 0.6, y: 1.1, w: 12, h: 0.4, fontSize: 12, color: COLORS.muted });
+  summary.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.18, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
+  summary.addText('Opportunities by band', { x: 0.6, y: 0.35, w: 12, h: 0.6, fontSize: 26, bold: true, color: COLORS.text });
+  summary.addText('Each band groups pages by their current Google rank. Lower bands = easier wins.',
+    { x: 0.6, y: 0.95, w: 12, h: 0.4, fontSize: 12, color: COLORS.muted });
 
   STRATEGY_BANDS.forEach((band, idx) => {
-    const inBand = rows.filter(r => r.band.id === band.id);
+    const inBand = allRows.filter(r => r.band.id === band.id);
     const impr = inBand.reduce((s, r) => s + r.impressions, 0);
     const pot = Math.round(inBand.reduce((s, r) => s + r.potentialClicks, 0));
-    const y = 1.7 + idx * 1.05;
-    summary.addShape(pptx.ShapeType.rect, { x: 0.6, y, w: 12.1, h: 0.85, fill: { color: 'F5F6FA' }, line: { color: COLORS.border, width: 0.5 } });
-    summary.addShape(pptx.ShapeType.rect, { x: 0.6, y, w: 0.18, h: 0.85, fill: { color: bandColor(band) }, line: { type: 'none' } });
-    summary.addText(band.label, { x: 0.95, y: y + 0.05, w: 3.5, h: 0.4, fontSize: 16, bold: true, color: COLORS.text });
-    summary.addText(`Positions ${band.min === 1.5 ? 2 : Math.ceil(band.min)}–${Math.floor(band.max)} · target rank ${band.target}`, { x: 0.95, y: y + 0.45, w: 3.5, h: 0.3, fontSize: 11, color: COLORS.muted });
-    summary.addText(`${inBand.length}`, { x: 4.7, y: y + 0.15, w: 1.5, h: 0.55, fontSize: 22, bold: true, color: COLORS.text, align: 'center' });
-    summary.addText('opportunities', { x: 4.7, y: y + 0.55, w: 1.5, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'center' });
-    summary.addText(impr.toLocaleString(), { x: 6.4, y: y + 0.15, w: 2.5, h: 0.55, fontSize: 22, bold: true, color: COLORS.text, align: 'center' });
-    summary.addText('impressions', { x: 6.4, y: y + 0.55, w: 2.5, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'center' });
-    summary.addText('+' + pot.toLocaleString(), { x: 9.1, y: y + 0.15, w: 3.4, h: 0.55, fontSize: 22, bold: true, color: COLORS.primary, align: 'center' });
-    summary.addText(`estimated extra clicks at rank ${band.target}`, { x: 9.1, y: y + 0.55, w: 3.4, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'center' });
+    const inDeck = rows.filter(r => r.band.id === band.id).length;
+    const y = 1.55 + idx * 1.10;
+    const bc = bandColor(band);
+
+    summary.addShape(pptx.ShapeType.roundRect, { x: 0.6, y, w: 12.13, h: 0.95, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+    summary.addShape(pptx.ShapeType.rect, { x: 0.6, y, w: 0.22, h: 0.95, fill: { color: bc }, line: { type: 'none' } });
+    summary.addText(band.label, { x: 1.0, y: y + 0.08, w: 3.5, h: 0.4, fontSize: 16, bold: true, color: COLORS.text });
+    summary.addText(`Positions ${band.min === 1.5 ? 2 : Math.ceil(band.min)}–${Math.floor(band.max)}  ·  target rank ${band.target}`,
+      { x: 1.0, y: y + 0.48, w: 3.5, h: 0.32, fontSize: 11, color: COLORS.muted });
+
+    // 3 stat blocks
+    const blocks = [
+      { x: 4.7,  label: 'opportunities', value: inBand.length.toLocaleString(), color: COLORS.text },
+      { x: 6.65, label: 'impressions',   value: impr.toLocaleString(),          color: COLORS.text },
+      { x: 9.0,  label: `extra clicks @ rank ${band.target}`, value: '+' + pot.toLocaleString(), color: COLORS.primary }
+    ];
+    blocks.forEach(b => {
+      summary.addText(b.value, { x: b.x, y: y + 0.10, w: 2.0, h: 0.55, fontSize: 22, bold: true, color: b.color, align: 'center' });
+      summary.addText(b.label, { x: b.x, y: y + 0.62, w: 2.0, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'center' });
+    });
+    if (inBand.length > 0) {
+      summary.addText(`${inDeck} of ${inBand.length} included in this deck`, { x: 11.05, y: y + 0.33, w: 1.6, h: 0.4, fontSize: 10, color: inDeck === inBand.length ? COLORS.success : COLORS.warning, align: 'center', italic: true });
+    }
   });
 
+  summary.addText(`Site: ${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.6, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
+
   // ── Per-opportunity slides ─────────────────────────────────────────────
+  const priorityColor = (p) => p === 'critical' ? COLORS.danger : (p === 'important' ? COLORS.warning : COLORS.primary);
+  const priorityLabel = (p) => p === 'critical' ? 'Critical' : (p === 'important' ? 'Important' : 'Recommended');
+
   for (let idx = 0; idx < rows.length; idx++) {
     const r = rows[idx];
     const s = pptx.addSlide();
     s.background = { color: COLORS.bg };
     const bc = bandColor(r.band);
+    const cov = r.coverage && Array.isArray(r.coverage.queries) ? r.coverage : null;
 
-    // Header bar
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.55, fill: { color: bc }, line: { type: 'none' } });
-    s.addText(`${idx + 1}/${rows.length}  ·  ${r.band.label}  ·  position ${r.position.toFixed(1)}`, { x: 0.6, y: 0.08, w: 8, h: 0.4, fontSize: 13, color: 'FFFFFF', bold: true });
+    // Coloured header strip
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.65, fill: { color: bc }, line: { type: 'none' } });
+    s.addText(`${idx + 1} / ${rows.length}   ${r.band.label}   ·   Position ${r.position.toFixed(1)}   ·   Target rank ${r.targetPos}`,
+      { x: 0.6, y: 0.13, w: 9, h: 0.4, fontSize: 13, color: 'FFFFFF', bold: true });
     if (r.isQuickWin) {
-      s.addShape(pptx.ShapeType.roundRect, { x: 11.6, y: 0.08, w: 1.45, h: 0.38, fill: { color: 'FFFFFF' }, line: { type: 'none' }, rectRadius: 0.18 });
-      s.addText('⚡ Quick win', { x: 11.6, y: 0.08, w: 1.45, h: 0.38, fontSize: 11, color: bc, bold: true, align: 'center' });
+      s.addShape(pptx.ShapeType.roundRect, { x: 11.55, y: 0.13, w: 1.55, h: 0.4, fill: { color: 'FFFFFF' }, line: { type: 'none' }, rectRadius: 0.18 });
+      s.addText('⚡ Quick win', { x: 11.55, y: 0.13, w: 1.55, h: 0.4, fontSize: 11, color: bc, bold: true, align: 'center' });
     }
 
-    // Page URL (clickable) + crawl info
-    const truncatedUrl = r.page.length > 95 ? r.page.slice(0, 92) + '…' : r.page;
-    s.addText(truncatedUrl, { x: 0.6, y: 0.7, w: 12, h: 0.5, fontSize: 16, bold: true, color: COLORS.text, hyperlink: { url: r.page } });
-    if (r.crawl && r.crawl.title) {
-      s.addText(`${r.crawl.title}`, { x: 0.6, y: 1.18, w: 12, h: 0.32, fontSize: 11, color: COLORS.muted, italic: true });
+    // URL + crawl/live title
+    const truncatedUrl = trunc(r.page, 95);
+    s.addText(truncatedUrl, { x: 0.6, y: 0.78, w: 12.1, h: 0.45, fontSize: 16, bold: true, color: COLORS.primaryDark, hyperlink: { url: r.page } });
+    const pageTitle = (cov && cov.title) || (r.crawl && r.crawl.title) || '';
+    if (pageTitle) {
+      s.addText(pageTitle, { x: 0.6, y: 1.22, w: 12.1, h: 0.32, fontSize: 11, color: COLORS.muted, italic: true });
     }
 
     // Metric tiles
     const metrics = [
-      { label: 'Impressions', value: r.impressions.toLocaleString() },
-      { label: 'Clicks', value: r.clicks.toLocaleString() },
-      { label: 'CTR', value: (r.ctr * 100).toFixed(2) + '%' },
-      { label: `Potential @ rank ${r.targetPos}`, value: '+' + Math.round(r.potentialClicks).toLocaleString(), highlight: true }
+      { label: 'Impressions',                value: r.impressions.toLocaleString(),                color: COLORS.text },
+      { label: 'Clicks',                     value: r.clicks.toLocaleString(),                     color: COLORS.text },
+      { label: 'CTR',                        value: (r.ctr * 100).toFixed(2) + '%',                color: COLORS.text },
+      { label: `Potential @ rank ${r.targetPos}`, value: '+' + Math.round(r.potentialClicks).toLocaleString(), color: COLORS.primary, accent: true }
     ];
     metrics.forEach((m, i) => {
       const x = 0.6 + i * 3.15;
-      s.addShape(pptx.ShapeType.rect, { x, y: 1.6, w: 2.95, h: 1.0, fill: { color: m.highlight ? 'EEF0F6' : 'F5F6FA' }, line: { color: COLORS.border, width: 0.5 } });
-      s.addText(m.label, { x: x + 0.12, y: 1.68, w: 2.7, h: 0.3, fontSize: 10, color: COLORS.muted, bold: true });
-      s.addText(m.value, { x: x + 0.12, y: 1.98, w: 2.7, h: 0.55, fontSize: 22, bold: true, color: m.highlight ? COLORS.primary : COLORS.text });
+      s.addShape(pptx.ShapeType.roundRect, { x, y: 1.65, w: 2.95, h: 0.95, fill: { color: m.accent ? COLORS.panelAccent : COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+      s.addText(m.label, { x: x + 0.15, y: 1.72, w: 2.7, h: 0.3, fontSize: 10, color: COLORS.muted, bold: true });
+      s.addText(m.value, { x: x + 0.15, y: 2.0, w: 2.7, h: 0.55, fontSize: 22, bold: true, color: m.color });
     });
 
-    // Top queries table (up to 10 by impressions)
-    const topQ = Array.isArray(r.topQueries) ? r.topQueries.slice(0, 10) : [];
-    const coverageByQuery = {};
-    if (r.coverage && Array.isArray(r.coverage.queries)) {
-      for (const q of r.coverage.queries) coverageByQuery[q.query] = q;
-    }
-    const headerRow = [
-      { text: 'Query',       options: { bold: true, fill: { color: 'F5F6FA' } } },
-      { text: 'Impressions', options: { bold: true, fill: { color: 'F5F6FA' }, align: 'right' } },
-      { text: 'Clicks',      options: { bold: true, fill: { color: 'F5F6FA' }, align: 'right' } },
-      { text: 'Position',    options: { bold: true, fill: { color: 'F5F6FA' }, align: 'right' } },
-      { text: 'In page?',    options: { bold: true, fill: { color: 'F5F6FA' } } }
-    ];
-    const queryRows = topQ.map(q => {
-      const c = coverageByQuery[q.query];
-      let where, whereColor = COLORS.muted;
-      if (c) {
-        if (!c.presentSomewhere) { where = 'missing'; whereColor = COLORS.danger; }
-        else {
-          const parts = [];
-          if (c.phrase.inTitle) parts.push('title');
-          if (c.phrase.inMetaDescription) parts.push('desc');
-          if (c.phrase.inH1) parts.push('H1');
-          if (c.phrase.inHeadings) parts.push('Hn');
-          if (c.phrase.bodyOccurrences > 0) parts.push(`body ${c.phrase.bodyOccurrences}×`);
-          where = parts.join(' · ');
-          whereColor = COLORS.success;
-        }
-      } else {
-        where = r.coverage ? '(error)' : '(not analysed)';
-      }
-      return [
-        { text: q.query, options: { fontSize: 10 } },
-        { text: q.impressions.toLocaleString(), options: { fontSize: 10, align: 'right' } },
-        { text: q.clicks.toLocaleString(), options: { fontSize: 10, align: 'right' } },
-        { text: q.position.toFixed(1), options: { fontSize: 10, align: 'right' } },
-        { text: where, options: { fontSize: 10, color: whereColor, bold: !c || !c.presentSomewhere ? true : false } }
-      ];
-    });
-    if (queryRows.length) {
-      s.addTable([headerRow, ...queryRows], {
-        x: 0.6, y: 2.8, w: 7.8, colW: [3.0, 1.3, 1.0, 1.0, 1.5],
-        fontFace: 'Calibri', fontSize: 10, color: COLORS.text,
-        border: { type: 'solid', color: COLORS.border, pt: 0.5 },
-        rowH: 0.28
-      });
-    } else {
-      s.addText('No query data fetched for this page yet — expand the row in the tool first.',
-        { x: 0.6, y: 2.8, w: 7.8, h: 0.5, fontSize: 11, italic: true, color: COLORS.muted });
-    }
+    // ── Left column: CURRENT PAGE (title/meta/H1/words) + coverage chips
+    s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 2.75, w: 6.1, h: 4.2, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+    s.addText('Current page', { x: 0.78, y: 2.85, w: 5.9, h: 0.35, fontSize: 13, bold: true, color: COLORS.text });
 
-    // Action items panel (right side)
-    s.addShape(pptx.ShapeType.rect, { x: 8.7, y: 2.8, w: 4.0, h: 4.0, fill: { color: 'F5F6FA' }, line: { color: COLORS.border, width: 0.5 } });
-    s.addText('Action items', { x: 8.85, y: 2.9, w: 3.8, h: 0.35, fontSize: 14, bold: true, color: COLORS.text });
-    const actions = deriveActions(r);
-    const bullets = actions.map(a => ({ text: a, options: { bullet: { code: '25CF' }, breakLine: true } }));
-    s.addText(bullets, { x: 8.85, y: 3.3, w: 3.8, h: 3.4, fontSize: 11, color: COLORS.text, paraSpaceAfter: 6 });
+    const liveTitle = (cov && cov.title) || (r.crawl && r.crawl.title) || '';
+    const liveTitleLen = liveTitle.length;
+    const titleLenColor = (liveTitleLen >= 30 && liveTitleLen <= 60) ? COLORS.success : (liveTitleLen === 0 ? COLORS.danger : COLORS.warning);
+    s.addText([
+      { text: 'TITLE', options: { fontSize: 9, color: COLORS.muted, bold: true } },
+      { text: liveTitleLen ? `  ${liveTitleLen}ch` : '  missing', options: { fontSize: 9, color: titleLenColor, bold: true } }
+    ], { x: 0.78, y: 3.22, w: 5.9, h: 0.25 });
+    s.addText(liveTitle || '(no <title>)', { x: 0.78, y: 3.45, w: 5.9, h: 0.45, fontSize: 11, color: COLORS.text, italic: !liveTitle });
 
-    // Coverage chip strip (below the queries table)
-    if (r.coverage && Array.isArray(r.coverage.queries)) {
-      const cov = r.coverage;
+    const metaText = cov ? cov.metaDescription : '';
+    const metaLen = cov ? cov.metaDescriptionLength : -1;
+    const metaLenColor = metaLen === -1 ? COLORS.muted
+                       : metaLen === 0 ? COLORS.danger
+                       : (metaLen >= 70 && metaLen <= 160 ? COLORS.success : COLORS.warning);
+    const metaLenLabel = metaLen === -1 ? '' : (metaLen === 0 ? 'missing' : `${metaLen}ch`);
+    s.addText([
+      { text: 'META DESCRIPTION', options: { fontSize: 9, color: COLORS.muted, bold: true } },
+      { text: metaLenLabel ? `  ${metaLenLabel}` : '', options: { fontSize: 9, color: metaLenColor, bold: true } }
+    ], { x: 0.78, y: 3.98, w: 5.9, h: 0.25 });
+    s.addText(metaText || (cov ? '(missing — Google will auto-generate one)' : '(not analysed)'),
+      { x: 0.78, y: 4.21, w: 5.9, h: 0.65, fontSize: 11, color: metaText ? COLORS.text : COLORS.danger, italic: !metaText });
+
+    const liveH1 = (cov && cov.h1 && cov.h1[0]) || '';
+    const h1Count = cov ? (cov.h1 ? cov.h1.length : 0) : (r.crawl ? r.crawl.h1Count : -1);
+    const h1Color = h1Count === 1 ? COLORS.success : (h1Count === 0 || h1Count === -1 ? COLORS.danger : COLORS.warning);
+    const h1Label = h1Count === -1 ? '' : (h1Count === 1 ? '1 H1' : `${h1Count} H1${h1Count === 1 ? '' : 's'}`);
+    s.addText([
+      { text: 'H1', options: { fontSize: 9, color: COLORS.muted, bold: true } },
+      { text: h1Label ? `  ${h1Label}` : '', options: { fontSize: 9, color: h1Color, bold: true } }
+    ], { x: 0.78, y: 4.94, w: 5.9, h: 0.25 });
+    s.addText(liveH1 || (cov ? '(no H1 on page)' : '(not analysed)'),
+      { x: 0.78, y: 5.17, w: 5.9, h: 0.4, fontSize: 11, color: liveH1 ? COLORS.text : COLORS.danger, italic: !liveH1 });
+
+    // Coverage stats grid
+    if (cov) {
+      const total = cov.queries.length;
       const inT = cov.queries.filter(q => q.phrase.inTitle).length;
       const inM = cov.queries.filter(q => q.phrase.inMetaDescription).length;
-      const inH1 = cov.queries.filter(q => q.phrase.inH1).length;
+      const inH1c = cov.queries.filter(q => q.phrase.inH1).length;
       const inB = cov.queries.filter(q => q.phrase.bodyOccurrences > 0).length;
-      const total = cov.queries.length;
-      const metaTag = cov.metaDescriptionLength === 0 ? ' (missing description)' : '';
-      const txt = `Live page: ${cov.wordCount.toLocaleString()} words · ${inT}/${total} queries in title · ${inM}/${total} in meta description${metaTag} · ${inH1}/${total} in H1 · ${inB}/${total} in body`;
-      s.addText(txt, { x: 0.6, y: 6.6, w: 7.8, h: 0.35, fontSize: 10, color: COLORS.muted, italic: true });
+      const tone = (n) => n === 0 ? COLORS.danger : (n < total / 2 ? COLORS.warning : COLORS.success);
+
+      s.addText(`${cov.wordCount.toLocaleString()} words on the live page  ·  ${total} queries analysed`,
+        { x: 0.78, y: 5.62, w: 5.9, h: 0.25, fontSize: 10, color: COLORS.muted, italic: true });
+
+      const stats = [
+        { label: 'title', n: inT },
+        { label: 'meta',  n: inM },
+        { label: 'H1',    n: inH1c },
+        { label: 'body',  n: inB }
+      ];
+      stats.forEach((st, i) => {
+        const sx = 0.78 + i * 1.42;
+        s.addShape(pptx.ShapeType.roundRect, { x: sx, y: 5.95, w: 1.32, h: 0.85, fill: { color: 'FFFFFF' }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.06 });
+        s.addText(`${st.n}/${total}`, { x: sx, y: 6.0, w: 1.32, h: 0.4, fontSize: 16, bold: true, color: tone(st.n), align: 'center' });
+        s.addText('in ' + st.label, { x: sx, y: 6.42, w: 1.32, h: 0.35, fontSize: 9, color: COLORS.muted, align: 'center' });
+      });
+    } else {
+      s.addText('Run "Analyse keyword coverage" in the tool to populate live-page data.',
+        { x: 0.78, y: 5.7, w: 5.9, h: 0.45, fontSize: 10, color: COLORS.muted, italic: true });
+    }
+
+    // ── Right column: ACTION ITEMS (priority-coded)
+    s.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 2.75, w: 5.88, h: 2.5, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+    s.addText('Action items', { x: 7.03, y: 2.85, w: 5.6, h: 0.35, fontSize: 13, bold: true, color: COLORS.text });
+    const actions = deriveActions(r);
+    const actionLines = actions.slice(0, 6).map(a => ({
+      text: `[${priorityLabel(a.priority).toUpperCase()}] ${a.text}`,
+      options: { color: priorityColor(a.priority), bullet: { code: '25CF' }, breakLine: true, bold: a.priority === 'critical' }
+    }));
+    s.addText(actionLines, { x: 7.03, y: 3.22, w: 5.6, h: 1.95, fontSize: 10, paraSpaceAfter: 5, color: COLORS.text });
+
+    // ── Bottom right: MISSING QUERIES highlight
+    s.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 5.35, w: 5.88, h: 1.6, fill: { color: 'FFF5F5' }, line: { color: COLORS.danger, width: 0.75 }, rectRadius: 0.1 });
+    if (cov) {
+      const missing = cov.queries.filter(q => !q.presentSomewhere);
+      const missingImpr = missing.reduce((sum, q) => {
+        const t = (r.topQueries || []).find(x => x.query === q.query);
+        return sum + (t ? t.impressions : 0);
+      }, 0);
+      s.addText(`Missing on this page  ·  ${missing.length} ${missing.length === 1 ? 'query' : 'queries'}  ·  ${missingImpr.toLocaleString()} impressions`,
+        { x: 7.03, y: 5.42, w: 5.6, h: 0.3, fontSize: 11, bold: true, color: COLORS.danger });
+      if (missing.length) {
+        const list = missing.slice(0, 8).map(q => q.query).join('   ·   ');
+        s.addText(list + (missing.length > 8 ? `   ·   +${missing.length - 8} more` : ''),
+          { x: 7.03, y: 5.75, w: 5.6, h: 1.1, fontSize: 10, color: COLORS.text });
+      } else {
+        s.addText('Every ranking query already appears somewhere on the page. Focus on titles, H1 and internal linking.',
+          { x: 7.03, y: 5.78, w: 5.6, h: 1.0, fontSize: 11, color: COLORS.text, italic: true });
+      }
+    } else {
+      s.addText('Missing-keywords analysis not run yet.', { x: 7.03, y: 5.85, w: 5.6, h: 0.5, fontSize: 11, color: COLORS.muted, italic: true });
     }
 
     // Footer
-    s.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.6, y: 7.05, w: 12.1, h: 0.3, fontSize: 9, color: COLORS.muted });
+    s.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.6, y: 7.12, w: 12.1, h: 0.3, fontSize: 9, color: COLORS.muted });
+
+    // ── Second slide per opportunity: top queries detail table ─────────
+    // Skip if no queries fetched yet (user didn't expand row or run bulk).
+    const topQ = Array.isArray(r.topQueries) ? r.topQueries.slice(0, 12) : [];
+    if (topQ.length) {
+      const d = pptx.addSlide();
+      d.background = { color: COLORS.bg };
+      d.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.55, fill: { color: bc }, line: { type: 'none' } });
+      d.addText(`${idx + 1} / ${rows.length}   ${r.band.label}  ·  Queries detail`, { x: 0.6, y: 0.1, w: 12, h: 0.4, fontSize: 13, color: 'FFFFFF', bold: true });
+      d.addText(trunc(r.page, 110), { x: 0.6, y: 0.75, w: 12.1, h: 0.4, fontSize: 14, bold: true, color: COLORS.primaryDark, hyperlink: { url: r.page } });
+
+      const coverageByQuery = {};
+      if (cov) for (const q of cov.queries) coverageByQuery[q.query] = q;
+
+      const headerStyle = { bold: true, fill: { color: COLORS.panelAccent }, color: COLORS.text, fontSize: 11 };
+      const tHeader = [
+        { text: 'Query', options: headerStyle },
+        { text: 'Impressions', options: { ...headerStyle, align: 'right' } },
+        { text: 'Clicks',      options: { ...headerStyle, align: 'right' } },
+        { text: 'CTR',         options: { ...headerStyle, align: 'right' } },
+        { text: 'Position',    options: { ...headerStyle, align: 'right' } },
+        { text: 'In page?',    options: headerStyle }
+      ];
+      const tRows = topQ.map(q => {
+        const c = coverageByQuery[q.query];
+        let where, whereColor = COLORS.muted;
+        if (c) {
+          if (!c.presentSomewhere) { where = 'MISSING'; whereColor = COLORS.danger; }
+          else {
+            const parts = [];
+            if (c.phrase.inTitle) parts.push('title');
+            if (c.phrase.inMetaDescription) parts.push('desc');
+            if (c.phrase.inH1) parts.push('H1');
+            if (c.phrase.inHeadings) parts.push('Hn');
+            if (c.phrase.bodyOccurrences > 0) parts.push(`body ${c.phrase.bodyOccurrences}×`);
+            where = parts.join(' · ');
+            whereColor = COLORS.success;
+          }
+        } else where = '(not analysed)';
+        return [
+          { text: trunc(q.query, 60), options: { fontSize: 10 } },
+          { text: q.impressions.toLocaleString(), options: { fontSize: 10, align: 'right' } },
+          { text: q.clicks.toLocaleString(), options: { fontSize: 10, align: 'right' } },
+          { text: (q.ctr * 100).toFixed(2) + '%', options: { fontSize: 10, align: 'right' } },
+          { text: q.position.toFixed(1), options: { fontSize: 10, align: 'right' } },
+          { text: where, options: { fontSize: 10, color: whereColor, bold: !c || !c.presentSomewhere } }
+        ];
+      });
+      d.addTable([tHeader, ...tRows], {
+        x: 0.6, y: 1.35, w: 12.1, colW: [4.4, 1.4, 1.1, 1.1, 1.2, 2.9],
+        fontFace: 'Calibri', color: COLORS.text,
+        border: { type: 'solid', color: COLORS.border, pt: 0.5 },
+        rowH: 0.32
+      });
+      d.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.6, y: 7.12, w: 12.1, h: 0.3, fontSize: 9, color: COLORS.muted });
+    }
   }
 
   const safe = siteUrl.replace(/[^a-z0-9]/gi, '_');
