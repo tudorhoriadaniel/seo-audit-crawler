@@ -3036,8 +3036,13 @@ function renderStrategyShell() {
         </div>
         <div style="display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;align-items:center">
           <input type="text" id="csTextFilter" placeholder="Filter rows (URL or query)…" style="flex:1;min-width:200px;padding:7px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          <button id="csAnalyse" class="btn btn-secondary" title="Fetch each page and analyse whether the queries it ranks for actually appear on the page" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Analyse keyword coverage</button>
+          <label id="csQuickWinsLabel" title="Show only opportunities where at least one query is completely missing from the page" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted);opacity:.6">
+            <input type="checkbox" id="csQuickWins" disabled> Quick wins only
+          </label>
           <button id="csExport" class="btn btn-secondary" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export CSV</button>
         </div>
+        <div id="csAnalyseProgress" style="display:none;margin-top:8px;font-size:12px;color:var(--text-muted)"></div>
       </div>
 
       <div id="csSummary" style="display:none;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px"></div>
@@ -3048,6 +3053,8 @@ function renderStrategyShell() {
   document.getElementById('csRun').addEventListener('click', runStrategyQuery);
   document.getElementById('csExport').addEventListener('click', exportStrategyCsv);
   document.getElementById('csTextFilter').addEventListener('input', renderStrategyTable);
+  document.getElementById('csAnalyse').addEventListener('click', analyseAllCoverage);
+  document.getElementById('csQuickWins').addEventListener('change', renderStrategyTable);
   document.getElementById('csSite').addEventListener('change', (e) => {
     csState.selectedSite = e.target.value;
     localStorage.setItem('gsc-selected-site', csState.selectedSite);
@@ -3176,11 +3183,17 @@ function renderStrategySummary() {
        <b>${byBand[b.id]}</b> <span style="color:var(--text-muted)">${escapeHtml(b.label)}</span>
      </div>`).join('');
 
+  const quickWins = csState.rows.filter(r => r.isQuickWin === true).length;
+  const analysed = csState.rows.filter(r => r.coverage && Array.isArray(r.coverage.queries)).length;
+
   wrap.style.display = 'grid';
   wrap.innerHTML =
     card('Opportunities', total.toLocaleString()) +
     card('Total impressions', totalImpressions.toLocaleString()) +
     card('Estimated extra clicks', Math.round(totalPotential).toLocaleString(), 'if moved to target rank') +
+    (analysed > 0
+      ? card('Quick wins', quickWins.toLocaleString(), `pages missing ≥ 1 ranked keyword (analysed ${analysed} / ${total})`)
+      : '') +
     `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:14px">
        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">By band</div>
        <div style="display:flex;flex-direction:column;gap:5px">${bandChips}</div>
@@ -3198,7 +3211,12 @@ function renderStrategyTable() {
 
   const bands = activeBandIds();
   const textFilter = (document.getElementById('csTextFilter').value || '').toLowerCase();
-  const filtered = csState.rows.filter(r => bands.has(r.band.id) && (!textFilter || r.page.toLowerCase().includes(textFilter)));
+  const quickWinsOnly = !!document.getElementById('csQuickWins')?.checked;
+  const filtered = csState.rows.filter(r =>
+    bands.has(r.band.id) &&
+    (!textFilter || r.page.toLowerCase().includes(textFilter)) &&
+    (!quickWinsOnly || r.isQuickWin === true)
+  );
 
   if (!filtered.length) {
     wrap.innerHTML = '<div style="padding:20px;color:var(--text-muted)">No rows match the current filters.</div>';
@@ -3213,12 +3231,16 @@ function renderStrategyTable() {
       <span style="font-size:12px;color:var(--text-muted)" title="From the active crawl">
         ${crawl.wordCount} words · ${crawl.h1Count} H1${crawl.h1Count === 1 ? '' : 's'} · title ${crawl.titleLength}ch
       </span>` : '';
+    const quickWinBadge = r.isQuickWin === true
+      ? `<span title="At least one query the page ranks for is missing from the page entirely" style="background:rgba(22,163,74,.15);color:var(--success);padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600">⚡ quick win</span>`
+      : '';
     const main = `
       <tr data-page="${escapeHtml(r.page)}" style="cursor:pointer">
         <td style="padding:10px 12px">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${r.band.color}" title="${escapeHtml(r.band.label)}"></span>
             <a href="${escapeHtml(r.page)}" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none;word-break:break-all" onclick="event.stopPropagation()">${escapeHtml(r.page)}</a>
+            ${quickWinBadge}
             ${crawlTags}
           </div>
           ${crawl && crawl.title ? `<div style="font-size:12px;color:var(--text-muted);margin-top:3px">${escapeHtml(crawl.title)}</div>` : ''}
@@ -3318,10 +3340,10 @@ async function loadStrategyQueries(row) {
   loadStrategyCoverage(row);
 }
 
-async function loadStrategyCoverage(row) {
+async function loadStrategyCoverage(row, { silent } = {}) {
   if (!Array.isArray(row.topQueries) || !row.topQueries.length) return;
   row.coverage = { loading: true };
-  renderStrategyQueriesFor(row.page);
+  if (!silent) renderStrategyQueriesFor(row.page);
   try {
     const r = await fetch('/api/content-analysis', {
       method: 'POST',
@@ -3335,10 +3357,112 @@ async function loadStrategyCoverage(row) {
     if (!r.ok) throw new Error(data.error || 'analysis failed');
     if (data.error) throw new Error(data.error);
     row.coverage = data;
+    row.isQuickWin = computeQuickWin(row);
   } catch (e) {
     row.coverage = { error: e.message };
   }
-  renderStrategyQueriesFor(row.page);
+  if (!silent) {
+    renderStrategyQueriesFor(row.page);
+    renderStrategySummary();
+    enableQuickWinsIfAny();
+  }
+}
+
+// A row is a "quick win" when at least one of its ranking queries is
+// completely absent from the page (not in title, H1, headings, or body).
+function computeQuickWin(row) {
+  const cov = row.coverage;
+  if (!cov || !Array.isArray(cov.queries)) return false;
+  return cov.queries.some(q => !q.presentSomewhere);
+}
+
+// Bulk-fetch queries + coverage for every row currently passing band /
+// text filters, with bounded concurrency so we don't hammer the server.
+let csBulkAbort = false;
+async function analyseAllCoverage() {
+  if (!csState.rows.length) return;
+  const btn = document.getElementById('csAnalyse');
+  const progress = document.getElementById('csAnalyseProgress');
+
+  // If a run is in flight, this click cancels it.
+  if (btn.dataset.running === '1') {
+    csBulkAbort = true;
+    btn.textContent = 'Stopping…';
+    return;
+  }
+
+  const bands = activeBandIds();
+  const textFilter = (document.getElementById('csTextFilter').value || '').toLowerCase();
+  const targets = csState.rows.filter(r =>
+    bands.has(r.band.id) &&
+    (!textFilter || r.page.toLowerCase().includes(textFilter)) &&
+    !(r.coverage && Array.isArray(r.coverage.queries))
+  );
+  if (!targets.length) {
+    enableQuickWinsIfAny();
+    progress.style.display = 'block';
+    progress.textContent = 'All visible rows are already analysed.';
+    return;
+  }
+  if (targets.length > 200) {
+    if (!confirm(`This will analyse ${targets.length} pages and could take a few minutes (and hits Search Console + the live URLs). Continue?`)) return;
+  }
+
+  csBulkAbort = false;
+  btn.dataset.running = '1';
+  btn.textContent = 'Stop';
+  progress.style.display = 'block';
+
+  const total = targets.length;
+  let done = 0, errors = 0;
+  const CONCURRENCY = 3;
+  const queue = targets.slice();
+  const tick = () => {
+    progress.innerHTML = `Analysed <b>${done}</b> / ${total}${errors ? ` · <span style="color:var(--danger)">${errors} errors</span>` : ''}`;
+  };
+  tick();
+
+  const worker = async () => {
+    while (queue.length && !csBulkAbort) {
+      const row = queue.shift();
+      try {
+        if (!row.topQueries) await loadStrategyQueries(row);    // queries + coverage chained
+        else if (!row.coverage) await loadStrategyCoverage(row, { silent: true });
+        if (row.coverage && row.coverage.error) errors++;
+      } catch { errors++; }
+      done++;
+      tick();
+    }
+  };
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+
+  btn.dataset.running = '0';
+  btn.textContent = csBulkAbort ? 'Resume analysis' : 'Re-analyse';
+  if (csBulkAbort) progress.innerHTML = `Stopped at ${done} / ${total}${errors ? ` · <span style="color:var(--danger)">${errors} errors</span>` : ''}.`;
+  else progress.innerHTML = `Done — analysed ${done} / ${total}${errors ? ` · <span style="color:var(--danger)">${errors} errors</span>` : ''}.`;
+
+  // Update quick-win flags for every row that has coverage but hasn't been
+  // flagged yet (covers the case where coverage was loaded via expansion).
+  for (const r of csState.rows) {
+    if (r.coverage && Array.isArray(r.coverage.queries) && r.isQuickWin === undefined) {
+      r.isQuickWin = computeQuickWin(r);
+    }
+  }
+  enableQuickWinsIfAny();
+  renderStrategySummary();
+  renderStrategyTable();
+}
+
+function enableQuickWinsIfAny() {
+  const cb = document.getElementById('csQuickWins');
+  const label = document.getElementById('csQuickWinsLabel');
+  if (!cb || !label) return;
+  const analysedCount = csState.rows.filter(r => r.coverage && Array.isArray(r.coverage.queries)).length;
+  if (analysedCount > 0) {
+    cb.disabled = false;
+    label.style.opacity = '1';
+    label.style.color = 'var(--text)';
+  }
 }
 
 function renderStrategyQueriesFor(page) {
@@ -3460,19 +3584,52 @@ function exportStrategyCsv() {
   if (!csState.rows.length) { alert('Run a query first.'); return; }
   const bands = activeBandIds();
   const textFilter = (document.getElementById('csTextFilter').value || '').toLowerCase();
-  const rows = csState.rows.filter(r => bands.has(r.band.id) && (!textFilter || r.page.toLowerCase().includes(textFilter)));
-  const headers = ['page','band','impressions','clicks','ctr','position','potential_clicks','target_position','title','word_count'];
+  const quickWinsOnly = !!document.getElementById('csQuickWins')?.checked;
+  const rows = csState.rows.filter(r =>
+    bands.has(r.band.id) &&
+    (!textFilter || r.page.toLowerCase().includes(textFilter)) &&
+    (!quickWinsOnly || r.isQuickWin === true)
+  );
+  const headers = [
+    'page','band','impressions','clicks','ctr','position','potential_clicks','target_position',
+    'crawl_title','crawl_word_count',
+    'coverage_analysed','page_word_count','queries_analysed',
+    'queries_in_title','queries_in_h1','queries_in_body',
+    'missing_queries_count','missing_queries_impressions','missing_queries_top','quick_win'
+  ];
   const escape = (v) => {
     const s = String(v == null ? '' : v);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
   const lines = [headers.join(',')];
   for (const r of rows) {
+    const cov = r.coverage && Array.isArray(r.coverage.queries) ? r.coverage : null;
+    let pageWords = '', qAnalysed = '', inTitle = '', inH1 = '', inBody = '';
+    let missingCount = '', missingImpressions = '', missingTop = '';
+    if (cov) {
+      pageWords = cov.wordCount || 0;
+      qAnalysed = cov.queries.length;
+      inTitle = cov.queries.filter(q => q.phrase.inTitle).length;
+      inH1 = cov.queries.filter(q => q.phrase.inH1).length;
+      inBody = cov.queries.filter(q => q.phrase.bodyOccurrences > 0).length;
+      const missing = cov.queries.filter(q => !q.presentSomewhere);
+      missingCount = missing.length;
+      // Sum impressions of missing queries by matching them back to topQueries.
+      missingImpressions = missing.reduce((s, q) => {
+        const t = (r.topQueries || []).find(x => x.query === q.query);
+        return s + (t ? t.impressions : 0);
+      }, 0);
+      missingTop = missing.slice(0, 10).map(q => q.query).join(' | ');
+    }
     lines.push([
       r.page, r.band.label, r.impressions, r.clicks, r.ctr, r.position,
       Math.round(r.potentialClicks), r.targetPos,
       r.crawl ? r.crawl.title : '',
-      r.crawl ? r.crawl.wordCount : ''
+      r.crawl ? r.crawl.wordCount : '',
+      cov ? 'yes' : 'no',
+      pageWords, qAnalysed, inTitle, inH1, inBody,
+      missingCount, missingImpressions, missingTop,
+      r.isQuickWin === true ? 'yes' : (r.isQuickWin === false ? 'no' : '')
     ].map(escape).join(','));
   }
   const siteUrl = document.getElementById('csSite').value || 'site';
