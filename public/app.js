@@ -2415,6 +2415,115 @@ function gscDateNDaysAgo(days) {
   return d.toISOString().slice(0, 10);
 }
 
+// Date presets matching the Search Console UI. Values are days back from
+// today (less the GSC 2-day delay).
+const GSC_DATE_PRESETS = [
+  { value: '7',    label: 'Last 7 days' },
+  { value: '28',   label: 'Last 28 days' },
+  { value: '90',   label: 'Last 3 months' },
+  { value: '180',  label: 'Last 6 months' },
+  { value: '365',  label: 'Last 12 months' },
+  { value: '480',  label: 'Last 16 months' },
+  { value: 'custom', label: 'Custom range' }
+];
+
+function applyGscDatePreset(preset, startInputId, endInputId) {
+  if (preset === 'custom') return;
+  const days = parseInt(preset);
+  if (!days) return;
+  document.getElementById(startInputId).value = gscDateNDaysAgo(days);
+  document.getElementById(endInputId).value = gscDateNDaysAgo(2);
+}
+
+// GSC uses ISO 3166-1 alpha-3 country codes (lowercase in the API).
+// Curated list ordered by likely relevance for our user base, then
+// alphabetical. The label is what the user sees.
+const GSC_COUNTRIES = [
+  { code: '', label: 'All countries' },
+  { code: 'che', label: 'Switzerland' },
+  { code: 'fra', label: 'France' },
+  { code: 'deu', label: 'Germany' },
+  { code: 'ita', label: 'Italy' },
+  { code: 'gbr', label: 'United Kingdom' },
+  { code: 'usa', label: 'United States' },
+  { code: 'rou', label: 'Romania' },
+  { code: 'aut', label: 'Austria' },
+  { code: 'bel', label: 'Belgium' },
+  { code: 'nld', label: 'Netherlands' },
+  { code: 'lux', label: 'Luxembourg' },
+  { code: 'esp', label: 'Spain' },
+  { code: 'prt', label: 'Portugal' },
+  { code: 'pol', label: 'Poland' },
+  { code: 'cze', label: 'Czechia' },
+  { code: 'svk', label: 'Slovakia' },
+  { code: 'hun', label: 'Hungary' },
+  { code: 'bgr', label: 'Bulgaria' },
+  { code: 'grc', label: 'Greece' },
+  { code: 'svn', label: 'Slovenia' },
+  { code: 'hrv', label: 'Croatia' },
+  { code: 'srb', label: 'Serbia' },
+  { code: 'irl', label: 'Ireland' },
+  { code: 'dnk', label: 'Denmark' },
+  { code: 'swe', label: 'Sweden' },
+  { code: 'nor', label: 'Norway' },
+  { code: 'fin', label: 'Finland' },
+  { code: 'est', label: 'Estonia' },
+  { code: 'lva', label: 'Latvia' },
+  { code: 'ltu', label: 'Lithuania' },
+  { code: 'isl', label: 'Iceland' },
+  { code: 'mlt', label: 'Malta' },
+  { code: 'cyp', label: 'Cyprus' },
+  { code: 'tur', label: 'Türkiye' },
+  { code: 'ukr', label: 'Ukraine' },
+  { code: 'rus', label: 'Russia' },
+  { code: 'can', label: 'Canada' },
+  { code: 'mex', label: 'Mexico' },
+  { code: 'bra', label: 'Brazil' },
+  { code: 'arg', label: 'Argentina' },
+  { code: 'col', label: 'Colombia' },
+  { code: 'chl', label: 'Chile' },
+  { code: 'per', label: 'Peru' },
+  { code: 'aus', label: 'Australia' },
+  { code: 'nzl', label: 'New Zealand' },
+  { code: 'jpn', label: 'Japan' },
+  { code: 'kor', label: 'South Korea' },
+  { code: 'chn', label: 'China' },
+  { code: 'hkg', label: 'Hong Kong' },
+  { code: 'twn', label: 'Taiwan' },
+  { code: 'sgp', label: 'Singapore' },
+  { code: 'mys', label: 'Malaysia' },
+  { code: 'tha', label: 'Thailand' },
+  { code: 'idn', label: 'Indonesia' },
+  { code: 'phl', label: 'Philippines' },
+  { code: 'vnm', label: 'Vietnam' },
+  { code: 'ind', label: 'India' },
+  { code: 'pak', label: 'Pakistan' },
+  { code: 'bgd', label: 'Bangladesh' },
+  { code: 'are', label: 'United Arab Emirates' },
+  { code: 'sau', label: 'Saudi Arabia' },
+  { code: 'isr', label: 'Israel' },
+  { code: 'qat', label: 'Qatar' },
+  { code: 'kwt', label: 'Kuwait' },
+  { code: 'zaf', label: 'South Africa' },
+  { code: 'egy', label: 'Egypt' },
+  { code: 'mar', label: 'Morocco' },
+  { code: 'tun', label: 'Tunisia' },
+  { code: 'dza', label: 'Algeria' },
+  { code: 'nga', label: 'Nigeria' },
+  { code: 'ken', label: 'Kenya' }
+];
+
+function buildCountryOptions(selected) {
+  return GSC_COUNTRIES.map(c =>
+    `<option value="${c.code}"${c.code === selected ? ' selected' : ''}>${escapeHtml(c.label)}</option>`
+  ).join('');
+}
+
+function gscCountryFilterGroup(code) {
+  if (!code) return null;
+  return [{ filters: [{ dimension: 'country', operator: 'equals', expression: code }] }];
+}
+
 async function loadGscView() {
   const container = document.getElementById('gscContent');
   container.innerHTML = '<p style="color:var(--text-muted);padding:20px">Loading…</p>';
@@ -2506,12 +2615,24 @@ function renderGscConnectedShell() {
             <select id="gscSite" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)"><option value="">Loading sites…</option></select>
           </div>
           <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Date range</label>
+            <select id="gscDatePreset" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+              ${GSC_DATE_PRESETS.map(p => `<option value="${p.value}"${p.value === '28' ? ' selected' : ''}>${escapeHtml(p.label)}</option>`).join('')}
+            </select>
+          </div>
+          <div>
             <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Start date</label>
             <input type="date" id="gscStart" value="${start}" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">End date</label>
             <input type="date" id="gscEnd" value="${today}" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Country</label>
+            <select id="gscCountry" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+              ${buildCountryOptions(localStorage.getItem('gsc-country') || '')}
+            </select>
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Dimension</label>
@@ -2569,6 +2690,18 @@ function renderGscConnectedShell() {
     gscState.selectedSite = e.target.value;
     localStorage.setItem('gsc-selected-site', gscState.selectedSite);
   });
+  document.getElementById('gscDatePreset').addEventListener('change', (e) => {
+    applyGscDatePreset(e.target.value, 'gscStart', 'gscEnd');
+  });
+  document.getElementById('gscCountry').addEventListener('change', (e) => {
+    localStorage.setItem('gsc-country', e.target.value);
+  });
+  // Mark preset as "custom" when the user edits dates manually.
+  for (const id of ['gscStart', 'gscEnd']) {
+    document.getElementById(id).addEventListener('change', () => {
+      document.getElementById('gscDatePreset').value = 'custom';
+    });
+  }
   wireSelectFilter('gscSiteFilter', 'gscSite');
 }
 
@@ -2731,6 +2864,7 @@ async function runGscQuery() {
   const searchType = document.getElementById('gscType').value;
   const rowLimit = parseInt(document.getElementById('gscRowLimit').value) || 1000;
   const dataState = document.getElementById('gscFresh').checked ? 'all' : 'final';
+  const country = (document.getElementById('gscCountry') || {}).value || '';
 
   if (!siteUrl) { alert('Select a property first.'); return; }
 
@@ -2740,10 +2874,13 @@ async function runGscQuery() {
   results.innerHTML = '<p style="color:var(--text-muted);padding:20px">Querying Google Search Console…</p>';
 
   try {
+    const body = { siteUrl, startDate, endDate, dimensions, rowLimit, searchType, dataState };
+    const countryFilter = gscCountryFilterGroup(country);
+    if (countryFilter) body.dimensionFilterGroups = countryFilter;
     const r = await fetch('/api/gsc/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ siteUrl, startDate, endDate, dimensions, rowLimit, searchType, dataState })
+      body: JSON.stringify(body)
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Query failed');
@@ -3008,12 +3145,24 @@ function renderStrategyShell() {
             <select id="csSite" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)"><option value="">Loading sites…</option></select>
           </div>
           <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Date range</label>
+            <select id="csDatePreset" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+              ${GSC_DATE_PRESETS.map(p => `<option value="${p.value}"${p.value === '28' ? ' selected' : ''}>${escapeHtml(p.label)}</option>`).join('')}
+            </select>
+          </div>
+          <div>
             <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Start date</label>
             <input type="date" id="csStart" value="${start}" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">End date</label>
             <input type="date" id="csEnd" value="${today}" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Country</label>
+            <select id="csCountry" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+              ${buildCountryOptions(localStorage.getItem('gsc-country') || '')}
+            </select>
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Search type</label>
@@ -3024,7 +3173,7 @@ function renderStrategyShell() {
             </select>
           </div>
           <div>
-            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Min impressions</label>
+            <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Min impressions (per query)</label>
             <input type="number" id="csMinImpressions" value="100" min="0" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
           </div>
           <div>
@@ -3062,6 +3211,17 @@ function renderStrategyShell() {
     csState.selectedSite = e.target.value;
     localStorage.setItem('gsc-selected-site', csState.selectedSite);
   });
+  document.getElementById('csDatePreset').addEventListener('change', (e) => {
+    applyGscDatePreset(e.target.value, 'csStart', 'csEnd');
+  });
+  document.getElementById('csCountry').addEventListener('change', (e) => {
+    localStorage.setItem('gsc-country', e.target.value);
+  });
+  for (const id of ['csStart', 'csEnd']) {
+    document.getElementById(id).addEventListener('change', () => {
+      document.getElementById('csDatePreset').value = 'custom';
+    });
+  }
   for (const cb of document.querySelectorAll('.strategy-band')) {
     cb.addEventListener('change', renderStrategyTable);
   }
@@ -3108,6 +3268,7 @@ async function runStrategyQuery() {
   const endDate = document.getElementById('csEnd').value;
   const searchType = document.getElementById('csType').value;
   const minImpressions = parseInt(document.getElementById('csMinImpressions').value) || 0;
+  const country = (document.getElementById('csCountry') || {}).value || '';
   if (!siteUrl) { alert('Select a property first.'); return; }
 
   const btn = document.getElementById('csRun');
@@ -3116,44 +3277,111 @@ async function runStrategyQuery() {
   document.getElementById('csSummary').style.display = 'none';
 
   try {
+    // Page + query dimension so we can classify each page by its best
+    // opportunity query rather than by the page's average rank — that
+    // avoids hiding pages where one query ranks #2 while another ranks #15.
+    const body = {
+      siteUrl, startDate, endDate,
+      dimensions: ['page', 'query'],
+      rowLimit: 25000,
+      searchType
+    };
+    const countryFilter = gscCountryFilterGroup(country);
+    if (countryFilter) body.dimensionFilterGroups = countryFilter;
     const r = await fetch('/api/gsc/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        siteUrl, startDate, endDate,
-        dimensions: ['page'],
-        rowLimit: 25000,
-        searchType
-      })
+      body: JSON.stringify(body)
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Query failed');
 
-    csState.rows = (data.rows || [])
-      .map(row => {
-        const page = (row.keys || [])[0] || '';
-        const impressions = row.impressions || 0;
-        const clicks = row.clicks || 0;
-        const position = row.position || 0;
-        const ctr = row.ctr || 0;
-        if (position < 1.5 || position > 40.5) return null;       // ignore #1 and ranks past 40
-        if (impressions < minImpressions) return null;
-        const band = bandForPosition(position);
-        if (!band) return null;
-        const targetCtr = ctrAtPosition(band.target);
-        const potentialClicks = Math.max(0, impressions * targetCtr - clicks);
-        const crawl = csState.crawlPages ? csState.crawlPages.get(normaliseUrlForJoin(page)) : null;
-        return {
-          page, impressions, clicks, position, ctr,
-          band, potentialClicks, targetPos: band.target,
-          crawl: crawl || null,
-          topQueries: null   // lazy-loaded on expand
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.potentialClicks - a.potentialClicks);
+    // Group page+query pairs by page.
+    const pageMap = new Map();
+    for (const row of data.rows || []) {
+      const keys = row.keys || [];
+      const page = keys[0];
+      const query = keys[1];
+      if (!page) continue;
+      let p = pageMap.get(page);
+      if (!p) {
+        p = { page, queries: [], totalImpr: 0, totalClicks: 0, weightedPosSum: 0 };
+        pageMap.set(page, p);
+      }
+      const q = {
+        query: query || '',
+        impressions: row.impressions || 0,
+        clicks: row.clicks || 0,
+        ctr: row.ctr || 0,
+        position: row.position || 0
+      };
+      p.queries.push(q);
+      p.totalImpr += q.impressions;
+      p.totalClicks += q.clicks;
+      p.weightedPosSum += q.position * q.impressions;
+    }
 
+    const rows = [];
+    for (const p of pageMap.values()) {
+      // For each query, compute the band + potential uplift; the page's
+      // band is the band of the query with the highest potential clicks.
+      let bestQuery = null;
+      let totalPotential = 0;
+      const qualifying = [];
+      for (const q of p.queries) {
+        if (q.impressions < minImpressions) continue;
+        if (q.position < 1.5 || q.position > 40.5) continue;
+        const band = bandForPosition(q.position);
+        if (!band) continue;
+        const targetCtr = ctrAtPosition(band.target);
+        const potential = Math.max(0, q.impressions * targetCtr - q.clicks);
+        q._band = band;
+        q._potential = potential;
+        qualifying.push(q);
+        totalPotential += potential;
+        if (!bestQuery || potential > bestQuery._potential) bestQuery = q;
+      }
+      if (!bestQuery) continue;   // no qualifying query → not an opportunity
+
+      // Sort the per-page queries: best opportunity first (potential clicks),
+      // then by impressions — gives a clean drill-down without an extra API call.
+      p.queries.sort((a, b) => {
+        const pa = a._potential ?? -1, pb = b._potential ?? -1;
+        if (pa !== pb) return pb - pa;
+        return (b.impressions || 0) - (a.impressions || 0);
+      });
+
+      const avgPosition = p.totalImpr > 0 ? p.weightedPosSum / p.totalImpr : 0;
+      const avgCtr = p.totalImpr > 0 ? p.totalClicks / p.totalImpr : 0;
+      const crawl = csState.crawlPages ? csState.crawlPages.get(normaliseUrlForJoin(p.page)) : null;
+
+      rows.push({
+        page: p.page,
+        impressions: p.totalImpr,
+        clicks: p.totalClicks,
+        ctr: avgCtr,
+        position: avgPosition,
+        band: bestQuery._band,
+        targetPos: bestQuery._band.target,
+        potentialClicks: totalPotential,
+        bestQuery: bestQuery.query,
+        bestQueryPosition: bestQuery.position,
+        bestQueryImpressions: bestQuery.impressions,
+        qualifyingCount: qualifying.length,
+        crawl: crawl || null,
+        topQueries: p.queries.slice(0, 50)   // populated up-front — no drill-down needed
+      });
+    }
+
+    rows.sort((a, b) => b.potentialClicks - a.potentialClicks);
+    csState.rows = rows;
     csState.expanded.clear();
+
+    // Warn the user if we likely hit the 25000-row cap.
+    if ((data.rows || []).length >= 25000) {
+      console.warn('Content Strategy: hit GSC 25k row cap; some long-tail queries may be excluded.');
+    }
+
     renderStrategySummary();
     renderStrategyTable();
   } catch (e) {
@@ -3247,12 +3475,13 @@ function renderStrategyTable() {
             ${crawlTags}
           </div>
           ${crawl && crawl.title ? `<div style="font-size:12px;color:var(--text-muted);margin-top:3px">${escapeHtml(crawl.title)}</div>` : ''}
+          ${r.bestQuery ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px">Best opportunity: <b style="color:${r.band.color}">${escapeHtml(r.bestQuery)}</b> @ rank ${r.bestQueryPosition.toFixed(1)} · ${r.bestQueryImpressions.toLocaleString()} impressions${r.qualifyingCount > 1 ? ` <span style="opacity:.7">(+${r.qualifyingCount - 1} more ranking queries)</span>` : ''}</div>` : ''}
         </td>
-        <td style="padding:10px 12px;font-size:12px"><span style="background:${r.band.color}22;color:${r.band.color};padding:2px 8px;border-radius:999px;font-weight:600">${escapeHtml(r.band.label)}</span></td>
+        <td style="padding:10px 12px;font-size:12px"><span style="background:${r.band.color}22;color:${r.band.color};padding:2px 8px;border-radius:999px;font-weight:600" title="Band reflects the best opportunity query — not the page's average rank.">${escapeHtml(r.band.label)}</span></td>
         <td style="padding:10px 12px;text-align:right">${r.impressions.toLocaleString()}</td>
         <td style="padding:10px 12px;text-align:right">${r.clicks.toLocaleString()}</td>
         <td style="padding:10px 12px;text-align:right">${(r.ctr * 100).toFixed(2)}%</td>
-        <td style="padding:10px 12px;text-align:right">${r.position.toFixed(1)}</td>
+        <td style="padding:10px 12px;text-align:right" title="Page-average rank across all queries">${r.position.toFixed(1)}</td>
         <td style="padding:10px 12px;text-align:right"><b>+${Math.round(r.potentialClicks).toLocaleString()}</b><div style="font-size:11px;color:var(--text-muted)">if @${r.targetPos}</div></td>
         <td style="padding:10px 12px;text-align:center;color:var(--text-muted)">${isOpen ? '▾' : '▸'}</td>
       </tr>`;
@@ -3647,7 +3876,8 @@ function exportStrategyCsv() {
     (!quickWinsOnly || r.isQuickWin === true)
   );
   const headers = [
-    'page','band','impressions','clicks','ctr','position','potential_clicks','target_position',
+    'page','band','impressions','clicks','ctr','page_avg_position','potential_clicks','target_position',
+    'best_query','best_query_position','best_query_impressions','qualifying_query_count',
     'crawl_title','crawl_word_count',
     'coverage_analysed','page_word_count','queries_analysed',
     'queries_in_title','queries_in_meta_description','queries_in_h1','queries_in_body',
@@ -3683,6 +3913,8 @@ function exportStrategyCsv() {
     lines.push([
       r.page, r.band.label, r.impressions, r.clicks, r.ctr, r.position,
       Math.round(r.potentialClicks), r.targetPos,
+      r.bestQuery || '', r.bestQueryPosition != null ? r.bestQueryPosition.toFixed(1) : '',
+      r.bestQueryImpressions || '', r.qualifyingCount || '',
       r.crawl ? r.crawl.title : '',
       r.crawl ? r.crawl.wordCount : '',
       cov ? 'yes' : 'no',
@@ -3937,19 +4169,27 @@ async function exportStrategyPpt() {
 
     // Coloured header strip
     s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.65, fill: { color: bc }, line: { type: 'none' } });
-    s.addText(`${idx + 1} / ${rows.length}   ${r.band.label}   ·   Position ${r.position.toFixed(1)}   ·   Target rank ${r.targetPos}`,
+    s.addText(`${idx + 1} / ${rows.length}   ${r.band.label}   ·   Best query @ rank ${r.bestQueryPosition.toFixed(1)}   ·   Target rank ${r.targetPos}`,
       { x: 0.6, y: 0.13, w: 9, h: 0.4, fontSize: 13, color: 'FFFFFF', bold: true });
     if (r.isQuickWin) {
       s.addShape(pptx.ShapeType.roundRect, { x: 11.55, y: 0.13, w: 1.55, h: 0.4, fill: { color: 'FFFFFF' }, line: { type: 'none' }, rectRadius: 0.18 });
       s.addText('⚡ Quick win', { x: 11.55, y: 0.13, w: 1.55, h: 0.4, fontSize: 11, color: bc, bold: true, align: 'center' });
     }
 
-    // URL + crawl/live title
+    // URL + crawl/live title + best-opportunity caption
     const truncatedUrl = trunc(r.page, 95);
-    s.addText(truncatedUrl, { x: 0.6, y: 0.78, w: 12.1, h: 0.45, fontSize: 16, bold: true, color: COLORS.primaryDark, hyperlink: { url: r.page } });
+    s.addText(truncatedUrl, { x: 0.6, y: 0.78, w: 12.1, h: 0.42, fontSize: 16, bold: true, color: COLORS.primaryDark, hyperlink: { url: r.page } });
     const pageTitle = (cov && cov.title) || (r.crawl && r.crawl.title) || '';
     if (pageTitle) {
-      s.addText(pageTitle, { x: 0.6, y: 1.22, w: 12.1, h: 0.32, fontSize: 11, color: COLORS.muted, italic: true });
+      s.addText(pageTitle, { x: 0.6, y: 1.18, w: 12.1, h: 0.28, fontSize: 11, color: COLORS.muted, italic: true });
+    }
+    if (r.bestQuery) {
+      s.addText([
+        { text: 'Best opportunity:  ', options: { color: COLORS.muted } },
+        { text: `"${r.bestQuery}"`,    options: { color: bc, bold: true } },
+        { text: `  @ rank ${r.bestQueryPosition.toFixed(1)} · ${r.bestQueryImpressions.toLocaleString()} impressions${r.qualifyingCount > 1 ? ` · +${r.qualifyingCount - 1} more ranking queries` : ''}`,
+          options: { color: COLORS.text } }
+      ], { x: 0.6, y: pageTitle ? 1.46 : 1.18, w: 12.1, h: 0.3, fontSize: 11 });
     }
 
     // Metric tiles
