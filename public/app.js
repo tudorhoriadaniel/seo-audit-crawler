@@ -3200,6 +3200,7 @@ function renderStrategyShell() {
 
       <div id="csSummary" style="display:none;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px"></div>
       <div id="csExcludedHint"></div>
+      <div id="csCoverageHint"></div>
       <div id="csTable"></div>
     </div>
   `;
@@ -3419,6 +3420,7 @@ async function runStrategyQuery() {
 
     renderStrategySummary();
     renderExcludedHint();
+    renderCoverageHint();
     renderStrategyTable();
   } catch (e) {
     document.getElementById('csTable').innerHTML = `<div style="padding:20px;color:var(--danger)">${escapeHtml(e.message)}</div>`;
@@ -3538,6 +3540,35 @@ function renderExcludedHint() {
       runStrategyQuery();
     });
   });
+}
+
+// Top-of-table banner: shows whenever any opportunities lack live-page
+// coverage analysis. Without it, the slides + tables can only show what we
+// can infer from the crawl (often nothing), so this is the action that
+// makes the rest of the tab "lit up" for the user. Hides itself once
+// every visible row has been analysed.
+function renderCoverageHint() {
+  const el = document.getElementById('csCoverageHint');
+  if (!el) return;
+  if (!csState.rows || !csState.rows.length) { el.innerHTML = ''; return; }
+  const total = csState.rows.length;
+  const analysed = csState.rows.filter(r => r.coverage && Array.isArray(r.coverage.queries)).length;
+  const remaining = total - analysed;
+  if (remaining === 0) { el.innerHTML = ''; return; }
+
+  el.innerHTML = `
+    <div style="background:linear-gradient(90deg,rgba(99,102,241,.10),rgba(99,102,241,.04));border:1px solid var(--primary);border-radius:10px;padding:14px 16px;margin-top:12px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div style="flex:1;min-width:280px">
+        <div style="font-weight:700;color:var(--text);margin-bottom:4px">Next step — analyse keyword coverage</div>
+        <div style="font-size:13px;color:var(--text-muted);line-height:1.5">
+          Fetches each opportunity page's live HTML and checks whether the queries it ranks for actually appear in its title, meta description, H1 and body. Powers the "Quick wins" filter, the "Where" pills on each query, and the action items in the PPT export.
+          <br><b style="color:var(--text)">${remaining.toLocaleString()}</b> of ${total.toLocaleString()} pages still need analysis${analysed ? ` (${analysed.toLocaleString()} already analysed).` : '.'}
+        </div>
+      </div>
+      <button id="csCoverageHintRun" class="btn btn-primary" style="padding:10px 18px;border-radius:8px;background:var(--primary);color:#fff;border:none;cursor:pointer;font-weight:600;white-space:nowrap">Analyse keyword coverage</button>
+    </div>`;
+  const btn = document.getElementById('csCoverageHintRun');
+  if (btn) btn.addEventListener('click', analyseAllCoverage);
 }
 
 function activeBandIds() {
@@ -3715,6 +3746,7 @@ async function loadStrategyCoverage(row, { silent } = {}) {
   if (!silent) {
     renderStrategyQueriesFor(row.page);
     renderStrategySummary();
+    renderCoverageHint();
     enableQuickWinsIfAny();
   }
 }
@@ -3801,6 +3833,7 @@ async function analyseAllCoverage() {
   }
   enableQuickWinsIfAny();
   renderStrategySummary();
+  renderCoverageHint();
   renderStrategyTable();
 }
 
@@ -4442,7 +4475,7 @@ async function exportStrategyPpt() {
     ], { x: 0.78, y: 3.22, w: 5.9, h: 0.25 });
     const titleBody = liveTitle
       ? liveTitle
-      : (titleStatus === 'missing' ? '(no <title> tag on page)' : '(not analysed — run "Analyse keyword coverage")');
+      : (titleStatus === 'missing' ? '(no <title> tag on page)' : '(not analysed — click "Analyse keyword coverage" in the tool)');
     s.addText(titleBody, { x: 0.78, y: 3.45, w: 5.9, h: 0.45, fontSize: 11,
       color: liveTitle ? COLORS.text : (titleStatus === 'missing' ? COLORS.danger : COLORS.muted),
       italic: !liveTitle });
@@ -4467,7 +4500,7 @@ async function exportStrategyPpt() {
     ], { x: 0.78, y: 3.98, w: 5.9, h: 0.25 });
     const metaBody = metaText
       ? metaText
-      : (metaStatus === 'missing' ? '(no meta description — Google will auto-generate one)' : '(not analysed — run "Analyse keyword coverage")');
+      : (metaStatus === 'missing' ? '(no meta description — Google will auto-generate one)' : '(not analysed — click "Analyse keyword coverage" in the tool)');
     s.addText(metaBody, { x: 0.78, y: 4.21, w: 5.9, h: 0.65, fontSize: 11,
       color: metaText ? COLORS.text : (metaStatus === 'missing' ? COLORS.danger : COLORS.muted),
       italic: !metaText });
@@ -4495,7 +4528,7 @@ async function exportStrategyPpt() {
     ], { x: 0.78, y: 4.94, w: 5.9, h: 0.25 });
     const h1Body = liveH1
       ? liveH1
-      : (h1Status === 'missing' ? '(no H1 heading on page)' : '(not analysed — run "Analyse keyword coverage")');
+      : (h1Status === 'missing' ? '(no H1 heading on page)' : '(not analysed — click "Analyse keyword coverage" in the tool)');
     s.addText(h1Body, { x: 0.78, y: 5.17, w: 5.9, h: 0.4, fontSize: 11,
       color: liveH1 ? COLORS.text : (h1Status === 'missing' ? COLORS.danger : COLORS.muted),
       italic: !liveH1 });
@@ -4525,7 +4558,7 @@ async function exportStrategyPpt() {
         s.addText('in ' + st.label, { x: sx, y: 6.42, w: 1.32, h: 0.35, fontSize: 9, color: COLORS.muted, align: 'center' });
       });
     } else {
-      s.addText('Run "Analyse keyword coverage" in the tool to populate live-page data.',
+      s.addText('Click the "Analyse keyword coverage" button above the opportunity table to populate live-page data here.',
         { x: 0.78, y: 5.7, w: 5.9, h: 0.45, fontSize: 10, color: COLORS.muted, italic: true });
     }
 
