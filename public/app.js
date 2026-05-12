@@ -4385,17 +4385,30 @@ function findLosingPages(rows, prevByUrl, limit = 4) {
   return losing.slice(0, limit);
 }
 
+// Wraps a fetch with an abort-timeout so a stuck GSC call can't hang the
+// whole PPT export.
+async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // Hits the existing /api/gsc/query route to pull totals for an explicit
-// date range. Returns { clicks, impressions, ctr, position } or null.
+// date range. Returns { clicks, impressions, ctr, position } or null on
+// failure / timeout — the caller treats null as "no data".
 async function fetchPeriodTotals(siteUrl, startDate, endDate, searchType, country) {
   const body = { siteUrl, startDate, endDate, dimensions: [], rowLimit: 1, searchType };
   const cf = gscCountryFilterGroup(country);
   if (cf) body.dimensionFilterGroups = cf;
   try {
-    const r = await fetch('/api/gsc/query', {
+    const r = await fetchWithTimeout('/api/gsc/query', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    });
+    }, 15000);
     if (!r.ok) return null;
     const data = await r.json();
     const row = (data.rows || [])[0];
@@ -4404,10 +4417,9 @@ async function fetchPeriodTotals(siteUrl, startDate, endDate, searchType, countr
 }
 
 // Per-page totals for the previous period — used to flag pages losing
-// traffic. Same route, with dimension=page.
+// traffic. Same route, with dimension=page. Capped at 1000 rows to keep
+// the call snappy (was 5000 — could time out on large properties).
 async function fetchPreviousPagesByUrl(siteUrl, startDate, endDate, searchType, country) {
-  // Compute the "previous" date range of equal length, ending the day
-  // before startDate.
   const start = new Date(startDate + 'T00:00:00Z');
   const end   = new Date(endDate   + 'T00:00:00Z');
   const days  = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
@@ -4415,14 +4427,14 @@ async function fetchPreviousPagesByUrl(siteUrl, startDate, endDate, searchType, 
   const prevStart = new Date(prevEnd); prevStart.setUTCDate(prevStart.getUTCDate() - days + 1);
   const fmt = d => d.toISOString().slice(0, 10);
 
-  const body = { siteUrl, startDate: fmt(prevStart), endDate: fmt(prevEnd), dimensions: ['page'], rowLimit: 5000, searchType };
+  const body = { siteUrl, startDate: fmt(prevStart), endDate: fmt(prevEnd), dimensions: ['page'], rowLimit: 1000, searchType };
   const cf = gscCountryFilterGroup(country);
   if (cf) body.dimensionFilterGroups = cf;
   try {
-    const r = await fetch('/api/gsc/query', {
+    const r = await fetchWithTimeout('/api/gsc/query', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    });
+    }, 20000);
     if (!r.ok) return { byUrl: new Map(), startDate: fmt(prevStart), endDate: fmt(prevEnd) };
     const data = await r.json();
     const byUrl = new Map();
@@ -5052,24 +5064,29 @@ async function exportStrategyPpt() {
   cover.addText(T.preparedBy, { x: 0.85, y: 7.13, w: 12, h: 0.3, fontSize: 10, color: 'FFFFFF', bold: true });
 
   // ── Executive dashboard ───────────────────────────────────────────────
-  // Fetch this period + the matching prior period from GSC, then build a
-  // one-slide overview that mirrors the template: KPI strip, opportunity
-  // matrix, topic clusters, editorial calendar, pages losing traffic,
-  // quarterly goals.
+  // Three GSC calls feed this slide — all best-effort. If any fails or
+  // times out the dashboard still renders with placeholders, the export
+  // never hangs on a slow GSC API.
   const searchType = (document.getElementById('csType') || {}).value || 'web';
   const country = (document.getElementById('csCountry') || {}).value || '';
-  const [curTotals, prevTotals, prevPagesData] = await Promise.all([
+  btn.textContent = 'Fetching dashboard…';
+  const fetchPrev = (async () => {
+    const start = new Date(startDate + 'T00:00:00Z'), end = new Date(endDate + 'T00:00:00Z');
+    const days = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
+    const prevEnd = new Date(start); prevEnd.setUTCDate(prevEnd.getUTCDate() - 1);
+    const prevStart = new Date(prevEnd); prevStart.setUTCDate(prevStart.getUTCDate() - days + 1);
+    const fmt = d => d.toISOString().slice(0, 10);
+    return fetchPeriodTotals(siteUrl, fmt(prevStart), fmt(prevEnd), searchType, country);
+  })();
+  const settled = await Promise.allSettled([
     fetchPeriodTotals(siteUrl, startDate, endDate, searchType, country),
-    (async () => {
-      const start = new Date(startDate + 'T00:00:00Z'), end = new Date(endDate + 'T00:00:00Z');
-      const days = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
-      const prevEnd = new Date(start); prevEnd.setUTCDate(prevEnd.getUTCDate() - 1);
-      const prevStart = new Date(prevEnd); prevStart.setUTCDate(prevStart.getUTCDate() - days + 1);
-      const fmt = d => d.toISOString().slice(0, 10);
-      return fetchPeriodTotals(siteUrl, fmt(prevStart), fmt(prevEnd), searchType, country);
-    })(),
+    fetchPrev,
     fetchPreviousPagesByUrl(siteUrl, startDate, endDate, searchType, country)
   ]);
+  const curTotals     = settled[0].status === 'fulfilled' ? settled[0].value : null;
+  const prevTotals    = settled[1].status === 'fulfilled' ? settled[1].value : null;
+  const prevPagesData = settled[2].status === 'fulfilled' ? settled[2].value : { byUrl: new Map() };
+  btn.textContent = 'Building deck…';
 
   addExecutiveDashboardSlide(pptx, T, {
     siteUrl, startDate, endDate, allRows, rows,
