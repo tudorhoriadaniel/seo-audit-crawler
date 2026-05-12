@@ -5157,46 +5157,18 @@ async function exportStrategyPpt() {
 
   cover.addText(T.preparedBy, { x: 0.55, y: 7.05, w: 12.25, h: 0.3, fontSize: 9, color: COLORS.muted });
 
-  // ── Executive dashboard ───────────────────────────────────────────────
-  // Three GSC calls feed this slide — all best-effort. If any fails or
-  // times out the dashboard still renders with placeholders, the export
-  // never hangs on a slow GSC API.
-  const searchType = (document.getElementById('csType') || {}).value || 'web';
-  const country = (document.getElementById('csCountry') || {}).value || '';
-  btn.textContent = 'Fetching dashboard…';
-  const fetchPrev = (async () => {
-    const start = new Date(startDate + 'T00:00:00Z'), end = new Date(endDate + 'T00:00:00Z');
-    const days = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
-    const prevEnd = new Date(start); prevEnd.setUTCDate(prevEnd.getUTCDate() - 1);
-    const prevStart = new Date(prevEnd); prevStart.setUTCDate(prevStart.getUTCDate() - days + 1);
-    const fmt = d => d.toISOString().slice(0, 10);
-    return fetchPeriodTotals(siteUrl, fmt(prevStart), fmt(prevEnd), searchType, country);
-  })();
-  const settled = await Promise.allSettled([
-    fetchPeriodTotals(siteUrl, startDate, endDate, searchType, country),
-    fetchPrev,
-    fetchPreviousPagesByUrl(siteUrl, startDate, endDate, searchType, country)
-  ]);
-  const curTotals     = settled[0].status === 'fulfilled' ? settled[0].value : null;
-  const prevTotals    = settled[1].status === 'fulfilled' ? settled[1].value : null;
-  const prevPagesData = settled[2].status === 'fulfilled' ? settled[2].value : { byUrl: new Map() };
   btn.textContent = 'Building deck…';
 
-  // Executive summary opens the deck so the client gets the story
-  // BEFORE the dense data slides. Wrapped defensively.
+  // Executive summary opens the deck. Wrapped defensively so one bad row
+  // can't break the export.
   try {
     addExecutiveSummarySlide(pptx, T, { siteUrl, startDate, endDate, allRows, rows });
   } catch (e) {
     console.error('Executive summary slide failed — skipping:', e);
   }
-  try {
-    addExecutiveDashboardSlide(pptx, T, {
-      siteUrl, startDate, endDate, allRows, rows,
-      curTotals, prevTotals, prevPagesData, COLORS, bandColor
-    });
-  } catch (e) {
-    console.error('Executive dashboard slide failed — skipping:', e);
-  }
+  // (Executive dashboard slide removed at user request — too dense to
+  // render cleanly across PowerPoint viewers, and the data it carried is
+  // already covered by the summary, strategy mix and top-5 slides.)
 
   // ── Summary slide: breakdown by band ───────────────────────────────────
   // Stats use the FULL csState.rows so all bands always show real numbers,
