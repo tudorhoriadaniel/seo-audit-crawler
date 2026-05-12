@@ -6021,12 +6021,83 @@ function exportStrategyPdf() {
     const bandLab = T.band[r.band.id] || r.band.label;
     const bc = bandColorHex(r.band);
     const pageTitle = (cov && cov.title) || (r.crawl && r.crawl.title) || '';
+
+    // ── Page actuelle field states (mirrors the PPT logic) ─────────────
+    const titleState = (() => {
+      let live = '', len = 0, status = 'unknown';
+      if (cov) { live = cov.title || ''; len = live.length; status = len > 0 ? 'present' : 'missing'; }
+      else if (r.crawl && r.crawl.title) { live = r.crawl.title; len = r.crawl.titleLength || live.length; status = 'present'; }
+      const color = status === 'present' ? (len >= 30 && len <= 60 ? '#16A34A' : '#D97706') : (status === 'missing' ? '#DC2626' : '#6B7085');
+      const label = status === 'present' ? `${len}ch` : (status === 'missing' ? T.titleMissingLabel : T.notAnalysedShort);
+      const body = live || (status === 'missing' ? T.noTitleTag : T.notAnalysedHint);
+      return { status, color, label, body, live };
+    })();
+    const metaState = (() => {
+      let txt = '', len = 0, status = 'unknown';
+      if (cov) { txt = cov.metaDescription || ''; len = cov.metaDescriptionLength || 0; status = len > 0 ? 'present' : 'missing'; }
+      const color = status === 'present' ? (len >= 70 && len <= 160 ? '#16A34A' : '#D97706') : (status === 'missing' ? '#DC2626' : '#6B7085');
+      const label = status === 'present' ? `${len}ch` : (status === 'missing' ? T.titleMissingLabel : T.notAnalysedShort);
+      const body = txt || (status === 'missing' ? T.noMetaDesc : T.notAnalysedHint);
+      return { status, color, label, body, txt };
+    })();
+    const h1State = (() => {
+      let live = '', count = 0, status = 'unknown';
+      if (cov) { live = (cov.h1 && cov.h1[0]) || ''; count = cov.h1 ? cov.h1.length : 0; status = count > 0 ? 'present' : 'missing'; }
+      else if (r.crawl && typeof r.crawl.h1Count === 'number') { count = r.crawl.h1Count; status = count > 0 ? 'present' : 'missing'; }
+      const color = status === 'present' ? (count === 1 ? '#16A34A' : '#D97706') : (status === 'missing' ? '#DC2626' : '#6B7085');
+      const label = status === 'present' ? T.h1Count(count) : (status === 'missing' ? T.noH1Label : T.notAnalysedShort);
+      const body = live || (status === 'missing' ? T.noH1 : T.notAnalysedHint);
+      return { status, color, label, body, live };
+    })();
+
+    // ── Top missing keywords per section ───────────────────────────────
+    let missingSections = null;
+    if (cov) {
+      const queriesByImpr = (q) => {
+        const t = (r.topQueries || []).find(x => x.query === q.query);
+        return t ? t.impressions : 0;
+      };
+      const sorted = cov.queries.slice().sort((a, b) => queriesByImpr(b) - queriesByImpr(a));
+      const pick = (pred) => sorted.filter(pred).slice(0, 3).map(q => q.query);
+      missingSections = [
+        { label: T.secLabel.title, keys: pick(q => !q.phrase.inTitle) },
+        { label: T.secLabel.meta,  keys: pick(q => !q.phrase.inMetaDescription) },
+        { label: T.secLabel.h1,    keys: pick(q => !q.phrase.inH1) },
+        { label: T.secLabel.body,  keys: pick(q => q.phrase.bodyOccurrences === 0) }
+      ];
+    }
+
+    // ── Actions list (priority-coded) ──────────────────────────────────
+    const actions = deriveActions(r, lang);
+    const actionsHtml = actions.slice(0, 5).map(a =>
+      `<li class="${a.priority}"><span class="pri">[${esc(T.priority[a.priority])}]</span> ${esc(a.text)}</li>`
+    ).join('');
+
+    // ── Absent-from-page callout (above the queries table) ─────────────
+    let missingCount = 0, missingImpr = 0;
+    if (cov) {
+      const missing = cov.queries.filter(q => !q.presentSomewhere);
+      missingCount = missing.length;
+      missingImpr = missing.reduce((sum, q) => {
+        const t = (r.topQueries || []).find(x => x.query === q.query);
+        return sum + (t ? t.impressions : 0);
+      }, 0);
+    }
+    const missingCallout = missingCount
+      ? `<div class="missingCallout">${esc(T.missingOnPage(missingCount, missingImpr))}</div>`
+      : '';
+
+    // ── Top queries — SORTED BY IMPRESSIONS DESC (was API order) ──────
+    const sortedQueries = (r.topQueries || []).slice()
+      .sort((a, b) => (b.impressions || 0) - (a.impressions || 0))
+      .slice(0, 8);
+
     const queriesTable = cov && cov.queries.length
       ? `
         <table class="qtbl">
           <thead><tr><th class="qt-q">${esc(T.query)}</th><th class="num">${esc(T.impr)}</th><th class="num">${esc(T.pos)}</th><th>${esc(T.inPage)}</th></tr></thead>
           <tbody>
-            ${(r.topQueries || []).slice(0, 8).map(q => {
+            ${sortedQueries.map(q => {
               const c = (cov.queries || []).find(x => x.query === q.query);
               let inSect;
               if (!c) {
@@ -6047,6 +6118,24 @@ function exportStrategyPdf() {
           </tbody>
         </table>`
       : `<p class="muted small">${esc(T.notAnalysedShort || '(not analysed)')}</p>`;
+
+    const fieldRow = (label, st) => `
+      <div class="fieldRow">
+        <span class="lbl">${esc(label)}</span>
+        <span class="badge" style="color:${st.color}">${esc(st.label)}</span>
+        <span class="body${st.live || st.txt ? '' : (st.status === 'missing' ? ' missing' : ' unknown')}">${esc(st.body)}</span>
+      </div>`;
+
+    const missingListHtml = missingSections
+      ? `<div class="missList">
+          ${missingSections.map(sec => `
+            <div class="sec">
+              <span class="lab ${sec.keys.length ? 'has' : 'none'}">${esc(sec.label)}</span>
+              <span class="content">${sec.keys.length ? sec.keys.map(esc).join(' · ') : esc(T.allOnPage)}</span>
+            </div>`).join('')}
+         </div>`
+      : `<p class="muted small">${esc(T.runAnalysisHint)}</p>`;
+
     return `
       <section class="opp page-break">
         <header class="opp-head" style="border-top-color:${bc}">
@@ -6067,8 +6156,31 @@ function exportStrategyPdf() {
           <div class="kpi"><span class="lbl">${esc(T.ctr)}</span><span class="val">${(r.ctr * 100).toFixed(2)}%</span></div>
           <div class="kpi accent"><span class="lbl">${esc(T.potentialAtRank(r.targetPos))}</span><span class="val">+${Math.round(r.potentialClicks).toLocaleString()}</span></div>
         </div>
-        <div class="qheader">${esc(T.topRankingQueries)}</div>
-        ${queriesTable}
+        <div class="opp-body">
+          <div class="opp-col">
+            <div class="subcard">
+              <h4>${esc(T.currentPage)}</h4>
+              ${fieldRow(T.title, titleState)}
+              ${fieldRow(T.metaDescription, metaState)}
+              ${fieldRow(T.h1Label, h1State)}
+            </div>
+            <div class="subcard">
+              <h4>${esc(T.keywordsToAddHint)}</h4>
+              ${missingListHtml}
+            </div>
+          </div>
+          <div class="opp-col">
+            <div class="subcard">
+              <h4>${esc(T.actionItems)}</h4>
+              <ul class="actions-list">${actionsHtml}</ul>
+            </div>
+            <div class="subcard">
+              <h4>${esc(T.topRankingQueries)}</h4>
+              ${missingCallout}
+              ${queriesTable}
+            </div>
+          </div>
+        </div>
       </section>`;
   };
 
@@ -6164,6 +6276,36 @@ function exportStrategyPdf() {
       .qtbl th, .qtbl td { padding: 5px 8px; font-size: 11px; vertical-align: middle; }
       .qtbl .qt-q { width: 42%; }
       .qtbl .tag { display: inline-block; background: #EEF2FF; color: #4F46E5; border: 1px solid #C7D2FE; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 600; margin: 1px 3px 1px 0; white-space: nowrap; }
+      .opp-body { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+      .opp-col { display: flex; flex-direction: column; gap: 12px; }
+      .subcard { background: #F8F4EB; border: 1px solid #EEE6D5; border-radius: 8px; padding: 12px 14px; }
+      .subcard h4 { margin: 0 0 8px; font-size: 10px; text-transform: uppercase; color: #6B7085; letter-spacing: 0.08em; font-weight: 700; }
+      .fieldRow { margin-bottom: 10px; }
+      .fieldRow:last-child { margin-bottom: 0; }
+      .fieldRow .lbl { font-size: 10px; font-weight: 700; color: #6B7085; letter-spacing: 0.05em; }
+      .fieldRow .badge { font-size: 10px; font-weight: 700; margin-left: 8px; }
+      .fieldRow .body { display: block; font-size: 11px; line-height: 1.45; margin-top: 4px; color: #1A1D2E; word-break: break-word; }
+      .fieldRow .body.missing { color: #DC2626; font-style: italic; }
+      .fieldRow .body.unknown { color: #6B7085; font-style: italic; }
+      .missList .sec { display: grid; grid-template-columns: 60px 1fr; gap: 8px; font-size: 11px; margin-bottom: 6px; line-height: 1.4; }
+      .missList .sec:last-child { margin-bottom: 0; }
+      .missList .sec .lab { font-weight: 700; font-size: 10px; letter-spacing: 0.04em; }
+      .missList .sec .lab.has { color: #DC2626; }
+      .missList .sec .lab.none { color: #16A34A; }
+      .missList .sec .content { color: #1A1D2E; word-break: break-word; }
+      .actions-list { list-style: none; padding: 0; margin: 0; }
+      .actions-list li { font-size: 11px; line-height: 1.45; padding: 4px 0 4px 16px; position: relative; }
+      .actions-list li::before { content: '●'; position: absolute; left: 0; top: 4px; font-size: 9px; }
+      .actions-list li.critical { color: #1A1D2E; font-weight: 600; }
+      .actions-list li.critical::before { color: #DC2626; }
+      .actions-list li.important::before { color: #D97706; }
+      .actions-list li.recommended::before { color: #4F46E5; }
+      .actions-list li .pri { font-weight: 700; font-size: 9px; letter-spacing: 0.06em; margin-right: 4px; }
+      .actions-list li.critical .pri { color: #DC2626; }
+      .actions-list li.important .pri { color: #D97706; }
+      .actions-list li.recommended .pri { color: #4F46E5; }
+      .missingCallout { background: rgba(220, 38, 38, 0.08); border-left: 3px solid #DC2626; color: #DC2626; padding: 6px 10px; font-size: 11px; margin: 0 0 8px; border-radius: 4px; font-weight: 600; }
+      .opp { break-inside: avoid; page-break-inside: avoid; }
       .appendix h2 { margin-bottom: 12px; }
       .apx th, .apx td { padding: 6px 8px; font-size: 11px; }
       .apx .bandc { font-weight: 600; }
