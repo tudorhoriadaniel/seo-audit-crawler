@@ -3316,6 +3316,7 @@ function renderStrategyShell() {
             <option value="fr">Français</option>
           </select>
           <button id="csExportPpt" class="btn btn-secondary" title="One slide per opportunity, with action items based on the coverage gaps" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export PPT</button>
+          <button id="csExportPdf" class="btn btn-secondary" title="Open a printable HTML report; use your browser's Print → Save as PDF" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export PDF</button>
         </div>
         <div id="csAnalyseProgress" style="display:none;margin-top:8px;font-size:12px;color:var(--text-muted)"></div>
       </div>
@@ -3342,6 +3343,14 @@ function renderStrategyShell() {
       // Belt-and-braces: always restore the button so the user can retry.
       btn.disabled = false;
       if (btn.textContent !== origLabel) btn.textContent = origLabel;
+    }
+  });
+  document.getElementById('csExportPdf').addEventListener('click', () => {
+    try {
+      exportStrategyPdf();
+    } catch (e) {
+      console.error('PDF export failed:', e);
+      alert('PDF export failed: ' + (e && e.message ? e.message : e));
     }
   });
   const langSel = document.getElementById('csExportLang');
@@ -3566,6 +3575,13 @@ async function runStrategyQuery() {
     renderExcludedHint();
     renderCoverageHint();
     renderStrategyTable();
+
+    // Auto-run the keyword-coverage analyser so users don't have to click
+    // "Analyse keyword coverage" before every export. Fires-and-forgets;
+    // each completed page re-renders its row/card live.
+    if (csState.rows.length) {
+      setTimeout(() => { analyseAllCoverage().catch(() => {}); }, 50);
+    }
   } catch (e) {
     document.getElementById('csTable').innerHTML = `<div style="padding:20px;color:var(--danger)">${escapeHtml(e.message)}</div>`;
     csState.rows = [];
@@ -4520,6 +4536,19 @@ const PPT_I18N = {
     execTopFooterNote: (n) => `Top 5 of ${n.toLocaleString()} opportunities by potential clicks. Every page has its own slide.`,
     execTargetShort: 'at rank',
     execSummaryFooter: 'Every opportunity has its own slide in this deck with the exact actions to take.',
+    printSave: 'Print → Save as PDF',
+    printHint: 'Tip: choose "Save as PDF" in your browser print dialog.',
+    execKeyInsightLabel: 'KEY INSIGHT',
+    execKeyInsight: ({ strikingPages, strikingPot, strikingShare, totalPages, quickWins }) => {
+      const wins = quickWins
+        ? ` ${quickWins} are quick wins where the keyword is missing from the page entirely.`
+        : '';
+      if (!strikingPages) {
+        return `${totalPages} pages currently rank for queries below position #1.${wins}`;
+      }
+      return `${strikingPages} pages already rank in positions 4–10 — pushing them up captures roughly ${strikingShare}% of the total upside (≈ +${strikingPot.toLocaleString()} clicks/month). Start there.${wins}`;
+    },
+    action: 'ACTION',
     execSummaryPara1: (a) =>
       `We analysed ${a.siteUrl} between ${a.startDate} and ${a.endDate}. ${a.totalRows.toLocaleString()} pages currently rank in Google for queries below position #1 — together they generate ${a.totalImpr.toLocaleString()} impressions per month but only ${a.totalClicks.toLocaleString()} clicks. Pushing each to its target rank could add roughly +${a.totalPotential.toLocaleString()} clicks per month.`,
     execSummaryPara2: (a) =>
@@ -4541,6 +4570,9 @@ const PPT_I18N = {
     plusMore: (n) => `+${n} more`,
     methodologyTitle: 'How to read this deck',
     methodologyDesc: 'A quick reference for what each metric means and how the numbers were computed.',
+    appendixTitle: () => 'All other opportunities',
+    appendixSubtitle: (from, to, page, total) => `Opportunities ${from}–${to} · page ${page} / ${total} — top 15 already covered in detail above.`,
+    appendixCols: ['#', 'Page', 'Band', 'Pos', 'Impr', 'Best query', 'Potential'],
     opportunityBandsHeader: 'OPPORTUNITY BANDS',
     ctrCurveHeader: 'AVERAGE CTR BY POSITION',
     potentialHowTitle: 'How "potential extra clicks" is computed',
@@ -4684,6 +4716,19 @@ const PPT_I18N = {
     execTopFooterNote: (n) => `Top 5 sur ${n.toLocaleString()} opportunités par clics potentiels. Chaque page a sa propre diapositive.`,
     execTargetShort: 'au rang',
     execSummaryFooter: 'Chaque opportunité a sa propre diapositive dans ce document avec les actions à mener.',
+    printSave: 'Imprimer → Enregistrer en PDF',
+    printHint: 'Astuce : choisir « Enregistrer en PDF » dans la boîte de dialogue d\'impression.',
+    execKeyInsightLabel: 'IDÉE CLÉ',
+    execKeyInsight: ({ strikingPages, strikingPot, strikingShare, totalPages, quickWins }) => {
+      const wins = quickWins
+        ? ` ${quickWins} sont des gains rapides où le mot-clé est totalement absent de la page.`
+        : '';
+      if (!strikingPages) {
+        return `${totalPages} pages se positionnent actuellement sur des requêtes en dehors du #1.${wins}`;
+      }
+      return `${strikingPages} pages se positionnent déjà entre #4 et #10 — les faire grimper capture environ ${strikingShare}% du potentiel total (≈ +${strikingPot.toLocaleString()} clics/mois). Commencer ici.${wins}`;
+    },
+    action: 'ACTION',
     execSummaryPara1: (a) =>
       `Nous avons analysé ${a.siteUrl} entre le ${a.startDate} et le ${a.endDate}. ${a.totalRows.toLocaleString()} pages se positionnent actuellement sur Google pour des requêtes en dehors du rang #1 — elles génèrent ensemble ${a.totalImpr.toLocaleString()} impressions par mois mais seulement ${a.totalClicks.toLocaleString()} clics. En les poussant chacune vers son rang cible, on pourrait gagner environ +${a.totalPotential.toLocaleString()} clics par mois.`,
     execSummaryPara2: (a) =>
@@ -4705,6 +4750,9 @@ const PPT_I18N = {
     plusMore: (n) => `+${n} de plus`,
     methodologyTitle: 'Lecture du document',
     methodologyDesc: 'Référence rapide : signification des métriques et calculs utilisés.',
+    appendixTitle: () => 'Autres opportunités',
+    appendixSubtitle: (from, to, page, total) => `Opportunités ${from}–${to} · page ${page} / ${total} — top 15 déjà détaillé ci-dessus.`,
+    appendixCols: ['#', 'Page', 'Bande', 'Pos', 'Impr', 'Meilleure requête', 'Potentiel'],
     opportunityBandsHeader: 'BANDES D\'OPPORTUNITÉ',
     ctrCurveHeader: 'CTR MOYEN PAR POSITION',
     potentialHowTitle: 'Comment sont calculés les "clics supplémentaires potentiels"',
@@ -4856,16 +4904,28 @@ function addExecutiveSummarySlide(pptx, T, ctx) {
   const PRIMARY = '6366F1';
 
   const totalPotential = Math.round(allRows.reduce((s, r) => s + r.potentialClicks, 0));
-  const byRec = { optimize: 0, 'rewrite-expand': 0, 'create-landing': 0 };
+  const totalImpr = allRows.reduce((s, r) => s + r.impressions, 0);
+  const totalClicks = allRows.reduce((s, r) => s + r.clicks, 0);
+  const totalQuickWins = allRows.filter(r => r.isQuickWin === true).length;
+
+  // Per-recommendation aggregates so the action cards are real numbers,
+  // not just page counts. Same logic that powers the Strategy mix slide.
+  const recAgg = { optimize: { pages: 0, potential: 0 }, 'rewrite-expand': { pages: 0, potential: 0 }, 'create-landing': { pages: 0, potential: 0 } };
   for (const r of allRows) {
     const t = (r.recommendation && r.recommendation.type) || 'optimize';
-    if (byRec[t] != null) byRec[t]++;
+    if (!recAgg[t]) continue;
+    recAgg[t].pages++;
+    recAgg[t].potential += r.potentialClicks;
   }
-  const byBand = {};
-  for (const b of STRATEGY_BANDS) byBand[b.id] = 0;
-  for (const r of allRows) {
-    if (byBand[r.band.id] != null) byBand[r.band.id]++;
-  }
+
+  // Striking distance = positions 4–10, the band where most clicks
+  // realistically live. Use it for the headline insight.
+  const strikingPot = Math.round(allRows.reduce((sum, r) => {
+    const slot = r.perBand && r.perBand.striking;
+    return sum + ((slot && slot.potential) || 0);
+  }, 0));
+  const strikingPages = allRows.filter(r => (r.bandIds || [r.band.id]).includes('striking')).length;
+  const strikingShare = totalPotential > 0 ? Math.round((strikingPot / totalPotential) * 100) : 0;
 
   const s = pptx.addSlide();
   s.background = { color: PAGE_BG };
@@ -4874,41 +4934,41 @@ function addExecutiveSummarySlide(pptx, T, ctx) {
   s.addText(T.execSummaryTitle, { x: 0.55, y: 0.25, w: 12.2, h: 0.40, fontSize: 22, bold: true, color: TEXT });
   s.addText(T.execSummaryKicker, { x: 0.55, y: 0.68, w: 12.2, h: 0.26, fontSize: 12, color: MUTED });
 
-  // Slim hero strip — one row across the top.
-  s.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 1.05, w: 12.25, h: 1.10, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
-  s.addText(`+${totalPotential.toLocaleString()}`, { x: 0.85, y: 1.10, w: 4.7, h: 1.00, fontSize: 50, bold: true, color: '#' + PRIMARY });
+  // ── Hero band: big number + headline sentence + KEY INSIGHT ─────────
+  s.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 1.05, w: 12.25, h: 1.70, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+  s.addShape(pptx.ShapeType.rect, { x: 0.55, y: 1.05, w: 0.18, h: 1.70, fill: { color: PRIMARY }, line: { type: 'none' } });
+  s.addText(`+${totalPotential.toLocaleString()}`, { x: 0.85, y: 1.15, w: 4.7, h: 1.0, fontSize: 56, bold: true, color: '#' + PRIMARY });
   s.addText(T.execHeroSub(allRows.length, siteUrl),
-    { x: 5.65, y: 1.35, w: 6.95, h: 0.65, fontSize: 12, color: MUTED });
+    { x: 5.45, y: 1.25, w: 7.15, h: 0.5, fontSize: 12, color: MUTED });
+  const insightLine = T.execKeyInsight
+    ? T.execKeyInsight({ strikingPages, strikingPot, strikingShare, totalPages: allRows.length, quickWins: totalQuickWins })
+    : `${strikingPages} pages already rank in positions 4–10 — pushing them up captures ${strikingShare}% of the total upside (≈ +${strikingPot.toLocaleString()} clicks/month). Start there.`;
+  s.addText([
+    { text: (T.execKeyInsightLabel || 'KEY INSIGHT') + '  ', options: { fontSize: 10, bold: true, color: '#' + PRIMARY, charSpacing: 4 } },
+    { text: insightLine, options: { fontSize: 12, color: TEXT } }
+  ], { x: 0.85, y: 2.18, w: 11.75, h: 0.5, fontSize: 12, valign: 'top' });
 
-  // ── Middle row: two pies side-by-side ───────────────────────────────
-  // Pie 1: work breakdown (what to do)
-  s.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 2.30, w: 6.10, h: 2.85, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
-  s.addText(T.execChartTitle, { x: 0.80, y: 2.38, w: 5.6, h: 0.30, fontSize: 12, bold: true, color: TEXT });
-  s.addChart(pptx.ChartType.pie, [{
-    name: T.execChartTitle,
-    labels: [T.rec.optimize.label, T.rec['rewrite-expand'].label, T.rec['create-landing'].label],
-    values: [byRec.optimize, byRec['rewrite-expand'], byRec['create-landing']]
-  }], {
-    x: 0.65, y: 2.65, w: 5.90, h: 2.45,
-    chartColors: ['16A34A', 'D97706', 'DC2626'],
-    showLegend: true, legendPos: 'b', legendFontSize: 10, legendColor: TEXT,
-    showPercent: true, dataLabelColor: 'FFFFFF', dataLabelFontSize: 10, dataLabelFontBold: true,
-    showLabel: false, showValue: false
-  });
-
-  // Pie 2: pages by opportunity band (how hard the wins are)
-  s.addShape(pptx.ShapeType.roundRect, { x: 6.75, y: 2.30, w: 6.05, h: 2.85, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
-  s.addText(T.execBandChartTitle, { x: 7.00, y: 2.38, w: 5.6, h: 0.30, fontSize: 12, bold: true, color: TEXT });
-  s.addChart(pptx.ChartType.pie, [{
-    name: T.execBandChartTitle,
-    labels: STRATEGY_BANDS.map(b => T.band[b.id] || b.label),
-    values: STRATEGY_BANDS.map(b => byBand[b.id])
-  }], {
-    x: 6.85, y: 2.65, w: 5.85, h: 2.45,
-    chartColors: STRATEGY_BANDS.map(b => b.color.replace('#', '').toUpperCase()),
-    showLegend: true, legendPos: 'b', legendFontSize: 10, legendColor: TEXT,
-    showPercent: true, dataLabelColor: 'FFFFFF', dataLabelFontSize: 10, dataLabelFontBold: true,
-    showLabel: false, showValue: false
+  // ── 3 strategic action cards — what to actually do ──────────────────
+  // Replaces the two pies on this slide. Pies still live on the
+  // dedicated Strategy mix / Opportunity bands slides for clients who
+  // want the visual; the exec summary leads with actions.
+  const recTypes = [
+    { id: 'optimize',       color: '16A34A', tint: 'E8F7EE' },
+    { id: 'rewrite-expand', color: 'D97706', tint: 'FEF1E3' },
+    { id: 'create-landing', color: 'DC2626', tint: 'FCE9E9' }
+  ];
+  recTypes.forEach((rt, i) => {
+    const x = 0.55 + i * 4.10;
+    const w = 4.00;
+    const a = recAgg[rt.id];
+    const lab = T.rec[rt.id];
+    s.addShape(pptx.ShapeType.roundRect, { x, y: 2.90, w, h: 2.30, fill: { color: rt.tint }, line: { color: '#' + rt.color, width: 0.75 }, rectRadius: 0.12 });
+    s.addShape(pptx.ShapeType.rect, { x, y: 2.90, w, h: 0.05, fill: { color: '#' + rt.color }, line: { type: 'none' } });
+    s.addText((T.action || 'ACTION') + ' ' + (i + 1), { x: x + 0.20, y: 3.05, w: w - 0.4, h: 0.24, fontSize: 9, bold: true, color: '#' + rt.color, charSpacing: 4 });
+    s.addText(lab.label, { x: x + 0.20, y: 3.32, w: w - 0.4, h: 0.36, fontSize: 16, bold: true, color: TEXT });
+    s.addText(a.pages.toLocaleString() + ' ' + (T.pagesLabel || 'pages'), { x: x + 0.20, y: 3.74, w: (w - 0.4) / 2, h: 0.28, fontSize: 11, color: MUTED });
+    s.addText('+' + Math.round(a.potential).toLocaleString(), { x: x + 0.20 + (w - 0.4) / 2, y: 3.74, w: (w - 0.4) / 2, h: 0.28, fontSize: 14, bold: true, color: '#' + PRIMARY, align: 'right' });
+    s.addText(lab.desc, { x: x + 0.20, y: 4.10, w: w - 0.4, h: 1.05, fontSize: 10, color: TEXT, italic: true, valign: 'top' });
   });
 
   // ── Bottom: top 5 priority pages table ──────────────────────────────
@@ -5428,13 +5488,20 @@ async function exportStrategyPpt() {
   const priorityColor = (p) => p === 'critical' ? COLORS.danger : (p === 'important' ? COLORS.warning : COLORS.primary);
   const priorityLabel = (p) => p === 'critical' ? 'Critical' : (p === 'important' ? 'Important' : 'Recommended');
 
-  for (let idx = 0; idx < rows.length; idx++) {
-    // Update progress every 10 slides so the user sees motion on long decks
-    if (idx % 10 === 0) {
-      btn.textContent = `Building slide ${idx + 1} / ${rows.length}…`;
+  // Cap per-opportunity slides at the top 15 by potential. The remaining
+  // rows go into a compact appendix table at the back — this keeps the
+  // deck under ~25 slides instead of one-per-page (which produced 100+
+  // slide decks that no client read past slide 10).
+  const MAX_DETAIL_SLIDES = 15;
+  const detailRows = rows.slice(0, MAX_DETAIL_SLIDES);
+  const appendixRows = rows.slice(MAX_DETAIL_SLIDES);
+
+  for (let idx = 0; idx < detailRows.length; idx++) {
+    if (idx % 5 === 0) {
+      btn.textContent = `Building slide ${idx + 1} / ${detailRows.length}…`;
       await new Promise(res => setTimeout(res, 0));   // yield to the UI
     }
-    const r = rows[idx];
+    const r = detailRows[idx];
     try {
     const s = pptx.addSlide();
     s.background = { color: COLORS.bg };
@@ -5736,7 +5803,62 @@ async function exportStrategyPpt() {
 
     s.addText(T.siteAndDates(siteUrl, startDate, endDate), { x: 0.6, y: 7.12, w: 12.1, h: 0.3, fontSize: 9, color: COLORS.muted });
     } catch (e) {
-      console.error(`Opportunity slide ${idx + 1} failed — skipping:`, e, rows[idx] && rows[idx].page);
+      console.error(`Opportunity slide ${idx + 1} failed — skipping:`, e, detailRows[idx] && detailRows[idx].page);
+    }
+  }
+
+  // ── Appendix: compact table for opportunities #16+ ───────────────────
+  // The remaining opportunities (everything beyond the top 15 detail
+  // slides) are listed in a paginated table — clients keep the full list
+  // but the deck stops being a 100-slide marathon.
+  if (appendixRows.length) {
+    const PER_PAGE = 22;
+    const pageCount = Math.ceil(appendixRows.length / PER_PAGE);
+    for (let p = 0; p < pageCount; p++) {
+      const slice = appendixRows.slice(p * PER_PAGE, (p + 1) * PER_PAGE);
+      const a = pptx.addSlide();
+      a.background = { color: COLORS.bg };
+      a.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.35, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
+      const titleTxt = T.appendixTitle ? T.appendixTitle() : 'All other opportunities';
+      const subTxt = T.appendixSubtitle
+        ? T.appendixSubtitle(MAX_DETAIL_SLIDES + 1, MAX_DETAIL_SLIDES + appendixRows.length, p + 1, pageCount)
+        : `Opportunities ${MAX_DETAIL_SLIDES + 1}–${MAX_DETAIL_SLIDES + appendixRows.length} of ${MAX_DETAIL_SLIDES + appendixRows.length} · page ${p + 1} / ${pageCount}`;
+      a.addText(titleTxt, { x: 0.7, y: 0.35, w: 12, h: 0.5, fontSize: 24, bold: true, color: COLORS.text });
+      a.addText(subTxt, { x: 0.7, y: 0.88, w: 12, h: 0.32, fontSize: 11, color: COLORS.muted });
+
+      // Header row
+      const headerLabels = T.appendixCols || ['#', 'Page', 'Band', 'Pos', 'Impr', 'Best query', 'Potential'];
+      const colW = [0.55, 5.2, 1.55, 0.7, 1.0, 2.8, 1.1];
+      const colX = colW.reduce((acc, w, i) => { acc.push(i === 0 ? 0.7 : acc[i - 1] + colW[i - 1]); return acc; }, []);
+      const headerY = 1.35;
+      a.addShape(pptx.ShapeType.roundRect, { x: 0.7, y: headerY, w: 12.13, h: 0.36, fill: { color: COLORS.panelAccent }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.06 });
+      headerLabels.forEach((label, i) => {
+        const align = i === 0 || i === 3 || i === 4 || i === 6 ? 'center' : 'left';
+        a.addText(label, { x: colX[i] + 0.06, y: headerY + 0.05, w: colW[i] - 0.12, h: 0.26, fontSize: 10, bold: true, color: COLORS.muted, charSpacing: 2, align });
+      });
+
+      const rowH = 0.245;
+      slice.forEach((r, i) => {
+        const y = headerY + 0.42 + i * rowH;
+        const bc = bandColor(r.band);
+        const rank = MAX_DETAIL_SLIDES + p * PER_PAGE + i + 1;
+        // Subtle zebra: even rows tinted, odd left white.
+        if (i % 2 === 0) {
+          a.addShape(pptx.ShapeType.rect, { x: 0.7, y: y - 0.02, w: 12.13, h: rowH, fill: { color: 'FFFFFF' }, line: { type: 'none' } });
+        }
+        // Band stripe on the left edge of the row.
+        a.addShape(pptx.ShapeType.rect, { x: 0.7, y: y - 0.02, w: 0.08, h: rowH, fill: { color: bc }, line: { type: 'none' } });
+
+        a.addText(String(rank), { x: colX[0] + 0.06, y, w: colW[0] - 0.12, h: rowH - 0.04, fontSize: 10, color: COLORS.muted, align: 'center' });
+        a.addText(trunc(r.page.replace(/^https?:\/\//, ''), 78), { x: colX[1] + 0.06, y, w: colW[1] - 0.12, h: rowH - 0.04, fontSize: 9, color: COLORS.text, hyperlink: { url: r.page } });
+        a.addText(T.band[r.band.id] || r.band.label, { x: colX[2] + 0.06, y, w: colW[2] - 0.12, h: rowH - 0.04, fontSize: 9, color: bc, bold: true });
+        a.addText(r.bestQueryPosition.toFixed(1), { x: colX[3] + 0.06, y, w: colW[3] - 0.12, h: rowH - 0.04, fontSize: 9, color: COLORS.text, align: 'center' });
+        a.addText(r.impressions.toLocaleString(), { x: colX[4] + 0.06, y, w: colW[4] - 0.12, h: rowH - 0.04, fontSize: 9, color: COLORS.text, align: 'center' });
+        a.addText(trunc(r.bestQuery || '', 36), { x: colX[5] + 0.06, y, w: colW[5] - 0.12, h: rowH - 0.04, fontSize: 9, italic: true, color: COLORS.muted });
+        a.addText('+' + Math.round(r.potentialClicks).toLocaleString(), { x: colX[6] + 0.06, y, w: colW[6] - 0.12, h: rowH - 0.04, fontSize: 10, bold: true, color: COLORS.primary, align: 'center' });
+      });
+
+      a.addText(T.siteAndDates(siteUrl, startDate, endDate), { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
     }
   }
 
@@ -5807,4 +5929,288 @@ async function exportStrategyPpt() {
   } finally {
     btn.disabled = false; btn.textContent = originalLabel;
   }
+}
+
+// Generates a printable HTML report and opens it in a new tab. Users save
+// it as PDF via their browser's Print → "Save as PDF" dialog. No new
+// library dependency — the report is self-contained CSS + HTML tuned for
+// A4 / Letter portrait printing.
+function exportStrategyPdf() {
+  if (!csState.rows.length) { alert('Run a query first.'); return; }
+  const lang = (document.getElementById('csExportLang') || {}).value || 'en';
+  const T = tFor(lang);
+  const bands = activeBandIds();
+  const textFilter = (document.getElementById('csTextFilter').value || '').toLowerCase();
+  const quickWinsOnly = !!document.getElementById('csQuickWins')?.checked;
+  const rows = csState.rows.filter(r =>
+    (r.bandIds || [r.band.id]).some(id => bands.has(id)) &&
+    (!textFilter || r.page.toLowerCase().includes(textFilter)) &&
+    (!quickWinsOnly || r.isQuickWin === true)
+  );
+  if (!rows.length) { alert('No opportunities match the current filters.'); return; }
+
+  const siteUrl = document.getElementById('csSite').value || 'site';
+  const startDate = document.getElementById('csStart').value;
+  const endDate = document.getElementById('csEnd').value;
+
+  const allRows = csState.rows;
+  const totalImpr = allRows.reduce((s, r) => s + r.impressions, 0);
+  const totalClicks = allRows.reduce((s, r) => s + r.clicks, 0);
+  const totalPot = Math.round(allRows.reduce((s, r) => s + r.potentialClicks, 0));
+  const totalQuickWins = allRows.filter(r => r.isQuickWin === true).length;
+
+  const recAgg = { optimize: { pages: 0, potential: 0 }, 'rewrite-expand': { pages: 0, potential: 0 }, 'create-landing': { pages: 0, potential: 0 } };
+  for (const r of allRows) {
+    const t = (r.recommendation && r.recommendation.type) || 'optimize';
+    if (!recAgg[t]) continue;
+    recAgg[t].pages++;
+    recAgg[t].potential += r.potentialClicks;
+  }
+  const recColors = { optimize: '#16A34A', 'rewrite-expand': '#D97706', 'create-landing': '#DC2626' };
+
+  const strikingPot = Math.round(allRows.reduce((sum, r) => {
+    const slot = r.perBand && r.perBand.striking;
+    return sum + ((slot && slot.potential) || 0);
+  }, 0));
+  const strikingPages = allRows.filter(r => (r.bandIds || [r.band.id]).includes('striking')).length;
+  const strikingShare = totalPot > 0 ? Math.round((strikingPot / totalPot) * 100) : 0;
+  const insight = T.execKeyInsight
+    ? T.execKeyInsight({ strikingPages, strikingPot, strikingShare, totalPages: allRows.length, quickWins: totalQuickWins })
+    : '';
+
+  const esc = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  const detailRows = rows.slice(0, 15);
+  const appendixRows = rows.slice(15);
+
+  const bandColorHex = (b) => ({ push: '#16A34A', striking: '#2563EB', page2: '#6366F1', deep: '#D97706', deeper: '#DC2626' }[b.id] || '#6366F1');
+
+  const top5 = rows.slice(0, 5);
+  const top5Html = top5.map((r, i) => {
+    const rec = r.recommendation;
+    const recCol = rec ? recColors[rec.type] : '#6366F1';
+    let path = r.page; try { path = new URL(r.page).pathname || '/'; } catch {}
+    return `
+      <tr>
+        <td class="rank" style="color:${recCol}">${i + 1}</td>
+        <td><a href="${esc(r.page)}">${esc(path)}</a></td>
+        <td class="muted">"${esc(r.bestQuery || '')}" @ ${r.bestQueryPosition.toFixed(1)}</td>
+        <td class="num primary">+${Math.round(r.potentialClicks).toLocaleString()}</td>
+      </tr>`;
+  }).join('');
+
+  const detailCardHtml = (r, idx) => {
+    const cov = r.coverage && Array.isArray(r.coverage.queries) ? r.coverage : null;
+    const rec = r.recommendation;
+    const recCol = rec ? recColors[rec.type] : '#6366F1';
+    const recLab = rec ? (T.rec[rec.type] && T.rec[rec.type].label) : '';
+    const recReason = rec ? (T.rec[rec.type] && T.rec[rec.type].reason) : '';
+    const bandLab = T.band[r.band.id] || r.band.label;
+    const bc = bandColorHex(r.band);
+    const pageTitle = (cov && cov.title) || (r.crawl && r.crawl.title) || '';
+    const queriesTable = cov && cov.queries.length
+      ? `
+        <table class="qtbl">
+          <thead><tr><th class="qt-q">${esc(T.query)}</th><th class="num">${esc(T.impr)}</th><th class="num">${esc(T.pos)}</th><th>${esc(T.inPage)}</th></tr></thead>
+          <tbody>
+            ${(r.topQueries || []).slice(0, 8).map(q => {
+              const c = (cov.queries || []).find(x => x.query === q.query);
+              const inSect = c
+                ? [c.phrase.inTitle && 'T', c.phrase.inH1 && 'H1', c.phrase.bodyOccurrences > 0 && `B${c.phrase.bodyOccurrences}×`, c.phrase.inMetaDescription && 'M'].filter(Boolean).join(' · ') || (c.looseMatch.bodyAllWords ? '<span class="warn">words only</span>' : '<span class="danger">absent</span>')
+                : '<span class="muted">—</span>';
+              return `<tr><td>${esc(q.query)}</td><td class="num">${q.impressions.toLocaleString()}</td><td class="num">${q.position.toFixed(1)}</td><td>${inSect}</td></tr>`;
+            }).join('')}
+          </tbody>
+        </table>`
+      : `<p class="muted small">${esc(T.notAnalysedShort || '(not analysed)')}</p>`;
+    return `
+      <section class="opp page-break">
+        <header class="opp-head" style="border-top-color:${bc}">
+          <div class="opp-kicker">${esc(T.opportunityHeader(idx + 1, rows.length))} <span class="band" style="background:${bc}">${esc(bandLab)}</span> ${r.isQuickWin ? '<span class="qw">⚡ ' + esc(T.quickWinBadge) + '</span>' : ''}</div>
+          <h2><a href="${esc(r.page)}">${esc(r.page)}</a></h2>
+          ${pageTitle ? `<p class="pgtitle">${esc(pageTitle)}</p>` : ''}
+        </header>
+        ${rec ? `
+          <div class="rec" style="border-color:${recCol};background:${recCol}15">
+            <span class="rec-label" style="color:${recCol}">${esc(T.strategy)}</span>
+            <strong style="color:${recCol}">${esc(recLab)}</strong>
+            <p>${esc(recReason)}</p>
+            ${rec.type === 'create-landing' && rec.suggestedUrl ? `<p class="sug"><b>${esc(T.suggestedUrl)}:</b> <code>${esc(rec.suggestedUrl)}</code></p>` : ''}
+          </div>` : ''}
+        <div class="kpis">
+          <div class="kpi"><span class="lbl">${esc(T.impressions)}</span><span class="val">${r.impressions.toLocaleString()}</span></div>
+          <div class="kpi"><span class="lbl">${esc(T.clicks)}</span><span class="val">${r.clicks.toLocaleString()}</span></div>
+          <div class="kpi"><span class="lbl">${esc(T.ctr)}</span><span class="val">${(r.ctr * 100).toFixed(2)}%</span></div>
+          <div class="kpi accent"><span class="lbl">${esc(T.potentialAtRank(r.targetPos))}</span><span class="val">+${Math.round(r.potentialClicks).toLocaleString()}</span></div>
+        </div>
+        <div class="qheader">${esc(T.topRankingQueries)}</div>
+        ${queriesTable}
+      </section>`;
+  };
+
+  const appendixHtml = appendixRows.length
+    ? `
+      <section class="page-break appendix">
+        <h2>${esc((T.appendixTitle && T.appendixTitle()) || 'All other opportunities')}</h2>
+        <table class="apx">
+          <thead><tr>${(T.appendixCols || ['#', 'Page', 'Band', 'Pos', 'Impr', 'Best query', 'Potential']).map((c, i) => `<th class="${i >= 2 && i !== 5 ? 'num' : ''}">${esc(c)}</th>`).join('')}</tr></thead>
+          <tbody>
+            ${appendixRows.map((r, i) => {
+              const rank = 16 + i;
+              let path = r.page; try { path = new URL(r.page).pathname || '/'; } catch {}
+              return `<tr>
+                <td class="num muted">${rank}</td>
+                <td><a href="${esc(r.page)}">${esc(path)}</a></td>
+                <td class="bandc" style="color:${bandColorHex(r.band)}">${esc(T.band[r.band.id] || r.band.label)}</td>
+                <td class="num">${r.bestQueryPosition.toFixed(1)}</td>
+                <td class="num">${r.impressions.toLocaleString()}</td>
+                <td class="muted small">${esc(r.bestQuery || '')}</td>
+                <td class="num primary"><b>+${Math.round(r.potentialClicks).toLocaleString()}</b></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </section>`
+    : '';
+
+  const html = `<!DOCTYPE html><html lang="${esc(lang)}"><head>
+    <meta charset="utf-8">
+    <title>${esc(T.contentStrategy)} — ${esc(siteUrl)}</title>
+    <style>
+      @page { size: A4 portrait; margin: 14mm 12mm; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1A1D2E; background: #FAF8F4; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      body { padding: 24px; max-width: 920px; margin: 0 auto; }
+      h1 { font-size: 32px; margin: 0 0 4px; letter-spacing: -0.01em; }
+      h2 { font-size: 18px; margin: 0 0 4px; letter-spacing: -0.01em; }
+      a { color: #4F46E5; text-decoration: none; }
+      .muted { color: #6B7085; }
+      .small { font-size: 11px; }
+      .num { text-align: right; font-variant-numeric: tabular-nums; }
+      .primary { color: #4F46E5; font-weight: 600; }
+      .warn { color: #D97706; font-weight: 600; }
+      .danger { color: #DC2626; font-weight: 600; }
+      .page-break { page-break-before: always; }
+      .page-break:first-child { page-break-before: auto; }
+      .cover { padding: 40px 0; }
+      .kicker { font-size: 11px; color: #6B7085; letter-spacing: 0.4em; font-weight: 600; margin-bottom: 10px; }
+      .hero { font-size: 96px; font-weight: 800; color: #6366F1; line-height: 1; margin: 12px 0 8px; letter-spacing: -0.03em; }
+      .heroSub { font-size: 16px; color: #6B7085; margin: 0 0 28px; max-width: 720px; line-height: 1.4; }
+      .kpiGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 28px 0; }
+      .kpiBig { background: #fff; border: 1px solid #E8E3D9; border-radius: 10px; padding: 18px 20px; }
+      .kpiBig .lbl { display: block; font-size: 11px; color: #6B7085; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+      .kpiBig .val { font-size: 28px; font-weight: 700; }
+      .insight { background: #EEF2FF; border-left: 4px solid #6366F1; border-radius: 6px; padding: 14px 18px; margin: 24px 0; }
+      .insight .lbl { display: inline-block; font-size: 11px; color: #4F46E5; font-weight: 700; letter-spacing: 0.3em; margin-right: 10px; }
+      .insight .body { font-size: 13px; line-height: 1.5; }
+      .actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin: 20px 0; }
+      .action { border: 1px solid; border-radius: 10px; padding: 14px; }
+      .action .head { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+      .action .stats { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 8px; }
+      .action .stats b { font-size: 16px; }
+      .action .desc { font-size: 11px; color: #1A1D2E; font-style: italic; line-height: 1.4; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      table th, table td { padding: 8px 10px; border-bottom: 1px solid #E8E3D9; text-align: left; }
+      table th { background: #F5F1E8; font-size: 11px; color: #6B7085; text-transform: uppercase; letter-spacing: 0.06em; }
+      table .rank { font-weight: 700; font-size: 14px; }
+      .audit { display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: end; margin-top: 40px; }
+      .audit .site { font-size: 18px; font-weight: 600; }
+      .audit .dates { color: #6B7085; font-size: 13px; margin-top: 4px; }
+      .footer { text-align: right; font-size: 11px; color: #6B7085; }
+      .topbox { background: #fff; border: 1px solid #E8E3D9; border-radius: 10px; padding: 18px 20px; margin-top: 18px; }
+      .topbox h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.1em; color: #6B7085; }
+      .opp { background: #fff; border: 1px solid #E8E3D9; border-radius: 10px; padding: 18px 22px; margin: 0 0 18px; border-top: 6px solid #6366F1; }
+      .opp-head .opp-kicker { font-size: 10px; color: #6B7085; letter-spacing: 0.2em; text-transform: uppercase; margin-bottom: 8px; }
+      .opp-head .band, .opp-head .qw { display: inline-block; padding: 2px 8px; border-radius: 999px; color: #fff; font-size: 10px; font-weight: 700; margin-left: 6px; letter-spacing: 0; text-transform: none; }
+      .opp-head .qw { background: #16A34A; }
+      .opp-head h2 { font-size: 17px; margin: 4px 0 2px; word-break: break-all; }
+      .opp-head .pgtitle { font-size: 12px; color: #6B7085; margin: 0 0 12px; font-style: italic; }
+      .rec { border: 1px solid; border-radius: 8px; padding: 12px 14px; margin: 8px 0 14px; }
+      .rec .rec-label { font-size: 10px; font-weight: 700; letter-spacing: 0.2em; }
+      .rec strong { display: block; font-size: 16px; margin: 4px 0; }
+      .rec p { margin: 4px 0; font-size: 12px; }
+      .rec .sug { font-size: 11px; }
+      .rec .sug code { background: #fff; padding: 1px 6px; border-radius: 3px; word-break: break-all; }
+      .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 10px 0 14px; }
+      .kpis .kpi { background: #F5F1E8; border-radius: 6px; padding: 10px 12px; }
+      .kpis .kpi .lbl { display: block; font-size: 10px; color: #6B7085; text-transform: uppercase; letter-spacing: 0.06em; }
+      .kpis .kpi .val { font-size: 18px; font-weight: 700; margin-top: 4px; display: block; }
+      .kpis .kpi.accent .val { color: #6366F1; }
+      .qheader { font-size: 11px; font-weight: 700; color: #6B7085; text-transform: uppercase; letter-spacing: 0.08em; margin: 12px 0 6px; }
+      .qtbl th, .qtbl td { padding: 5px 8px; font-size: 11px; }
+      .qtbl .qt-q { width: 50%; }
+      .appendix h2 { margin-bottom: 12px; }
+      .apx th, .apx td { padding: 6px 8px; font-size: 11px; }
+      .apx .bandc { font-weight: 600; }
+      .printBar { position: fixed; top: 0; left: 0; right: 0; background: #6366F1; color: #fff; padding: 10px 16px; display: flex; align-items: center; gap: 16px; z-index: 1000; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+      .printBar button { background: #fff; color: #4F46E5; border: none; padding: 6px 14px; border-radius: 6px; font-weight: 700; cursor: pointer; }
+      .printBar span { font-size: 13px; }
+      @media print { .printBar { display: none; } body { padding: 0; max-width: none; background: #fff; } }
+    </style>
+  </head><body>
+    <div class="printBar">
+      <button onclick="window.print()">${esc(T.printSave || 'Print → Save as PDF')}</button>
+      <span>${esc(T.printHint || 'Tip: choose "Save as PDF" in your browser print dialog.')}</span>
+    </div>
+
+    <!-- Cover -->
+    <section class="cover">
+      <div class="kicker">${esc(T.contentStrategy)}</div>
+      <div class="hero">+${totalPot.toLocaleString()}</div>
+      <p class="heroSub">${esc(T.heroSubtitle)}</p>
+      <div class="audit">
+        <div>
+          <div class="kicker">${esc(T.audit)}</div>
+          <div class="site">${esc(siteUrl)}</div>
+          <div class="dates">${esc(startDate)} → ${esc(endDate)}</div>
+        </div>
+        <div class="footer">${esc(T.preparedBy)}</div>
+      </div>
+      <div class="kpiGrid">
+        <div class="kpiBig"><span class="lbl">${esc(T.opportunityPages)}</span><span class="val">${allRows.length.toLocaleString()}</span></div>
+        <div class="kpiBig"><span class="lbl">${esc(T.totalImpressions)}</span><span class="val">${totalImpr.toLocaleString()}</span></div>
+        <div class="kpiBig"><span class="lbl">${esc(T.quickWins)}</span><span class="val">${totalQuickWins.toLocaleString()}</span></div>
+      </div>
+    </section>
+
+    <!-- Executive summary -->
+    <section class="page-break">
+      <h1>${esc(T.execSummaryTitle)}</h1>
+      <p class="muted">${esc(T.execSummaryKicker)}</p>
+      ${insight ? `<div class="insight"><span class="lbl">${esc(T.execKeyInsightLabel || 'KEY INSIGHT')}</span><span class="body">${esc(insight)}</span></div>` : ''}
+      <div class="actions">
+        ${['optimize', 'rewrite-expand', 'create-landing'].map(id => {
+          const a = recAgg[id], lab = T.rec[id], col = recColors[id];
+          return `<div class="action" style="border-color:${col};background:${col}10">
+            <div class="head" style="color:${col}">${esc(lab.label)}</div>
+            <div class="stats"><span>${a.pages} ${esc(T.pagesLabel || 'pages')}</span><b style="color:#4F46E5">+${Math.round(a.potential).toLocaleString()}</b></div>
+            <div class="desc">${esc(lab.desc)}</div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="topbox">
+        <h3>${esc(T.execTopHeader)}</h3>
+        <table>
+          <thead><tr><th style="width:5%">#</th><th style="width:42%">${esc(T.execColPage)}</th><th>${esc(T.execColBest || 'Best query @ rank')}</th><th class="num" style="width:14%">${esc(T.execColGain)}</th></tr></thead>
+          <tbody>${top5Html}</tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Per-opportunity detail (top 15) -->
+    ${detailRows.map((r, i) => detailCardHtml(r, i)).join('')}
+
+    <!-- Appendix table for the rest -->
+    ${appendixHtml}
+  </body></html>`;
+
+  const w = window.open('', '_blank');
+  if (!w) {
+    alert('Please allow pop-ups for this site, then click "Export PDF" again.');
+    return;
+  }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
 }
