@@ -3048,6 +3048,124 @@ function bandForPosition(p) {
   return STRATEGY_BANDS.find(b => p >= b.min && p < b.max) || null;
 }
 
+// ── Strategy recommendation helpers ──────────────────────────────────────
+
+// "loyer impayé genève" → "loyer-impaye-geneve"
+function slugifyKeyword(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 70);
+}
+
+// Tokens of a normalised string with stop-words filtered out, so we can
+// measure how much of a keyword's substance appears in a URL slug. Stop
+// words exist for FR/EN/DE — the most common languages on Converta's sites.
+const STOPWORDS = new Set([
+  'de','du','le','la','les','un','une','des','et','en','au','aux','à','a','d','l',
+  'the','of','and','or','for','to','in','on','with','at',
+  'der','die','das','und','von','zu','bei','mit','im','am'
+]);
+
+function meaningfulTokens(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]+/g, ' ')
+    .split(/\s+/)
+    .filter(w => w && w.length >= 2 && !STOPWORDS.has(w));
+}
+
+// Returns 0…1 indicating how much of a keyword's meaningful tokens appear
+// in the URL's slug. Substring match so "geneve" matches "geneve-centre".
+function keywordInUrlScore(url, keyword) {
+  const tokens = meaningfulTokens(keyword);
+  if (!tokens.length) return 0;
+  let path = '';
+  try { path = new URL(url).pathname.toLowerCase(); } catch { return 0; }
+  const slug = path.replace(/[^a-z0-9]+/g, ' ');
+  const matched = tokens.filter(t => slug.includes(t)).length;
+  return matched / tokens.length;
+}
+
+// Build a suggested new URL for a keyword based on the current page's
+// parent directory — preserves the site's existing URL pattern (eg
+// /adresses/<x>/, /services/<x>/) rather than dumping a slug at the root.
+function suggestNewLandingUrl(currentUrl, keyword) {
+  try {
+    const u = new URL(currentUrl);
+    const slug = slugifyKeyword(keyword);
+    if (!slug) return null;
+    // Drop the leaf segment, keep the rest.
+    const parts = u.pathname.split('/').filter(Boolean);
+    if (parts.length > 1) parts.pop();
+    const parent = parts.length ? '/' + parts.join('/') + '/' : '/';
+    return u.origin + parent + slug + '/';
+  } catch { return null; }
+}
+
+// Decide what to do with a page-query opportunity. Returns one of:
+//   optimize           — page is on-topic; small edits (title, body, links)
+//   rewrite-expand     — page is partial; needs a meaningful rework
+//   create-landing     — page is tangentially related; a dedicated landing
+//                        page would rank substantially better
+function recommendStrategy(row) {
+  const bestQ = row.bestQuery || '';
+  const cov = row.coverage && Array.isArray(row.coverage.queries) ? row.coverage : null;
+  const covQ = cov ? cov.queries.find(q => q.query === bestQ) : null;
+
+  const urlScore = keywordInUrlScore(row.page, bestQ);
+
+  // Heuristics. Without coverage we lean on URL relevance + crawl signals
+  // (title length tells us a real <title> exists). With coverage we have
+  // strong per-section signal.
+  let titleScore = 0, h1Score = 0, bodyScore = 0;
+  let pageWordCount = 0;
+  if (cov && covQ) {
+    titleScore = covQ.phrase.inTitle ? 1 : 0;
+    h1Score = covQ.phrase.inH1 ? 1 : (covQ.phrase.inHeadings ? 0.5 : 0);
+    bodyScore = covQ.phrase.bodyOccurrences >= 3 ? 1 : (covQ.phrase.bodyOccurrences > 0 ? 0.5 : 0);
+    pageWordCount = cov.wordCount || 0;
+  } else if (row.crawl) {
+    pageWordCount = row.crawl.wordCount || 0;
+  }
+
+  // Combine: URL relevance is heavily weighted because it's the strongest
+  // signal of "this page is meant to be about this keyword".
+  const relevance = urlScore * 0.5 + titleScore * 0.2 + h1Score * 0.15 + bodyScore * 0.15;
+
+  if (relevance >= 0.55) {
+    return {
+      type: 'optimize',
+      label: 'Optimize this page',
+      color: '16A34A',
+      reason: cov
+        ? 'Page is the right topic match — refine the title, deepen the body and strengthen internal links to push it higher.'
+        : 'URL slug looks topically aligned — refine on-page SEO to push it higher.',
+      pageWordCount
+    };
+  } else if (relevance >= 0.25 || urlScore >= 0.25) {
+    return {
+      type: 'rewrite-expand',
+      label: 'Rewrite & expand',
+      color: 'D97706',
+      reason: 'Only partially relevant to the keyword. Rewrite the title/H1, add a dedicated section, and expand the content.',
+      pageWordCount
+    };
+  } else {
+    return {
+      type: 'create-landing',
+      label: 'Create new landing page',
+      color: 'DC2626',
+      reason: 'The current URL is only tangentially related to this keyword — Google ranks it because it\'s the closest match, but a dedicated landing page would convert demand into clicks.',
+      suggestedUrl: suggestNewLandingUrl(row.page, bestQ),
+      pageWordCount
+    };
+  }
+}
+
 const csState = {
   sites: [],
   selectedSite: localStorage.getItem('gsc-selected-site') || '',
@@ -3387,15 +3505,15 @@ async function runStrategyQuery() {
       const avgCtr = p.totalImpr > 0 ? p.totalClicks / p.totalImpr : 0;
       const crawl = csState.crawlPages ? csState.crawlPages.get(normaliseUrlForJoin(p.page)) : null;
 
-      rows.push({
+      const newRow = {
         page: p.page,
         impressions: p.totalImpr,
         clicks: p.totalClicks,
         ctr: avgCtr,
         position: avgPosition,
-        band: bestQuery._band,           // primary band = band of the highest-potential query overall
-        bandIds,                          // every band this page qualifies for
-        perBand,                          // per-band aggregates (count / impr / potential / bestQuery)
+        band: bestQuery._band,
+        bandIds,
+        perBand,
         targetPos: bestQuery._band.target,
         potentialClicks: totalPotential,
         bestQuery: bestQuery.query,
@@ -3403,8 +3521,10 @@ async function runStrategyQuery() {
         bestQueryImpressions: bestQuery.impressions,
         qualifyingCount: qualifying.length,
         crawl: crawl || null,
-        topQueries: p.queries.slice(0, 50)   // populated up-front — no drill-down needed
-      });
+        topQueries: p.queries.slice(0, 50)
+      };
+      newRow.recommendation = recommendStrategy(newRow);
+      rows.push(newRow);
     }
 
     rows.sort((a, b) => b.potentialClicks - a.potentialClicks);
@@ -3607,17 +3727,23 @@ function renderStrategyTable() {
     const quickWinBadge = r.isQuickWin === true
       ? `<span title="At least one query the page ranks for is missing from the page entirely" style="background:rgba(22,163,74,.15);color:var(--success);padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600">⚡ quick win</span>`
       : '';
+    const rec = r.recommendation;
+    const recBadge = rec
+      ? `<span title="${escapeHtml(rec.reason)}" style="background:#${rec.color}1A;color:#${rec.color};padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid #${rec.color}40">${escapeHtml(rec.label)}</span>`
+      : '';
     const main = `
       <tr data-page="${escapeHtml(r.page)}" style="cursor:pointer">
         <td style="padding:10px 12px">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${r.band.color}" title="${escapeHtml(r.band.label)}"></span>
             <a href="${escapeHtml(r.page)}" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none;word-break:break-all" onclick="event.stopPropagation()">${escapeHtml(r.page)}</a>
+            ${recBadge}
             ${quickWinBadge}
             ${crawlTags}
           </div>
           ${crawl && crawl.title ? `<div style="font-size:12px;color:var(--text-muted);margin-top:3px">${escapeHtml(crawl.title)}</div>` : ''}
           ${r.bestQuery ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px">Best opportunity: <b style="color:${r.band.color}">${escapeHtml(r.bestQuery)}</b> @ rank ${r.bestQueryPosition.toFixed(1)} · ${r.bestQueryImpressions.toLocaleString()} impressions${r.qualifyingCount > 1 ? ` <span style="opacity:.7">(+${r.qualifyingCount - 1} more ranking queries)</span>` : ''}</div>` : ''}
+          ${rec && rec.type === 'create-landing' && rec.suggestedUrl ? `<div style="font-size:12px;margin-top:6px;padding:6px 8px;background:rgba(220,38,38,.06);border-left:3px solid #${rec.color};border-radius:4px"><b style="color:#${rec.color}">Suggested new URL:</b> <code style="background:transparent;color:var(--text)">${escapeHtml(rec.suggestedUrl)}</code></div>` : ''}
         </td>
         <td style="padding:10px 12px;font-size:12px">
           ${STRATEGY_BANDS.filter(b => (r.bandIds || [r.band.id]).includes(b.id)).map(b => {
@@ -3740,6 +3866,7 @@ async function loadStrategyCoverage(row, { silent } = {}) {
     if (data.error) throw new Error(data.error);
     row.coverage = data;
     row.isQuickWin = computeQuickWin(row);
+    row.recommendation = recommendStrategy(row);
   } catch (e) {
     row.coverage = { error: e.message };
   }
@@ -3826,10 +3953,14 @@ async function analyseAllCoverage() {
 
   // Update quick-win flags for every row that has coverage but hasn't been
   // flagged yet (covers the case where coverage was loaded via expansion).
+  // Recompute the strategy recommendation too — coverage data may flip a
+  // row from "optimize" to "create-landing" or vice versa now that we know
+  // whether the page actually contains the keyword.
   for (const r of csState.rows) {
     if (r.coverage && Array.isArray(r.coverage.queries) && r.isQuickWin === undefined) {
       r.isQuickWin = computeQuickWin(r);
     }
+    r.recommendation = recommendStrategy(r);
   }
   enableQuickWinsIfAny();
   renderStrategySummary();
@@ -4115,6 +4246,18 @@ function deriveActions(r) {
   const cov = r.coverage && Array.isArray(r.coverage.queries) ? r.coverage : null;
   const crawl = r.crawl;
   const push = (priority, text) => actions.push({ priority, text });
+  const rec = r.recommendation;
+
+  // Top-line strategic recommendation always leads the list.
+  if (rec) {
+    if (rec.type === 'create-landing' && rec.suggestedUrl) {
+      push('critical', `Create a dedicated landing page at ${rec.suggestedUrl} targeting "${r.bestQuery}".`);
+    } else if (rec.type === 'rewrite-expand') {
+      push('critical', `Rewrite this page around "${r.bestQuery}" (title, H1, dedicated section in the body).`);
+    } else if (rec.type === 'optimize') {
+      push('important', `Refine this page for "${r.bestQuery}" — tighten the title and add depth to the relevant section.`);
+    }
+  }
 
   if (cov) {
     const missing = cov.queries.filter(q => !q.presentSomewhere);
@@ -4347,7 +4490,58 @@ async function exportStrategyPpt() {
 
   summary.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
 
-  // ── Top quick wins (if any analysed) ──────────────────────────────────
+  // ── Strategy mix overview ─────────────────────────────────────────────
+  // Three categories — Optimize / Rewrite & expand / Create landing page.
+  // Each row sums up to a single recommended action; client immediately
+  // sees the work split.
+  const REC_TYPES = [
+    { id: 'optimize',         label: 'Optimize',                color: '16A34A', desc: 'Page is on-topic — refine title, content depth, internal links.' },
+    { id: 'rewrite-expand',   label: 'Rewrite & expand',        color: 'D97706', desc: 'Page partially relevant — meaningful content rework.' },
+    { id: 'create-landing',   label: 'Create new landing page', color: 'DC2626', desc: 'Page only tangentially related — needs a dedicated URL.' }
+  ];
+  const recAgg = {};
+  REC_TYPES.forEach(t => recAgg[t.id] = { pages: 0, potential: 0, samples: [] });
+  for (const r of allRows) {
+    const id = (r.recommendation && r.recommendation.type) || 'optimize';
+    if (!recAgg[id]) continue;
+    recAgg[id].pages++;
+    recAgg[id].potential += r.potentialClicks;
+    if (recAgg[id].samples.length < 3) recAgg[id].samples.push(r);
+  }
+  const mix = pptx.addSlide();
+  mix.background = { color: COLORS.bg };
+  mix.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.35, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
+  mix.addText('Strategy mix', { x: 0.7, y: 0.35, w: 12, h: 0.6, fontSize: 26, bold: true, color: COLORS.text });
+  mix.addText('Each opportunity falls into one of three actions. Use this to plan the work split with the team.',
+    { x: 0.7, y: 0.95, w: 12, h: 0.4, fontSize: 12, color: COLORS.muted });
+
+  REC_TYPES.forEach((t, idx) => {
+    const x = 0.7 + idx * 4.05;
+    const agg = recAgg[t.id];
+    const tint = t.id === 'optimize' ? 'E8F7EE' : (t.id === 'rewrite-expand' ? 'FEF1E3' : 'FCE9E9');
+    mix.addShape(pptx.ShapeType.roundRect, { x, y: 1.6, w: 3.85, h: 5.0, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.12 });
+    mix.addShape(pptx.ShapeType.rect, { x, y: 1.6, w: 3.85, h: 0.55, fill: { color: tint }, line: { type: 'none' } });
+    mix.addShape(pptx.ShapeType.rect, { x, y: 1.6, w: 3.85, h: 0.05, fill: { color: '#' + t.color }, line: { type: 'none' } });
+    mix.addText(t.label, { x: x + 0.2, y: 1.68, w: 3.5, h: 0.4, fontSize: 14, bold: true, color: '#' + t.color });
+    // Big numbers
+    mix.addText(agg.pages.toLocaleString(), { x: x + 0.2, y: 2.3, w: 3.5, h: 0.7, fontSize: 38, bold: true, color: COLORS.text });
+    mix.addText(`pages  ·  +${Math.round(agg.potential).toLocaleString()} potential clicks`,
+      { x: x + 0.2, y: 3.0, w: 3.5, h: 0.3, fontSize: 11, color: COLORS.muted, bold: true });
+    mix.addText(t.desc, { x: x + 0.2, y: 3.4, w: 3.5, h: 0.6, fontSize: 10, color: COLORS.text, italic: true });
+    // Sample pages
+    if (agg.samples.length) {
+      mix.addText('EXAMPLES', { x: x + 0.2, y: 4.1, w: 3.5, h: 0.25, fontSize: 9, bold: true, color: COLORS.muted, charSpacing: 3 });
+      agg.samples.forEach((sr, i) => {
+        const sy = 4.35 + i * 0.75;
+        mix.addText(trunc(sr.page, 55), { x: x + 0.2, y: sy, w: 3.5, h: 0.28, fontSize: 9, bold: true, color: COLORS.text, hyperlink: { url: sr.page } });
+        mix.addText(`"${trunc(sr.bestQuery || '', 36)}"  @ rank ${sr.bestQueryPosition.toFixed(1)}  ·  +${Math.round(sr.potentialClicks).toLocaleString()} clicks`,
+          { x: x + 0.2, y: sy + 0.28, w: 3.5, h: 0.30, fontSize: 9, color: COLORS.muted });
+      });
+    }
+  });
+  mix.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
+
+  // ── Top opportunities ─────────────────────────────────────────────────
   // A separate "punch list" slide of the 5 highest-impact rows so the
   // client sees the headline actions before drilling into details.
   const topRows = rows.slice(0, 5);
@@ -4430,7 +4624,30 @@ async function exportStrategyPpt() {
       ], { x: 0.6, y: pageTitle ? 1.46 : 1.18, w: 12.1, h: 0.3, fontSize: 11 });
     }
 
-    // Metric tiles
+    // ── Strategic recommendation banner — the headline of every slide.
+    const rec = r.recommendation;
+    if (rec) {
+      const recColor = '#' + rec.color;
+      // Soft tint background to make the banner pop without overpowering.
+      const tint = rec.type === 'optimize'       ? 'E8F7EE'
+                 : rec.type === 'rewrite-expand' ? 'FEF1E3'
+                 : /* create-landing */            'FCE9E9';
+      s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 1.65, w: 12.13, h: 0.85, fill: { color: tint }, line: { color: recColor, width: 1 }, rectRadius: 0.12 });
+      // Left coloured rail
+      s.addShape(pptx.ShapeType.rect, { x: 0.6, y: 1.65, w: 0.18, h: 0.85, fill: { color: recColor }, line: { type: 'none' } });
+      s.addText('STRATEGY', { x: 0.92, y: 1.73, w: 1.5, h: 0.25, fontSize: 9, bold: true, color: recColor, charSpacing: 4 });
+      s.addText(rec.label, { x: 0.92, y: 1.96, w: 5.5, h: 0.4, fontSize: 18, bold: true, color: recColor });
+      s.addText(rec.reason, { x: 6.5, y: 1.78, w: 6.3, h: 0.66, fontSize: 10, color: COLORS.text });
+      if (rec.type === 'create-landing' && rec.suggestedUrl) {
+        s.addShape(pptx.ShapeType.rect, { x: 6.5, y: 2.15, w: 6.13, h: 0.30, fill: { color: 'FFFFFF' }, line: { color: COLORS.border, width: 0.5 } });
+        s.addText([
+          { text: 'Suggested URL  ', options: { color: COLORS.muted, fontSize: 9, bold: true } },
+          { text: trunc(rec.suggestedUrl, 80),     options: { color: recColor,   fontSize: 10, bold: true } }
+        ], { x: 6.6, y: 2.16, w: 5.9, h: 0.28 });
+      }
+    }
+
+    // Metric tiles (slightly compressed to make room for the banner above)
     const metrics = [
       { label: 'Impressions',                value: r.impressions.toLocaleString(),                color: COLORS.text },
       { label: 'Clicks',                     value: r.clicks.toLocaleString(),                     color: COLORS.text },
@@ -4439,14 +4656,14 @@ async function exportStrategyPpt() {
     ];
     metrics.forEach((m, i) => {
       const x = 0.6 + i * 3.15;
-      s.addShape(pptx.ShapeType.roundRect, { x, y: 1.65, w: 2.95, h: 0.95, fill: { color: m.accent ? COLORS.panelAccent : COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
-      s.addText(m.label, { x: x + 0.15, y: 1.72, w: 2.7, h: 0.3, fontSize: 10, color: COLORS.muted, bold: true });
-      s.addText(m.value, { x: x + 0.15, y: 2.0, w: 2.7, h: 0.55, fontSize: 22, bold: true, color: m.color });
+      s.addShape(pptx.ShapeType.roundRect, { x, y: 2.65, w: 2.95, h: 0.75, fill: { color: m.accent ? COLORS.panelAccent : COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+      s.addText(m.label, { x: x + 0.15, y: 2.70, w: 2.7, h: 0.25, fontSize: 9, color: COLORS.muted, bold: true });
+      s.addText(m.value, { x: x + 0.15, y: 2.93, w: 2.7, h: 0.45, fontSize: 18, bold: true, color: m.color });
     });
 
     // ── Left column: CURRENT PAGE (title/meta/H1/words) + coverage chips
-    s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 2.75, w: 6.1, h: 4.2, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
-    s.addText('Current page', { x: 0.78, y: 2.85, w: 5.9, h: 0.35, fontSize: 13, bold: true, color: COLORS.text });
+    s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 3.55, w: 6.1, h: 3.4, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+    s.addText('Current page', { x: 0.78, y: 3.62, w: 5.9, h: 0.3, fontSize: 12, bold: true, color: COLORS.text });
 
     // TITLE — distinguish three cases: analysed-and-present (green/amber
     // by length), analysed-and-absent (red "missing"), and not-analysed
@@ -4472,11 +4689,11 @@ async function exportStrategyPpt() {
     s.addText([
       { text: 'TITLE', options: { fontSize: 9, color: COLORS.muted, bold: true } },
       { text: `  ${titleLenLabel}`, options: { fontSize: 9, color: titleLenColor, bold: true } }
-    ], { x: 0.78, y: 3.22, w: 5.9, h: 0.25 });
+    ], { x: 0.78, y: 3.92, w: 5.9, h: 0.22 });
     const titleBody = liveTitle
       ? liveTitle
       : (titleStatus === 'missing' ? '(no <title> tag on page)' : '(not analysed — click "Analyse keyword coverage" in the tool)');
-    s.addText(titleBody, { x: 0.78, y: 3.45, w: 5.9, h: 0.45, fontSize: 11,
+    s.addText(titleBody, { x: 0.78, y: 4.10, w: 5.9, h: 0.30, fontSize: 10,
       color: liveTitle ? COLORS.text : (titleStatus === 'missing' ? COLORS.danger : COLORS.muted),
       italic: !liveTitle });
 
@@ -4497,11 +4714,11 @@ async function exportStrategyPpt() {
     s.addText([
       { text: 'META DESCRIPTION', options: { fontSize: 9, color: COLORS.muted, bold: true } },
       { text: `  ${metaLenLabel}`, options: { fontSize: 9, color: metaLenColor, bold: true } }
-    ], { x: 0.78, y: 3.98, w: 5.9, h: 0.25 });
+    ], { x: 0.78, y: 4.45, w: 5.9, h: 0.22 });
     const metaBody = metaText
       ? metaText
       : (metaStatus === 'missing' ? '(no meta description — Google will auto-generate one)' : '(not analysed — click "Analyse keyword coverage" in the tool)');
-    s.addText(metaBody, { x: 0.78, y: 4.21, w: 5.9, h: 0.65, fontSize: 11,
+    s.addText(metaBody, { x: 0.78, y: 4.63, w: 5.9, h: 0.55, fontSize: 10,
       color: metaText ? COLORS.text : (metaStatus === 'missing' ? COLORS.danger : COLORS.muted),
       italic: !metaText });
 
@@ -4525,11 +4742,11 @@ async function exportStrategyPpt() {
     s.addText([
       { text: 'H1', options: { fontSize: 9, color: COLORS.muted, bold: true } },
       { text: `  ${h1Label}`, options: { fontSize: 9, color: h1Color, bold: true } }
-    ], { x: 0.78, y: 4.94, w: 5.9, h: 0.25 });
+    ], { x: 0.78, y: 5.23, w: 5.9, h: 0.22 });
     const h1Body = liveH1
       ? liveH1
       : (h1Status === 'missing' ? '(no H1 heading on page)' : '(not analysed — click "Analyse keyword coverage" in the tool)');
-    s.addText(h1Body, { x: 0.78, y: 5.17, w: 5.9, h: 0.4, fontSize: 11,
+    s.addText(h1Body, { x: 0.78, y: 5.41, w: 5.9, h: 0.32, fontSize: 10,
       color: liveH1 ? COLORS.text : (h1Status === 'missing' ? COLORS.danger : COLORS.muted),
       italic: !liveH1 });
 
@@ -4543,7 +4760,7 @@ async function exportStrategyPpt() {
       const tone = (n) => n === 0 ? COLORS.danger : (n < total / 2 ? COLORS.warning : COLORS.success);
 
       s.addText(`${cov.wordCount.toLocaleString()} words on the live page  ·  ${total} queries analysed`,
-        { x: 0.78, y: 5.62, w: 5.9, h: 0.25, fontSize: 10, color: COLORS.muted, italic: true });
+        { x: 0.78, y: 5.77, w: 5.9, h: 0.22, fontSize: 9, color: COLORS.muted, italic: true });
 
       const stats = [
         { label: 'title', n: inT },
@@ -4553,27 +4770,27 @@ async function exportStrategyPpt() {
       ];
       stats.forEach((st, i) => {
         const sx = 0.78 + i * 1.42;
-        s.addShape(pptx.ShapeType.roundRect, { x: sx, y: 5.95, w: 1.32, h: 0.85, fill: { color: 'FFFFFF' }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.06 });
-        s.addText(`${st.n}/${total}`, { x: sx, y: 6.0, w: 1.32, h: 0.4, fontSize: 16, bold: true, color: tone(st.n), align: 'center' });
-        s.addText('in ' + st.label, { x: sx, y: 6.42, w: 1.32, h: 0.35, fontSize: 9, color: COLORS.muted, align: 'center' });
+        s.addShape(pptx.ShapeType.roundRect, { x: sx, y: 6.05, w: 1.32, h: 0.80, fill: { color: 'FFFFFF' }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.06 });
+        s.addText(`${st.n}/${total}`, { x: sx, y: 6.10, w: 1.32, h: 0.38, fontSize: 15, bold: true, color: tone(st.n), align: 'center' });
+        s.addText('in ' + st.label, { x: sx, y: 6.50, w: 1.32, h: 0.32, fontSize: 9, color: COLORS.muted, align: 'center' });
       });
     } else {
       s.addText('Click the "Analyse keyword coverage" button above the opportunity table to populate live-page data here.',
-        { x: 0.78, y: 5.7, w: 5.9, h: 0.45, fontSize: 10, color: COLORS.muted, italic: true });
+        { x: 0.78, y: 5.8, w: 5.9, h: 0.45, fontSize: 10, color: COLORS.muted, italic: true });
     }
 
     // ── Right column: ACTION ITEMS (priority-coded)
-    s.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 2.75, w: 5.88, h: 2.5, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
-    s.addText('Action items', { x: 7.03, y: 2.85, w: 5.6, h: 0.35, fontSize: 13, bold: true, color: COLORS.text });
+    s.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 3.55, w: 5.88, h: 1.95, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+    s.addText('Action items', { x: 7.03, y: 3.62, w: 5.6, h: 0.30, fontSize: 12, bold: true, color: COLORS.text });
     const actions = deriveActions(r);
     const actionLines = actions.slice(0, 6).map(a => ({
       text: `[${priorityLabel(a.priority).toUpperCase()}] ${a.text}`,
       options: { color: priorityColor(a.priority), bullet: { code: '25CF' }, breakLine: true, bold: a.priority === 'critical' }
     }));
-    s.addText(actionLines, { x: 7.03, y: 3.22, w: 5.6, h: 1.95, fontSize: 10, paraSpaceAfter: 5, color: COLORS.text });
+    s.addText(actionLines, { x: 7.03, y: 3.94, w: 5.6, h: 1.50, fontSize: 9, paraSpaceAfter: 4, color: COLORS.text });
 
     // ── Bottom right: MISSING QUERIES highlight
-    s.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 5.35, w: 5.88, h: 1.6, fill: { color: 'FFF5F5' }, line: { color: COLORS.danger, width: 0.75 }, rectRadius: 0.1 });
+    s.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 5.60, w: 5.88, h: 1.35, fill: { color: 'FFF5F5' }, line: { color: COLORS.danger, width: 0.75 }, rectRadius: 0.1 });
     if (cov) {
       const missing = cov.queries.filter(q => !q.presentSomewhere);
       const missingImpr = missing.reduce((sum, q) => {
@@ -4581,17 +4798,17 @@ async function exportStrategyPpt() {
         return sum + (t ? t.impressions : 0);
       }, 0);
       s.addText(`Missing on this page  ·  ${missing.length} ${missing.length === 1 ? 'query' : 'queries'}  ·  ${missingImpr.toLocaleString()} impressions`,
-        { x: 7.03, y: 5.42, w: 5.6, h: 0.3, fontSize: 11, bold: true, color: COLORS.danger });
+        { x: 7.03, y: 5.66, w: 5.6, h: 0.28, fontSize: 11, bold: true, color: COLORS.danger });
       if (missing.length) {
         const list = missing.slice(0, 8).map(q => q.query).join('   ·   ');
         s.addText(list + (missing.length > 8 ? `   ·   +${missing.length - 8} more` : ''),
-          { x: 7.03, y: 5.75, w: 5.6, h: 1.1, fontSize: 10, color: COLORS.text });
+          { x: 7.03, y: 5.96, w: 5.6, h: 0.92, fontSize: 9, color: COLORS.text });
       } else {
         s.addText('Every ranking query already appears somewhere on the page. Focus on titles, H1 and internal linking.',
-          { x: 7.03, y: 5.78, w: 5.6, h: 1.0, fontSize: 11, color: COLORS.text, italic: true });
+          { x: 7.03, y: 5.98, w: 5.6, h: 0.88, fontSize: 10, color: COLORS.text, italic: true });
       }
     } else {
-      s.addText('Missing-keywords analysis not run yet.', { x: 7.03, y: 5.85, w: 5.6, h: 0.5, fontSize: 11, color: COLORS.muted, italic: true });
+      s.addText('Missing-keywords analysis not run yet.', { x: 7.03, y: 6.05, w: 5.6, h: 0.5, fontSize: 10, color: COLORS.muted, italic: true });
     }
 
     // Footer
