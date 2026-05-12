@@ -4518,7 +4518,13 @@ const PPT_I18N = {
     queriesCoverageHint: (n, w) => `Of the ${n} queries this page ranks for in Google, how many appear on the page (${w.toLocaleString()} words live):`,
     execSummaryTitle: 'Executive summary',
     execSummaryKicker: 'What we found, what to do, what to expect.',
-    statIn: { title: 'in title', meta: 'in meta', H1: 'in H1', body: 'in body' },
+    execSummaryPara1: (a) =>
+      `We analysed ${a.siteUrl} between ${a.startDate} and ${a.endDate}. ${a.totalRows.toLocaleString()} pages currently rank in Google for queries below position #1 — together they generate ${a.totalImpr.toLocaleString()} impressions per month but only ${a.totalClicks.toLocaleString()} clicks. Pushing each to its target rank could add roughly +${a.totalPotential.toLocaleString()} clicks per month.`,
+    execSummaryPara2: (a) =>
+      `The work splits three ways: ${a.optimize} pages need light optimisation (refine title / content / internal links), ${a.rewriteExpand} need a rewrite or significant expansion, and ${a.createLanding} would benefit from a brand-new dedicated landing page.${a.quickWins ? ` Of those, ${a.quickWins} pages have at least one ranking query that doesn't appear anywhere on the page — the fastest wins.` : ''}`,
+    execSummaryPara3: 'The next slide is a one-page dashboard with the headline numbers, an opportunity matrix, topic clusters and a 4-week editorial plan. After that, every opportunity has its own slide with the current page state, prioritised actions and the queries it ranks for.',
+    matrixTopNote: (n, m) => `(top ${n} of ${m} by impressions)`,
+    statIn: { title: 'queries in title', meta: 'queries in meta', H1: 'queries in H1', body: 'queries in body' },
     actionItems: 'Action items',
     priority: { critical: 'CRITICAL', important: 'IMPORTANT', recommended: 'RECOMMENDED' },
     topRankingQueries: 'Top ranking queries',
@@ -4654,7 +4660,13 @@ const PPT_I18N = {
     queriesCoverageHint: (n, w) => `Sur les ${n} requêtes pour lesquelles cette page se positionne dans Google, combien apparaissent réellement dans la page (${w.toLocaleString()} mots live) :`,
     execSummaryTitle: 'Résumé exécutif',
     execSummaryKicker: 'Ce que nous avons trouvé, ce qu\'il faut faire, ce qu\'on peut attendre.',
-    statIn: { title: 'dans le title', meta: 'dans la meta', H1: 'dans le H1', body: 'dans le corps' },
+    execSummaryPara1: (a) =>
+      `Nous avons analysé ${a.siteUrl} entre le ${a.startDate} et le ${a.endDate}. ${a.totalRows.toLocaleString()} pages se positionnent actuellement sur Google pour des requêtes en dehors du rang #1 — elles génèrent ensemble ${a.totalImpr.toLocaleString()} impressions par mois mais seulement ${a.totalClicks.toLocaleString()} clics. En les poussant chacune vers son rang cible, on pourrait gagner environ +${a.totalPotential.toLocaleString()} clics par mois.`,
+    execSummaryPara2: (a) =>
+      `Le travail se répartit en trois axes : ${a.optimize} pages à optimiser (affiner title / contenu / maillage interne), ${a.rewriteExpand} à réécrire ou étoffer significativement, et ${a.createLanding} qui gagneraient à avoir une landing page dédiée.${a.quickWins ? ` Parmi celles-ci, ${a.quickWins} pages ont au moins une requête ranking qui n'apparaît nulle part sur la page — les gains les plus rapides.` : ''}`,
+    execSummaryPara3: 'La diapositive suivante est un tableau de bord d\'une page avec les chiffres clés, une matrice d\'opportunités, des clusters thématiques et un plan éditorial sur 4 semaines. Ensuite, chaque opportunité a sa propre diapositive avec l\'état actuel de la page, les actions priorisées et les requêtes pour lesquelles elle se positionne.',
+    matrixTopNote: (n, m) => `(top ${n} sur ${m} par impressions)`,
+    statIn: { title: 'requêtes dans le title', meta: 'requêtes dans la meta', H1: 'requêtes dans le H1', body: 'requêtes dans le corps' },
     actionItems: 'Actions à mener',
     priority: { critical: 'CRITIQUE', important: 'IMPORTANT', recommended: 'RECOMMANDÉ' },
     topRankingQueries: 'Top requêtes positionnées',
@@ -4830,14 +4842,10 @@ function addExecutiveSummarySlide(pptx, T, ctx) {
   // Narrative paragraphs in a single white card.
   s.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 1.30, w: 12.25, h: 4.05, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.14 });
 
-  const para1 = (T.execSummaryPara1 || ((args) =>
-    `We analysed ${args.siteUrl} between ${args.startDate} and ${args.endDate}. ${args.totalRows.toLocaleString()} pages currently rank in Google for queries below position #1 — together they generate ${args.totalImpr.toLocaleString()} impressions per month but only ${args.totalClicks.toLocaleString()} clicks. Pushing each to its target rank could add roughly +${args.totalPotential.toLocaleString()} clicks per month.`
-  ))({ siteUrl, startDate, endDate, totalRows: allRows.length, totalImpr, totalClicks, totalPotential });
-  const para2 = (T.execSummaryPara2 || ((args) =>
-    `The work splits three ways: ${args.optimize} pages need light optimisation (refine title / content / internal links), ${args.rewriteExpand} need a rewrite or significant expansion, and ${args.createLanding} would benefit from a brand-new dedicated landing page.${args.quickWins ? ` Of those, ${args.quickWins} pages have at least one ranking query that doesn't appear anywhere on the page — the fastest wins.` : ''}`
-  ))({ optimize: byRec.optimize, rewriteExpand: byRec['rewrite-expand'], createLanding: byRec['create-landing'], quickWins });
-  const para3 = T.execSummaryPara3 ||
-    'The next slide is a one-page dashboard with the headline numbers, an opportunity matrix, topic clusters and a 4-week editorial plan. After that, every opportunity has its own slide with the current page state, prioritised actions and the queries it ranks for.';
+  // Templated paragraphs (always defined in PPT_I18N for both EN + FR).
+  const para1 = T.execSummaryPara1({ siteUrl, startDate, endDate, totalRows: allRows.length, totalImpr, totalClicks, totalPotential });
+  const para2 = T.execSummaryPara2({ optimize: byRec.optimize, rewriteExpand: byRec['rewrite-expand'], createLanding: byRec['create-landing'], quickWins });
+  const para3 = T.execSummaryPara3;
 
   s.addText([
     { text: para1, options: { color: TEXT, breakLine: true } },
@@ -4935,11 +4943,13 @@ function addExecutiveDashboardSlide(pptx, T, ctx) {
     ];
   });
   if (matrixRows.length) {
+    // Table sits below the card title + subtitle and must end before
+    // the card itself does (y=4.60). 6 rows × 0.28 = 1.68 → ends at 4.55.
     d.addTable([matrixHeader, ...matrixRows], {
-      x: 0.75, y: 2.80, w: 7.25, colW: [3.0, 0.7, 0.95, 1.0, 1.6],
+      x: 0.75, y: 2.85, w: 7.25, colW: [3.0, 0.7, 0.95, 1.0, 1.6],
       fontFace: 'Calibri', color: TEXT,
       border: { type: 'solid', color: CARD_BORDER, pt: 0.4 },
-      rowH: 0.32
+      rowH: 0.28
     });
   }
 
@@ -5556,7 +5566,7 @@ async function exportStrategyPpt() {
         const sx = 0.78 + i * 1.42;
         s.addShape(pptx.ShapeType.roundRect, { x: sx, y: 5.98, w: 1.32, h: 0.80, fill: { color: 'FFFFFF' }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.06 });
         s.addText(`${st.n} / ${total}`, { x: sx, y: 6.02, w: 1.32, h: 0.36, fontSize: 15, bold: true, color: tone(st.n), align: 'center' });
-        s.addText(`queries ${st.label}`, { x: sx, y: 6.40, w: 1.32, h: 0.32, fontSize: 9, color: COLORS.muted, align: 'center' });
+        s.addText(st.label, { x: sx, y: 6.40, w: 1.32, h: 0.32, fontSize: 9, color: COLORS.muted, align: 'center' });
       });
     } else {
       s.addText(T.runAnalysisHint,
@@ -5599,15 +5609,18 @@ async function exportStrategyPpt() {
       // Header line for the queries table — names the table and warns
       // about the top-N truncation so the audience knows what they're
       // looking at.
+      // Two-line header so the missing-count + sub-note never overflow.
       const totalRanking = Array.isArray(r.topQueries) ? r.topQueries.length : 0;
       const shownCount = Math.min(6, topQ.length);
       s.addText([
         { text: T.topRankingQueries, options: { bold: true, color: COLORS.text } },
-        { text: totalRanking > shownCount ? `  (top ${shownCount} of ${totalRanking} by impressions)` : '',
-          options: { color: COLORS.muted, italic: true } },
-        { text: missingCount ? `   ·   ${T.missingOnPage(missingCount, missingImpr)}` : (cov ? `   ·   ${T.allCovered}` : ''),
-          options: { color: missingCount ? COLORS.danger : COLORS.muted, italic: !missingCount } }
-      ], { x: 7.03, y: 5.20, w: 5.6, h: 0.28, fontSize: 10 });
+        { text: totalRanking > shownCount ? `   ${T.matrixTopNote(shownCount, totalRanking)}` : '',
+          options: { color: COLORS.muted, italic: true } }
+      ], { x: 7.03, y: 5.10, w: 5.6, h: 0.22, fontSize: 10 });
+      s.addText(
+        missingCount ? T.missingOnPage(missingCount, missingImpr) : (cov ? T.allCovered : ''),
+        { x: 7.03, y: 5.32, w: 5.6, h: 0.20, fontSize: 9, color: missingCount ? COLORS.danger : COLORS.muted, italic: !missingCount }
+      );
 
       const headerStyle = { bold: true, fill: { color: COLORS.panelAccent }, color: COLORS.text, fontSize: 9 };
       const tHeader = [
@@ -5656,7 +5669,7 @@ async function exportStrategyPpt() {
         ];
       });
       s.addTable([tHeader, ...tRows], {
-        x: 6.85, y: 5.45, w: 5.88, colW: [2.6, 0.9, 0.6, 1.78],
+        x: 6.85, y: 5.55, w: 5.88, colW: [2.6, 0.9, 0.6, 1.78],
         fontFace: 'Calibri', color: COLORS.text,
         border: { type: 'solid', color: COLORS.border, pt: 0.4 },
         rowH: 0.21
