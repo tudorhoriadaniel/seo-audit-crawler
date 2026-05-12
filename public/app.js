@@ -3173,7 +3173,7 @@ function renderStrategyShell() {
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Min impressions (per query)</label>
-            <input type="number" id="csMinImpressions" value="100" min="0" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            <input type="number" id="csMinImpressions" value="10" min="0" title="Per-query impression threshold. Lower this to include lower-volume queries that often dominate Push-to-#1 and Page-2 bands." style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
           </div>
           <div>
             <button id="csRun" class="btn btn-primary" style="width:100%;padding:9px;border-radius:6px;background:var(--primary);color:#fff;border:none;cursor:pointer;font-weight:600">Find opportunities</button>
@@ -3199,6 +3199,7 @@ function renderStrategyShell() {
       </div>
 
       <div id="csSummary" style="display:none;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px"></div>
+      <div id="csExcludedHint"></div>
       <div id="csTable"></div>
     </div>
   `;
@@ -3323,6 +3324,11 @@ async function runStrategyQuery() {
       p.weightedPosSum += q.position * q.impressions;
     }
 
+    // Track queries skipped by the threshold so we can show the user
+    // "X queries excluded — lower the threshold to include them".
+    const excluded = {};
+    for (const b of STRATEGY_BANDS) excluded[b.id] = { queries: 0, impressions: 0 };
+
     const rows = [];
     for (const p of pageMap.values()) {
       // For each query, compute the band + potential uplift; the page's
@@ -3331,10 +3337,14 @@ async function runStrategyQuery() {
       let totalPotential = 0;
       const qualifying = [];
       for (const q of p.queries) {
-        if (q.impressions < minImpressions) continue;
         if (q.position < 1.5 || q.position > 40.5) continue;
         const band = bandForPosition(q.position);
         if (!band) continue;
+        if (q.impressions < minImpressions) {
+          excluded[band.id].queries++;
+          excluded[band.id].impressions += q.impressions;
+          continue;
+        }
         const targetCtr = ctrAtPosition(band.target);
         const potential = Math.max(0, q.impressions * targetCtr - q.clicks);
         q._band = band;
@@ -3398,6 +3408,8 @@ async function runStrategyQuery() {
 
     rows.sort((a, b) => b.potentialClicks - a.potentialClicks);
     csState.rows = rows;
+    csState.excluded = excluded;
+    csState.minImpressions = minImpressions;
     csState.expanded.clear();
 
     // Warn the user if we likely hit the 25000-row cap.
@@ -3406,6 +3418,7 @@ async function runStrategyQuery() {
     }
 
     renderStrategySummary();
+    renderExcludedHint();
     renderStrategyTable();
   } catch (e) {
     document.getElementById('csTable').innerHTML = `<div style="padding:20px;color:var(--danger)">${escapeHtml(e.message)}</div>`;
@@ -3467,6 +3480,50 @@ function renderStrategySummary() {
        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">By band</div>
        <div style="display:flex;flex-direction:column;gap:5px">${bandChips}</div>
      </div>`;
+}
+
+// Highlights ranking queries that were dropped by the min-impressions
+// threshold, broken down per band — so an "all-zero" band is never silent.
+function renderExcludedHint() {
+  const el = document.getElementById('csExcludedHint');
+  if (!el) return;
+  const ex = csState.excluded;
+  if (!ex) { el.innerHTML = ''; return; }
+
+  const lines = STRATEGY_BANDS.map(b => {
+    const s = ex[b.id] || { queries: 0, impressions: 0 };
+    if (!s.queries) return '';
+    return `<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid var(--border);border-radius:999px;background:var(--bg-input);font-size:12px;margin:2px 4px 2px 0">
+        <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${b.color}"></span>
+        <b>${s.queries}</b> in ${escapeHtml(b.label)} <span style="color:var(--text-muted)">(${s.impressions.toLocaleString()} impr)</span>
+      </span>`;
+  }).filter(Boolean).join('');
+
+  const totalExcluded = STRATEGY_BANDS.reduce((sum, b) => sum + ((ex[b.id] && ex[b.id].queries) || 0), 0);
+  if (!totalExcluded) { el.innerHTML = ''; return; }
+
+  el.innerHTML = `
+    <div style="background:rgba(217,119,6,.08);border:1px solid var(--warning);border-radius:8px;padding:12px 14px;margin-top:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div style="font-size:13px;color:var(--text)">
+          <b>${totalExcluded.toLocaleString()} ranking ${totalExcluded === 1 ? 'query' : 'queries'}</b> dropped by your <b>${csState.minImpressions.toLocaleString()}</b>-impressions filter
+          <span style="color:var(--text-muted)">— that's why some bands read zero.</span>
+        </div>
+        <div style="display:flex;gap:6px">
+          ${[5, 1].filter(v => v < csState.minImpressions).map(v =>
+            `<button data-cs-lower="${v}" class="btn btn-secondary" style="padding:5px 11px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);cursor:pointer;font-size:12px">Lower to ${v}</button>`
+          ).join('')}
+        </div>
+      </div>
+      <div style="margin-top:8px">${lines}</div>
+    </div>`;
+
+  el.querySelectorAll('[data-cs-lower]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('csMinImpressions').value = btn.dataset.csLower;
+      runStrategyQuery();
+    });
+  });
 }
 
 function activeBandIds() {
