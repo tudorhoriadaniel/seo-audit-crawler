@@ -4567,12 +4567,12 @@ const PPT_I18N = {
     kpiAvgCtr: 'Avg. CTR',
     kpiAvgPosition: 'Avg. position',
     kpiExtraClicks: 'Estimated extra clicks',
-    tileScopeAll: (n) => `total across the ${n} queries this page ranks for`,
-    tileScopeOverall: 'page-level average across all queries',
+    tileScopeAll: (n) => `across all ${n} ranking queries`,
+    tileScopeOverall: 'page-level average (all queries)',
     tileScopeBest: (q) => {
       const s = String(q || '');
-      const short = s.length > 30 ? s.slice(0, 29) + '…' : s;
-      return `if "${short}" reaches its target rank`;
+      const short = s.length > 20 ? s.slice(0, 19) + '…' : s;
+      return `if "${short}" hits target`;
     },
     matrixTitle: 'Keyword opportunity matrix',
     matrixSubtitle: 'From GSC queries, pos. 5–20, high impressions',
@@ -4730,12 +4730,12 @@ const PPT_I18N = {
     kpiAvgCtr: 'CTR moyen',
     kpiAvgPosition: 'Position moy.',
     kpiExtraClicks: 'Clics supplémentaires estimés',
-    tileScopeAll: (n) => `total sur les ${n} requêtes positionnées de cette page`,
+    tileScopeAll: (n) => `sur les ${n} requêtes positionnées`,
     tileScopeOverall: 'moyenne page (toutes requêtes)',
     tileScopeBest: (q) => {
       const s = String(q || '');
-      const short = s.length > 30 ? s.slice(0, 29) + '…' : s;
-      return `si « ${short} » atteint son rang cible`;
+      const short = s.length > 18 ? s.slice(0, 17) + '…' : s;
+      return `si « ${short} » au rang cible`;
     },
     matrixTitle: 'Matrice d\'opportunités',
     matrixSubtitle: 'Requêtes GSC, pos. 5–20, fortes impressions',
@@ -5513,7 +5513,7 @@ async function exportStrategyPpt() {
       s.addShape(pptx.ShapeType.roundRect, { x, y: 2.55, w: 2.95, h: 0.85, fill: { color: m.accent ? COLORS.panelAccent : COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
       s.addText(m.label, { x: x + 0.15, y: 2.58, w: 2.7, h: 0.20, fontSize: 9, color: COLORS.muted, bold: true });
       s.addText(m.value, { x: x + 0.15, y: 2.76, w: 2.7, h: 0.34, fontSize: 18, bold: true, color: m.color });
-      s.addText(trunc(m.sub, 42), { x: x + 0.15, y: 3.12, w: 2.7, h: 0.24, fontSize: 8, color: COLORS.muted, italic: true });
+      s.addText(m.sub, { x: x + 0.15, y: 3.12, w: 2.7, h: 0.26, fontSize: 8, color: COLORS.muted, italic: true, shrinkText: true });
     });
 
     // ── Left column: CURRENT PAGE
