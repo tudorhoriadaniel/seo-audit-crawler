@@ -3330,7 +3330,20 @@ function renderStrategyShell() {
 
   document.getElementById('csRun').addEventListener('click', runStrategyQuery);
   document.getElementById('csExport').addEventListener('click', exportStrategyCsv);
-  document.getElementById('csExportPpt').addEventListener('click', exportStrategyPpt);
+  document.getElementById('csExportPpt').addEventListener('click', async () => {
+    const btn = document.getElementById('csExportPpt');
+    const origLabel = btn.textContent;
+    try {
+      await exportStrategyPpt();
+    } catch (e) {
+      console.error('Export failed:', e);
+      alert('PPT export failed: ' + (e && e.message ? e.message : e) + '\n\nOpen the browser console for the full stack trace.');
+    } finally {
+      // Belt-and-braces: always restore the button so the user can retry.
+      btn.disabled = false;
+      if (btn.textContent !== origLabel) btn.textContent = origLabel;
+    }
+  });
   const langSel = document.getElementById('csExportLang');
   if (langSel) {
     langSel.value = localStorage.getItem('cs-export-lang') || 'en';
@@ -4950,22 +4963,12 @@ async function exportStrategyPpt() {
   if (!rows.length) { alert('No opportunities match the current filters.'); return; }
   if (rows.length > 60 && !confirm(`This will create ${rows.length + 2} slides — that can take a minute. Continue?`)) return;
 
-  // Pre-flight: if any rows still lack live-page analysis, offer to run it
-  // first so the slides accurately show each page's real title / meta /
-  // H1 instead of "(not analysed)".
-  const unanalysed = rows.filter(r => !(r.coverage && Array.isArray(r.coverage.queries)));
-  if (unanalysed.length) {
-    const choice = confirm(
-      `${unanalysed.length} of ${rows.length} pages haven't been analysed yet. Without that, the slides will show "(not analysed)" for each page's title, meta description and H1.\n\n` +
-      `Run keyword-coverage analysis now (slower but accurate)?\n\n` +
-      `OK = run analysis first.\nCancel = export now with placeholders.`
-    );
-    if (choice) {
-      // Run the existing bulk analysis. Mirrors the user clicking "Analyse
-      // keyword coverage", but blocks until done so we can continue.
-      await analyseAllCoverage();
-    }
-  }
+  // (Removed pre-flight prompt that ran analyseAllCoverage. It analysed
+  // EVERY visible row, not just the rows being exported — turning a 60-
+  // row export into a 500-row coverage crawl that took several minutes.
+  // The slides already render a friendly "(not analysed)" placeholder
+  // for rows without coverage; users who want real data click the
+  // "Analyse keyword coverage" button before exporting.)
 
   const btn = document.getElementById('csExportPpt');
   btn.disabled = true;
@@ -5081,10 +5084,16 @@ async function exportStrategyPpt() {
   const prevPagesData = settled[2].status === 'fulfilled' ? settled[2].value : { byUrl: new Map() };
   btn.textContent = 'Building deck…';
 
-  addExecutiveDashboardSlide(pptx, T, {
-    siteUrl, startDate, endDate, allRows, rows,
-    curTotals, prevTotals, prevPagesData, COLORS, bandColor
-  });
+  // Defensive: a single bad-data row shouldn't kill the export. Catch and
+  // log so the rest of the deck still ships.
+  try {
+    addExecutiveDashboardSlide(pptx, T, {
+      siteUrl, startDate, endDate, allRows, rows,
+      curTotals, prevTotals, prevPagesData, COLORS, bandColor
+    });
+  } catch (e) {
+    console.error('Executive dashboard slide failed — skipping:', e);
+  }
 
   // ── Summary slide: breakdown by band ───────────────────────────────────
   // Stats use the FULL csState.rows so all bands always show real numbers,
@@ -5269,7 +5278,13 @@ async function exportStrategyPpt() {
   const priorityLabel = (p) => p === 'critical' ? 'Critical' : (p === 'important' ? 'Important' : 'Recommended');
 
   for (let idx = 0; idx < rows.length; idx++) {
+    // Update progress every 10 slides so the user sees motion on long decks
+    if (idx % 10 === 0) {
+      btn.textContent = `Building slide ${idx + 1} / ${rows.length}…`;
+      await new Promise(res => setTimeout(res, 0));   // yield to the UI
+    }
     const r = rows[idx];
+    try {
     const s = pptx.addSlide();
     s.background = { color: COLORS.bg };
     const bc = bandColor(r.band);
@@ -5544,6 +5559,9 @@ async function exportStrategyPpt() {
     }
 
     s.addText(T.siteAndDates(siteUrl, startDate, endDate), { x: 0.6, y: 7.12, w: 12.1, h: 0.3, fontSize: 9, color: COLORS.muted });
+    } catch (e) {
+      console.error(`Opportunity slide ${idx + 1} failed — skipping:`, e, rows[idx] && rows[idx].page);
+    }
   }
 
   // ── Closing methodology slide ────────────────────────────────────────
@@ -5589,7 +5607,13 @@ async function exportStrategyPpt() {
   m.addText(`${T.siteAndDates(siteUrl, startDate, endDate)}  ·  ${T.preparedBy.replace(/\s+·\s+seo\.converta\.ro$/, '')}`, { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
 
   const safe = siteUrl.replace(/[^a-z0-9]/gi, '_');
-  await pptx.writeFile({ fileName: `content-strategy_${safe}_${startDate}_${endDate}.pptx` });
-
-  btn.disabled = false; btn.textContent = originalLabel;
+  btn.textContent = 'Saving file…';
+  try {
+    await pptx.writeFile({ fileName: `content-strategy_${safe}_${startDate}_${endDate}.pptx` });
+  } catch (e) {
+    console.error('PPT writeFile failed:', e);
+    alert('Could not save the PPT file: ' + (e && e.message ? e.message : e));
+  } finally {
+    btn.disabled = false; btn.textContent = originalLabel;
+  }
 }
