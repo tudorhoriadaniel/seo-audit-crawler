@@ -4822,7 +4822,7 @@ function addExecutiveDashboardSlide(pptx, T, ctx) {
     const x = 0.55 + i * 3.10;
     d.addShape(pptx.ShapeType.roundRect, { x, y: 1.05, w: 2.95, h: 0.95, fill: { color: TILE_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
     d.addText(k.label, { x: x + 0.20, y: 1.10, w: 2.55, h: 0.25, fontSize: 10, color: MUTED });
-    d.addText(k.curr != null ? k.fmt(k.curr) : '—', { x: x + 0.20, y: 1.30, w: 2.55, h: 0.50, fontSize: 22, bold: true, color: TEXT });
+    d.addText(k.curr != null ? k.fmt(k.curr) : '—', { x: x + 0.20, y: 1.30, w: 2.55, h: 0.42, fontSize: 22, bold: true, color: TEXT });
     if (k.curr != null && k.prev != null && k.prev !== 0) {
       let delta, up, label;
       if (k.label === T.kpiAvgPosition) {       // lower = better
@@ -4832,7 +4832,7 @@ function addExecutiveDashboardSlide(pptx, T, ctx) {
       } else {
         delta = ((k.curr - k.prev) / k.prev) * 100; up = delta > 0; label = Math.abs(delta).toFixed(0) + '%';
       }
-      d.addText((up ? '▲ ' : '▼ ') + label, { x: x + 0.20, y: 1.78, w: 2.55, h: 0.20, fontSize: 9, color: up ? POS_DELTA : NEG_DELTA, bold: true });
+      d.addText((up ? '▲ ' : '▼ ') + label, { x: x + 0.20, y: 1.74, w: 2.55, h: 0.22, fontSize: 9, color: up ? POS_DELTA : NEG_DELTA, bold: true });
     }
   });
 
@@ -5321,12 +5321,12 @@ async function exportStrategyPpt() {
       s.addText('⚡ ' + T.quickWinBadge, { x: 11.55, y: 0.22, w: 1.55, h: 0.30, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
     }
 
-    // URL + page title (one line)
+    // URL + page title. Gap between rows so the boxes never overlap.
     const truncatedUrl = trunc(r.page, 105);
-    s.addText(truncatedUrl, { x: 0.6, y: 0.78, w: 12.1, h: 0.40, fontSize: 15, bold: true, color: COLORS.primaryDark, hyperlink: { url: r.page } });
+    s.addText(truncatedUrl, { x: 0.6, y: 0.74, w: 12.1, h: 0.36, fontSize: 15, bold: true, color: COLORS.primaryDark, hyperlink: { url: r.page } });
     const pageTitle = (cov && cov.title) || (r.crawl && r.crawl.title) || '';
     if (pageTitle) {
-      s.addText(pageTitle, { x: 0.6, y: 1.16, w: 12.1, h: 0.26, fontSize: 11, color: COLORS.muted, italic: true });
+      s.addText(pageTitle, { x: 0.6, y: 1.12, w: 12.1, h: 0.26, fontSize: 11, color: COLORS.muted, italic: true });
     }
 
     // ── Strategic recommendation banner — headline of every slide.
@@ -5496,7 +5496,12 @@ async function exportStrategyPpt() {
 
     // ── Right column: TOP RANKING QUERIES TABLE — bottom half (replaces
     //   the second slide we used to generate; client gets the data inline.)
-    const topQ = Array.isArray(r.topQueries) ? r.topQueries.slice(0, 6) : [];
+    // Top queries for the PPT table: sort by impressions desc so the
+    // table reads "volume-first", regardless of how csState ordered them
+    // for the in-app drill-down (which sorts by potential clicks).
+    const topQ = Array.isArray(r.topQueries)
+      ? r.topQueries.slice().sort((a, b) => (b.impressions || 0) - (a.impressions || 0)).slice(0, 6)
+      : [];
     const coverageByQuery = {};
     if (cov) for (const q of cov.queries) coverageByQuery[q.query] = q;
 
@@ -5616,10 +5621,25 @@ async function exportStrategyPpt() {
     m.addText('#' + s.p, { x, y: ctrChartY + ctrChartH - 0.3, w: barW, h: 0.25, fontSize: 10, color: COLORS.muted, align: 'center', bold: true });
   });
 
-  m.addShape(pptx.ShapeType.roundRect, { x: 0.7, y: 6.0, w: 12.0, h: 1.0, fill: { color: COLORS.panelAccent }, line: { type: 'none' }, rectRadius: 0.1 });
-  m.addText(T.potentialHowTitle, { x: 0.9, y: 6.08, w: 11.6, h: 0.3, fontSize: 11, bold: true, color: COLORS.primaryDark });
+  // Bottom row: two side-by-side panels — left is the "In page?" legend so
+  // the client can decode every row in the queries tables; right is the
+  // potential-clicks computation explainer.
+  m.addShape(pptx.ShapeType.roundRect, { x: 0.7, y: 6.0, w: 5.85, h: 1.0, fill: { color: COLORS.panelAccent }, line: { type: 'none' }, rectRadius: 0.1 });
+  m.addText('"In page?" legend', { x: 0.9, y: 6.08, w: 5.55, h: 0.30, fontSize: 11, bold: true, color: COLORS.primaryDark });
+  const inPageLegend = [
+    { text: '  title · H1 · body 4×  ', options: { fontSize: 10, color: COLORS.success, bold: true, fill: { color: 'E6F4EE' } } },
+    { text: '    exact phrase found in those sections.', options: { fontSize: 10, color: COLORS.text, breakLine: true } },
+    { text: '  words only  ',  options: { fontSize: 10, color: COLORS.warning, bold: true, fill: { color: 'FDEEDA' } } },
+    { text: '    the query\'s words appear separately in the page, but never as a contiguous phrase.', options: { fontSize: 10, color: COLORS.text, breakLine: true } },
+    { text: '  MISSING  ', options: { fontSize: 10, color: COLORS.danger, bold: true, fill: { color: 'FDE7E7' } } },
+    { text: '    neither the phrase nor all its words are present — write content for it.', options: { fontSize: 10, color: COLORS.text } }
+  ];
+  m.addText(inPageLegend, { x: 0.9, y: 6.36, w: 5.55, h: 0.6, fontSize: 10, paraSpaceAfter: 2 });
+
+  m.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 6.0, w: 5.85, h: 1.0, fill: { color: COLORS.panelAccent }, line: { type: 'none' }, rectRadius: 0.1 });
+  m.addText(T.potentialHowTitle, { x: 7.05, y: 6.08, w: 5.55, h: 0.30, fontSize: 11, bold: true, color: COLORS.primaryDark });
   m.addText(T.potentialHowDesc,
-    { x: 0.9, y: 6.36, w: 11.6, h: 0.6, fontSize: 11, color: COLORS.text });
+    { x: 7.05, y: 6.36, w: 5.55, h: 0.6, fontSize: 10, color: COLORS.text });
 
   m.addText(`${T.siteAndDates(siteUrl, startDate, endDate)}  ·  ${T.preparedBy.replace(/\s+·\s+seo\.converta\.ro$/, '')}`, { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
 
