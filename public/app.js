@@ -4788,14 +4788,19 @@ function deriveActions(r, lang) {
 // Build the executive dashboard slide. Lays out six sections per the
 // template the user provided: KPI strip, opportunity matrix, topic
 // clusters, editorial calendar, pages losing traffic, quarterly goals.
+// Renders the executive dashboard to mirror the template the user
+// provided: a 7-section single slide on cream background with white
+// rounded cards, KPI deltas, opportunity matrix table, topic cluster
+// pills, editorial-calendar week cards, pages-losing list and quarterly
+// goal progress bars. Everything localised via T.
 function addExecutiveDashboardSlide(pptx, T, ctx) {
-  const { siteUrl, startDate, endDate, allRows, rows, curTotals, prevTotals, prevPagesData, COLORS, bandColor } = ctx;
-  const PAGE_BG = 'FAF8F4';        // warm cream, matches the template
+  const { siteUrl, startDate, endDate, allRows, rows, curTotals, prevTotals, prevPagesData } = ctx;
+  const PAGE_BG = 'FAF8F4';
   const CARD_BG = 'FFFFFF';
   const CARD_BORDER = 'E8E3D9';
+  const TILE_BG = 'F5F1E8';
   const TEXT = '1A1D2E';
   const MUTED = '6B7085';
-  const ACCENT = '6366F1';
   const POS_DELTA = '16A34A';
   const NEG_DELTA = 'DC2626';
 
@@ -4803,11 +4808,10 @@ function addExecutiveDashboardSlide(pptx, T, ctx) {
   d.background = { color: PAGE_BG };
 
   // Header
-  d.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.18, h: 7.5, fill: { color: ACCENT }, line: { type: 'none' } });
-  d.addText(T.dashTitle, { x: 0.45, y: 0.22, w: 12.5, h: 0.5, fontSize: 22, bold: true, color: TEXT });
-  d.addText(T.dashSubtitle, { x: 0.45, y: 0.7, w: 12.5, h: 0.32, fontSize: 11, color: MUTED });
+  d.addText(T.dashTitle, { x: 0.55, y: 0.25, w: 12.2, h: 0.45, fontSize: 22, bold: true, color: TEXT });
+  d.addText(T.dashSubtitle, { x: 0.55, y: 0.72, w: 12.2, h: 0.28, fontSize: 11, color: MUTED });
 
-  // ── KPI strip (4 cards across) ──────────────────────────────────────
+  // ── KPI strip (4 tiles, cream tinted) ───────────────────────────────
   const kpis = [
     { label: T.kpiClicks,       curr: curTotals && curTotals.clicks,      prev: prevTotals && prevTotals.clicks,      fmt: (n) => Number(n).toLocaleString() },
     { label: T.kpiImpressions,  curr: curTotals && curTotals.impressions, prev: prevTotals && prevTotals.impressions, fmt: (n) => n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : (n >= 10000 ? (n/1000).toFixed(0) + 'k' : Number(n).toLocaleString()) },
@@ -4815,55 +4819,45 @@ function addExecutiveDashboardSlide(pptx, T, ctx) {
     { label: T.kpiAvgPosition,  curr: curTotals && curTotals.position,    prev: prevTotals && prevTotals.position,    fmt: (v) => v.toFixed(1) }
   ];
   kpis.forEach((k, i) => {
-    const x = 0.45 + i * 3.18;
-    d.addShape(pptx.ShapeType.roundRect, { x, y: 1.20, w: 3.05, h: 1.05, fill: { color: 'F5F1E8' }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.14 });
-    d.addText(k.label, { x: x + 0.22, y: 1.27, w: 2.7, h: 0.28, fontSize: 11, color: MUTED });
-    d.addText(k.curr != null ? k.fmt(k.curr) : '—', { x: x + 0.22, y: 1.50, w: 2.7, h: 0.55, fontSize: 24, bold: true, color: TEXT });
-    // Delta vs previous period
+    const x = 0.55 + i * 3.10;
+    d.addShape(pptx.ShapeType.roundRect, { x, y: 1.05, w: 2.95, h: 0.95, fill: { color: TILE_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+    d.addText(k.label, { x: x + 0.20, y: 1.10, w: 2.55, h: 0.25, fontSize: 10, color: MUTED });
+    d.addText(k.curr != null ? k.fmt(k.curr) : '—', { x: x + 0.20, y: 1.30, w: 2.55, h: 0.50, fontSize: 22, bold: true, color: TEXT });
     if (k.curr != null && k.prev != null && k.prev !== 0) {
-      let delta, up, dispLabel;
-      if (k.label === T.kpiAvgPosition) {
-        // For position lower is better — invert.
-        delta = k.prev - k.curr;
-        up = delta > 0;
-        dispLabel = (Math.abs(delta)).toFixed(1);
+      let delta, up, label;
+      if (k.label === T.kpiAvgPosition) {       // lower = better
+        delta = k.prev - k.curr; up = delta > 0; label = Math.abs(delta).toFixed(1);
       } else if (k.label === T.kpiAvgCtr) {
-        delta = (k.curr - k.prev) * 100;
-        up = delta > 0;
-        dispLabel = Math.abs(delta).toFixed(1) + '%';
+        delta = (k.curr - k.prev) * 100; up = delta > 0; label = Math.abs(delta).toFixed(1) + '%';
       } else {
-        delta = ((k.curr - k.prev) / k.prev) * 100;
-        up = delta > 0;
-        dispLabel = Math.abs(delta).toFixed(0) + '%';
+        delta = ((k.curr - k.prev) / k.prev) * 100; up = delta > 0; label = Math.abs(delta).toFixed(0) + '%';
       }
-      const color = up ? POS_DELTA : NEG_DELTA;
-      d.addText((up ? '▲ ' : '▼ ') + dispLabel, { x: x + 0.22, y: 2.0, w: 2.7, h: 0.22, fontSize: 10, color, bold: true });
+      d.addText((up ? '▲ ' : '▼ ') + label, { x: x + 0.20, y: 1.78, w: 2.55, h: 0.20, fontSize: 9, color: up ? POS_DELTA : NEG_DELTA, bold: true });
     }
   });
 
-  // ── Keyword opportunity matrix ──────────────────────────────────────
-  d.addShape(pptx.ShapeType.roundRect, { x: 0.45, y: 2.40, w: 7.65, h: 2.55, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.14 });
-  d.addText('◎  ' + T.matrixTitle, { x: 0.65, y: 2.48, w: 7.3, h: 0.32, fontSize: 13, bold: true, color: TEXT });
-  d.addText(T.matrixSubtitle, { x: 0.65, y: 2.78, w: 7.3, h: 0.26, fontSize: 10, color: MUTED });
+  // ── Middle row: Keyword matrix + Topic clusters ─────────────────────
+  // Matrix card
+  d.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 2.15, w: 7.60, h: 2.45, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+  d.addText('◎  ' + T.matrixTitle, { x: 0.75, y: 2.22, w: 7.25, h: 0.30, fontSize: 13, bold: true, color: TEXT });
+  d.addText(T.matrixSubtitle, { x: 0.75, y: 2.50, w: 7.25, h: 0.24, fontSize: 10, color: MUTED });
 
   const intentTints = { 'Info': 'DBEAFE', 'Trans.': 'FFEDD5', 'Nav.': 'F3E8FF' };
   const intentColors = { 'Info': '1D4ED8', 'Trans.': 'C2410C', 'Nav.': '6D28D9' };
-
-  // Top 5 page-level opportunities, mapping the best query / intent / action
   const topMatrix = (rows.length ? rows : allRows).slice(0, 5);
-  const headerStyle = { bold: true, color: MUTED, fontSize: 9, fill: { color: 'F5F1E8' } };
+  const hStyle = { bold: true, color: MUTED, fontSize: 9, fill: { color: TILE_BG } };
   const matrixHeader = [
-    { text: T.matrixQuery,  options: headerStyle },
-    { text: T.matrixPos,    options: { ...headerStyle, align: 'right' } },
-    { text: T.matrixImpr,   options: { ...headerStyle, align: 'right' } },
-    { text: T.matrixIntent, options: headerStyle },
-    { text: T.matrixAction, options: headerStyle }
+    { text: T.matrixQuery,  options: hStyle },
+    { text: T.matrixPos,    options: { ...hStyle, align: 'right' } },
+    { text: T.matrixImpr,   options: { ...hStyle, align: 'right' } },
+    { text: T.matrixIntent, options: hStyle },
+    { text: T.matrixAction, options: hStyle }
   ];
   const matrixRows = topMatrix.map(r => {
     const intent = classifyIntent(r.bestQuery || '');
     const action = mapActionFromRec((r.recommendation && r.recommendation.type) || 'optimize', T);
     return [
-      { text: trunc(r.bestQuery || '', 36), options: { fontSize: 10, color: TEXT } },
+      { text: trunc(r.bestQuery || '', 34), options: { fontSize: 10, color: TEXT } },
       { text: r.bestQueryPosition.toFixed(1), options: { fontSize: 10, align: 'right', color: TEXT } },
       { text: r.bestQueryImpressions.toLocaleString(), options: { fontSize: 10, align: 'right', color: TEXT } },
       { text: ' ' + intent + ' ', options: { fontSize: 9, color: intentColors[intent], fill: { color: intentTints[intent] }, bold: true } },
@@ -4872,80 +4866,98 @@ function addExecutiveDashboardSlide(pptx, T, ctx) {
   });
   if (matrixRows.length) {
     d.addTable([matrixHeader, ...matrixRows], {
-      x: 0.65, y: 3.08, w: 7.3, colW: [3.0, 0.7, 0.95, 1.05, 1.6],
+      x: 0.75, y: 2.80, w: 7.25, colW: [3.0, 0.7, 0.95, 1.0, 1.6],
       fontFace: 'Calibri', color: TEXT,
       border: { type: 'solid', color: CARD_BORDER, pt: 0.4 },
-      rowH: 0.34
+      rowH: 0.32
     });
   }
 
-  // ── Topic clusters ──────────────────────────────────────────────────
-  d.addShape(pptx.ShapeType.roundRect, { x: 8.25, y: 2.40, w: 4.65, h: 2.55, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.14 });
-  d.addText('⌭  ' + T.clustersTitle, { x: 8.45, y: 2.48, w: 4.4, h: 0.32, fontSize: 13, bold: true, color: TEXT });
-  d.addText(T.clustersSubtitle, { x: 8.45, y: 2.78, w: 4.4, h: 0.26, fontSize: 10, color: MUTED });
+  // Clusters card
+  d.addShape(pptx.ShapeType.roundRect, { x: 8.30, y: 2.15, w: 4.45, h: 2.45, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+  d.addText('⌭  ' + T.clustersTitle, { x: 8.50, y: 2.22, w: 4.25, h: 0.30, fontSize: 13, bold: true, color: TEXT });
+  d.addText(T.clustersSubtitle, { x: 8.50, y: 2.50, w: 4.25, h: 0.24, fontSize: 10, color: MUTED });
   const clusters = clusterTopics(allRows, 5);
   clusters.forEach((c, i) => {
-    const cy = 3.05 + i * 0.38;
-    d.addShape(pptx.ShapeType.roundRect, { x: 8.45, y: cy, w: 4.30, h: 0.34, fill: { color: c.tint }, line: { type: 'none' }, rectRadius: 0.08 });
-    d.addText(c.label, { x: 8.55, y: cy + 0.04, w: 2.4, h: 0.27, fontSize: 10, bold: true, color: '#' + c.accent });
-    d.addText(T.clusterPagesShort(c.pages, c.impressions), { x: 10.95, y: cy + 0.04, w: 1.75, h: 0.27, fontSize: 9, color: '#' + c.accent, align: 'right' });
+    const cy = 2.82 + i * 0.36;
+    d.addShape(pptx.ShapeType.roundRect, { x: 8.50, y: cy, w: 4.10, h: 0.32, fill: { color: c.tint }, line: { type: 'none' }, rectRadius: 0.08 });
+    d.addText(c.label, { x: 8.62, y: cy + 0.04, w: 2.4, h: 0.25, fontSize: 10, bold: true, color: '#' + c.accent });
+    d.addText(T.clusterPagesShort(c.pages, c.impressions), { x: 10.85, y: cy + 0.04, w: 1.65, h: 0.25, fontSize: 9, color: '#' + c.accent, align: 'right' });
   });
 
-  // ── Editorial calendar — next 4 weeks ───────────────────────────────
-  d.addShape(pptx.ShapeType.roundRect, { x: 0.45, y: 5.08, w: 12.45, h: 1.30, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.14 });
-  d.addText('▣  ' + T.calendarTitle, { x: 0.65, y: 5.14, w: 12.0, h: 0.32, fontSize: 13, bold: true, color: TEXT });
+  // ── Editorial calendar — 4 weekly cards ─────────────────────────────
+  d.addText('📅  ' + T.calendarTitle, { x: 0.55, y: 4.78, w: 12.2, h: 0.28, fontSize: 13, bold: true, color: TEXT });
   const editorial = rows.slice(0, 4);
-  editorial.forEach((r, i) => {
-    const x = 0.65 + i * 3.05;
-    const rec = r.recommendation || {};
-    const action = mapActionFromRec(rec.type || 'optimize', T);
+  const TOPIC_TAGS = [
+    { test: /track|analytics|gtm|ga4|tag |sgtm/i,                label: 'Tracking',  color: '6366F1', tint: 'EEEAFE' },
+    { test: /ads|capi|pixel|conversion|tiktok|meta /i,           label: 'Ads',       color: 'D97706', tint: 'FDEEDA' },
+    { test: /consent|privacy|cookie|gdpr|rgpd/i,                 label: 'Privacy',   color: '92704B', tint: 'EEE8E0' },
+    { test: /seo|crawl|sitemap|schema/i,                         label: 'SEO',       color: 'DC2626', tint: 'FDE7E7' },
+    { test: /shop|buy|price|cart|product|product/i,              label: 'Commercial',color: '16A34A', tint: 'E6F4EE' }
+  ];
+  for (let i = 0; i < 4; i++) {
+    const r = editorial[i];
+    const x = 0.55 + i * 3.10;
+    d.addShape(pptx.ShapeType.roundRect, { x, y: 5.10, w: 2.95, h: 1.20, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+    d.addText(T.week + ' ' + (i + 1), { x: x + 0.18, y: 5.16, w: 2.6, h: 0.22, fontSize: 9, color: MUTED });
+    if (!r) {
+      d.addText('—', { x: x + 0.18, y: 5.45, w: 2.6, h: 0.32, fontSize: 14, color: MUTED });
+      continue;
+    }
+    const heading = r.bestQuery || r.page.replace(/^https?:\/\/[^/]+/, '') || '';
+    const action = mapActionFromRec((r.recommendation && r.recommendation.type) || 'optimize', T);
     const intent = classifyIntent(r.bestQuery || '');
-    d.addText(T.week + ' ' + (i + 1), { x, y: 5.50, w: 2.85, h: 0.22, fontSize: 9, color: MUTED, bold: true });
-    d.addText(trunc(r.bestQuery || trunc(r.page.replace(/^https?:\/\/[^/]+/, ''), 32), 30), { x, y: 5.70, w: 2.85, h: 0.28, fontSize: 11, bold: true, color: TEXT });
-    d.addText(`${action}  ·  ${intent}`, { x, y: 5.98, w: 2.85, h: 0.22, fontSize: 9, color: MUTED });
-    // Tag pill
-    const tagColor = rec.type === 'create-landing' ? 'DC2626' : (rec.type === 'rewrite-expand' ? 'D97706' : '16A34A');
-    const tagTint  = rec.type === 'create-landing' ? 'FDE7E7' : (rec.type === 'rewrite-expand' ? 'FDEEDA' : 'E6F4EE');
-    d.addShape(pptx.ShapeType.roundRect, { x, y: 6.22, w: 1.3, h: 0.20, fill: { color: tagTint }, line: { type: 'none' }, rectRadius: 0.10 });
-    d.addText(action, { x, y: 6.22, w: 1.3, h: 0.20, fontSize: 8, color: '#' + tagColor, bold: true, align: 'center' });
-  });
+    d.addText(trunc(heading, 26), { x: x + 0.18, y: 5.38, w: 2.6, h: 0.36, fontSize: 12, bold: true, color: TEXT });
+    d.addText(`${action} · ${intent.toLowerCase()}`, { x: x + 0.18, y: 5.74, w: 2.6, h: 0.22, fontSize: 9, color: MUTED });
+    const tag = TOPIC_TAGS.find(t => t.test.test(heading)) || { label: 'Editorial', color: '6366F1', tint: 'EEEAFE' };
+    d.addShape(pptx.ShapeType.roundRect, { x: x + 0.18, y: 5.97, w: 1.10, h: 0.24, fill: { color: tag.tint }, line: { type: 'none' }, rectRadius: 0.12 });
+    d.addText(tag.label, { x: x + 0.18, y: 5.97, w: 1.10, h: 0.24, fontSize: 9, color: '#' + tag.color, bold: true, align: 'center' });
+  }
 
-  // ── Pages losing traffic + Quarterly goals (bottom row) ─────────────
-  d.addShape(pptx.ShapeType.roundRect, { x: 0.45, y: 6.50, w: 6.20, h: 0.60, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.14 });
-  d.addText('↘  ' + T.losingTitle, { x: 0.65, y: 6.56, w: 5.8, h: 0.22, fontSize: 11, bold: true, color: TEXT });
-  d.addText(T.losingSubtitle, { x: 0.65, y: 6.77, w: 5.8, h: 0.20, fontSize: 9, color: MUTED });
+  // ── Bottom row: Pages losing traffic + Quarterly goals ──────────────
+  const bottomY = 6.45, bottomH = 0.85;
+  // Pages losing
+  d.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: bottomY, w: 6.10, h: bottomH, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+  d.addText('↘  ' + T.losingTitle, { x: 0.75, y: bottomY + 0.06, w: 5.7, h: 0.22, fontSize: 11, bold: true, color: TEXT });
+  d.addText(T.losingSubtitle, { x: 0.75, y: bottomY + 0.27, w: 5.7, h: 0.18, fontSize: 9, color: MUTED });
   const losing = findLosingPages(allRows, prevPagesData && prevPagesData.byUrl, 3);
   if (losing.length) {
     losing.forEach((p, i) => {
-      const ly = 6.58 + i * 0.18;
-      d.addText(trunc((new URL(p.page).pathname), 50), { x: 3.4, y: ly, w: 2.5, h: 0.16, fontSize: 9, color: TEXT });
-      d.addText(`${(p.delta * 100).toFixed(0)}%`, { x: 5.95, y: ly, w: 0.65, h: 0.16, fontSize: 9, color: NEG_DELTA, bold: true, align: 'right' });
+      const ly = bottomY + 0.48 + i * 0.14;
+      let path = p.page;
+      try { path = new URL(p.page).pathname; } catch { /* keep raw */ }
+      d.addText(trunc(path, 55), { x: 0.75, y: ly, w: 4.6, h: 0.14, fontSize: 9, color: TEXT });
+      d.addText(`${(p.delta * 100).toFixed(0)}%`, { x: 5.40, y: ly, w: 1.05, h: 0.14, fontSize: 9, color: NEG_DELTA, bold: true, align: 'right' });
     });
   } else {
     d.addText(prevPagesData && prevPagesData.byUrl && prevPagesData.byUrl.size ? T.losingNone : T.losingNoneAnalysed,
-      { x: 3.4, y: 6.68, w: 3.2, h: 0.4, fontSize: 9, color: MUTED, italic: true });
+      { x: 0.75, y: bottomY + 0.50, w: 5.7, h: 0.3, fontSize: 9, color: MUTED, italic: true });
   }
 
-  d.addShape(pptx.ShapeType.roundRect, { x: 6.80, y: 6.50, w: 6.10, h: 0.60, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.14 });
-  d.addText('⚑  ' + T.goalsTitle, { x: 7.00, y: 6.56, w: 5.7, h: 0.22, fontSize: 11, bold: true, color: TEXT });
-  // Compute goal progress from current data — simple defaults.
-  const totalClicks = curTotals ? curTotals.clicks : allRows.reduce((s, r) => s + r.clicks, 0);
-  const prevClicks  = prevTotals ? prevTotals.clicks : 0;
-  const clicksGrowth = prevClicks ? ((totalClicks - prevClicks) / prevClicks) * 100 : 0;
+  // Quarterly goals with real progress bars
+  d.addShape(pptx.ShapeType.roundRect, { x: 6.80, y: bottomY, w: 5.95, h: bottomH, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+  d.addText('⚑  ' + T.goalsTitle, { x: 7.00, y: bottomY + 0.06, w: 5.7, h: 0.22, fontSize: 11, bold: true, color: TEXT });
+
+  const totalClicks   = curTotals ? curTotals.clicks : allRows.reduce((s, r) => s + r.clicks, 0);
+  const prevClicks    = prevTotals ? prevTotals.clicks : 0;
+  const clicksGrowth  = prevClicks ? ((totalClicks - prevClicks) / prevClicks) * 100 : 0;
+  const top10Count    = allRows.filter(r => r.bestQueryPosition <= 10).length;
+  const newPagesCount = allRows.filter(r => r.recommendation && r.recommendation.type === 'create-landing').length;
   const goals = [
-    { label: T.goalOrganicClicks, value: (clicksGrowth >= 0 ? '+' : '') + clicksGrowth.toFixed(0) + '%', pct: Math.min(1, Math.max(0, (clicksGrowth + 25) / 50)), color: '16A34A' },
-    { label: T.goalTop10,         value: String(allRows.filter(r => r.bestQueryPosition <= 10).length), pct: Math.min(1, allRows.filter(r => r.bestQueryPosition <= 10).length / 120), color: '2563EB' },
-    { label: T.goalNewPages,      value: String(allRows.filter(r => r.recommendation && r.recommendation.type === 'create-landing').length),
-      pct: Math.min(1, allRows.filter(r => r.recommendation && r.recommendation.type === 'create-landing').length / 16), color: 'D97706' }
+    { label: T.goalOrganicClicks, value: (clicksGrowth >= 0 ? '+' : '') + clicksGrowth.toFixed(0) + '%', pct: Math.min(1, Math.max(0.05, (clicksGrowth + 25) / 50)), color: '16A34A' },
+    { label: T.goalTop10,         value: String(top10Count),    pct: Math.min(1, top10Count / 120),    color: '2563EB' },
+    { label: T.goalNewPages,      value: String(newPagesCount), pct: Math.min(1, newPagesCount / 16), color: 'D97706' }
   ];
   goals.forEach((g, i) => {
-    const gx = 7.00 + (i % 3) * 1.94;
-    const gy = 6.77;
-    d.addText(g.label, { x: gx, y: gy, w: 1.6, h: 0.16, fontSize: 8, color: MUTED, bold: true });
-    d.addText(g.value, { x: gx, y: gy + 0.13, w: 1.6, h: 0.18, fontSize: 11, bold: true, color: '#' + g.color });
+    const gy = bottomY + 0.32 + i * 0.18;
+    d.addText(g.label, { x: 7.00, y: gy, w: 3.0, h: 0.18, fontSize: 9, color: TEXT });
+    d.addText(g.value, { x: 12.00, y: gy, w: 0.70, h: 0.18, fontSize: 10, bold: true, color: '#' + g.color, align: 'right' });
+    // Bar track + fill
+    d.addShape(pptx.ShapeType.rect, { x: 10.00, y: gy + 0.06, w: 2.00, h: 0.07, fill: { color: TILE_BG }, line: { type: 'none' } });
+    d.addShape(pptx.ShapeType.rect, { x: 10.00, y: gy + 0.06, w: Math.max(0.04, 2.00 * g.pct), h: 0.07, fill: { color: '#' + g.color }, line: { type: 'none' } });
   });
 
-  d.addText(T.siteAndDates(siteUrl, startDate, endDate), { x: 0.45, y: 7.15, w: 12.5, h: 0.25, fontSize: 9, color: MUTED });
+  d.addText(T.siteAndDates(siteUrl, startDate, endDate), { x: 0.55, y: 7.36, w: 12.2, h: 0.20, fontSize: 9, color: MUTED });
 }
 
 async function exportStrategyPpt() {
@@ -4993,11 +5005,20 @@ async function exportStrategyPpt() {
   pptx.company = 'Converta';
   pptx.title = `Content Strategy — ${siteUrl}`;
 
+  // Template palette — warm cream page, white cards, soft borders, brand
+  // primary purple, the dashboard pastels reused across every slide.
   const COLORS = {
-    bg: 'FFFFFF', text: '1A1D2E', muted: '6B7085', border: 'D1D5E0',
-    panelBg: 'F8F9FC', panelAccent: 'EEF0F6',
-    primary: '6366F1', primaryDark: '4F46E5',
-    success: '16A34A', warning: 'D97706', danger: 'DC2626'
+    bg:           'FAF8F4',
+    text:         '1A1D2E',
+    muted:        '6B7085',
+    border:       'E8E3D9',
+    panelBg:      'FFFFFF',
+    panelAccent:  'F5F1E8',
+    primary:      '6366F1',
+    primaryDark:  '4F46E5',
+    success:      '16A34A',
+    warning:      'D97706',
+    danger:       'DC2626'
   };
   const bandColor = (b) => ({ push: '16A34A', striking: '2563EB', page2: '6366F1', deep: 'D97706', deeper: 'DC2626' }[b.id] || '6366F1');
   const trunc = (s, n) => (s || '').length > n ? s.slice(0, n - 1) + '…' : (s || '');
@@ -5022,42 +5043,39 @@ async function exportStrategyPpt() {
   const filterDesc = filterDescParts.length ? filterDescParts.join(' · ') : T.noFilters;
 
   const cover = pptx.addSlide();
-  cover.background = { color: '0F1117' };
+  cover.background = { color: COLORS.bg };
 
-  // Full-bleed dark hero with a colour-accent corner.
-  cover.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: '0F1117' }, line: { type: 'none' } });
-  cover.addShape(pptx.ShapeType.rect, { x: 9.0, y: 0, w: 4.333, h: 7.5, fill: { color: '1A1D27' }, line: { type: 'none' } });
-  cover.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.35, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
+  // Template aesthetic: cream page, dark text, cream KPI tiles, soft borders.
+  cover.addText(T.contentStrategy, { x: 0.55, y: 0.55, w: 12, h: 0.4, fontSize: 12, bold: true, color: COLORS.muted, charSpacing: 6 });
+  cover.addText(`+${totalPot.toLocaleString()}`, { x: 0.55, y: 0.95, w: 8, h: 1.8, fontSize: 96, bold: true, color: COLORS.text });
+  cover.addText(T.heroSubtitle, { x: 0.55, y: 2.75, w: 11.5, h: 0.6, fontSize: 16, color: COLORS.muted });
 
-  cover.addText(T.contentStrategy, { x: 0.85, y: 0.55, w: 8, h: 0.4, fontSize: 12, bold: true, color: '8B8FA3', charSpacing: 6 });
-  cover.addText(`+${totalPot.toLocaleString()}`, { x: 0.85, y: 1.05, w: 8, h: 2.2, fontSize: 110, bold: true, color: 'FFFFFF' });
-  cover.addText(T.heroSubtitle,
-    { x: 0.85, y: 3.3, w: 8, h: 0.6, fontSize: 16, color: 'E0E2F4' });
-
-  const subStats = [
+  // 4 KPI tiles (cream)
+  const coverKpis = [
     { label: T.opportunityPages, value: allRows.length.toLocaleString() },
     { label: T.totalImpressions, value: totalImpr.toLocaleString() },
+    { label: 'Estimated extra clicks', value: '+' + totalPot.toLocaleString(), accent: true },
     { label: T.quickWins,        value: totalAnalysed ? totalQuickWins.toLocaleString() : '–' }
   ];
-  subStats.forEach((k, i) => {
-    const x = 0.85 + i * 2.7;
-    cover.addText(k.value, { x, y: 4.4, w: 2.4, h: 0.7, fontSize: 30, bold: true, color: 'FFFFFF' });
-    cover.addText(k.label, { x, y: 5.1, w: 2.4, h: 0.3, fontSize: 11, color: '8B8FA3', bold: true, charSpacing: 2 });
+  coverKpis.forEach((k, i) => {
+    const x = 0.55 + i * 3.15;
+    cover.addShape(pptx.ShapeType.roundRect, { x, y: 3.6, w: 3.0, h: 1.4, fill: { color: COLORS.panelAccent }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.14 });
+    cover.addText(k.label, { x: x + 0.2, y: 3.72, w: 2.7, h: 0.32, fontSize: 11, color: COLORS.muted });
+    cover.addText(k.value, { x: x + 0.2, y: 4.05, w: 2.7, h: 0.95, fontSize: 32, bold: true, color: k.accent ? COLORS.primary : COLORS.text });
   });
 
-  cover.addText(T.audit, { x: 9.25, y: 0.55, w: 4, h: 0.35, fontSize: 11, bold: true, color: '8B8FA3', charSpacing: 6 });
-  cover.addText(siteUrl, { x: 9.25, y: 0.95, w: 4, h: 1.0, fontSize: 18, bold: true, color: 'FFFFFF' });
-  cover.addText(`${startDate}  →  ${endDate}`, { x: 9.25, y: 1.95, w: 4, h: 0.35, fontSize: 12, color: 'E0E2F4' });
-
-  cover.addText(T.inThisDeck, { x: 9.25, y: 2.9, w: 4, h: 0.35, fontSize: 11, bold: true, color: '8B8FA3', charSpacing: 6 });
+  // Audit / deck context — single white card spanning the bottom
+  cover.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 5.25, w: 12.25, h: 1.55, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.14 });
+  cover.addText(T.audit, { x: 0.85, y: 5.4, w: 5, h: 0.3, fontSize: 11, bold: true, color: COLORS.muted, charSpacing: 6 });
+  cover.addText(siteUrl, { x: 0.85, y: 5.7, w: 7, h: 0.4, fontSize: 18, bold: true, color: COLORS.text });
+  cover.addText(`${startDate}  →  ${endDate}`, { x: 0.85, y: 6.15, w: 7, h: 0.32, fontSize: 13, color: COLORS.muted });
+  cover.addText(T.inThisDeck, { x: 8.15, y: 5.4, w: 4.5, h: 0.3, fontSize: 11, bold: true, color: COLORS.muted, charSpacing: 6 });
   cover.addText([
-    { text: T.deckIntro(rows.length) + '\n\n', options: { color: 'FFFFFF', fontSize: 12 } },
-    { text: T.filtersLabel(filterDesc), options: { color: 'E0E2F4', fontSize: 11 } }
-  ], { x: 9.25, y: 3.25, w: 4, h: 3.0, fontSize: 12 });
+    { text: T.deckIntro(rows.length) + '\n', options: { color: COLORS.text, fontSize: 11 } },
+    { text: T.filtersLabel(filterDesc), options: { color: COLORS.muted, fontSize: 10, italic: true } }
+  ], { x: 8.15, y: 5.7, w: 4.5, h: 1.0, fontSize: 11 });
 
-  // Footer brand bar
-  cover.addShape(pptx.ShapeType.rect, { x: 0, y: 7.05, w: 13.333, h: 0.45, fill: { color: COLORS.primary }, line: { type: 'none' } });
-  cover.addText(T.preparedBy, { x: 0.85, y: 7.13, w: 12, h: 0.3, fontSize: 10, color: 'FFFFFF', bold: true });
+  cover.addText(T.preparedBy, { x: 0.55, y: 7.05, w: 12.25, h: 0.3, fontSize: 9, color: COLORS.muted });
 
   // ── Executive dashboard ───────────────────────────────────────────────
   // Three GSC calls feed this slide — all best-effort. If any fails or
@@ -5290,18 +5308,17 @@ async function exportStrategyPpt() {
     const bc = bandColor(r.band);
     const cov = r.coverage && Array.isArray(r.coverage.queries) ? r.coverage : null;
 
-    // Slim accent on top + dark header strip with band pill
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.12, fill: { color: bc }, line: { type: 'none' } });
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0.12, w: 13.333, h: 0.6, fill: { color: '0F1117' }, line: { type: 'none' } });
+    // Slim accent stripe + cream header band (template-friendly, no dark bar).
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.10, fill: { color: bc }, line: { type: 'none' } });
     s.addText(T.opportunityHeader(idx + 1, rows.length),
-      { x: 0.6, y: 0.22, w: 4, h: 0.35, fontSize: 11, color: '8B8FA3', bold: true, charSpacing: 4 });
-    s.addShape(pptx.ShapeType.roundRect, { x: 4.6, y: 0.22, w: 2.0, h: 0.35, fill: { color: bc }, line: { type: 'none' }, rectRadius: 0.17 });
-    s.addText(T.band[r.band.id] || r.band.label, { x: 4.6, y: 0.22, w: 2.0, h: 0.35, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
+      { x: 0.6, y: 0.22, w: 4, h: 0.30, fontSize: 11, color: COLORS.muted, bold: true, charSpacing: 4 });
+    s.addShape(pptx.ShapeType.roundRect, { x: 4.6, y: 0.22, w: 2.0, h: 0.30, fill: { color: bc }, line: { type: 'none' }, rectRadius: 0.15 });
+    s.addText(T.band[r.band.id] || r.band.label, { x: 4.6, y: 0.22, w: 2.0, h: 0.30, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
     s.addText(`${T.bestQueryShort(r.bestQueryPosition)}  ·  ${T.targetShort(r.targetPos)}`,
-      { x: 6.7, y: 0.22, w: 4.7, h: 0.35, fontSize: 11, color: 'E0E2F4' });
+      { x: 6.7, y: 0.22, w: 4.7, h: 0.30, fontSize: 11, color: COLORS.muted });
     if (r.isQuickWin) {
-      s.addShape(pptx.ShapeType.roundRect, { x: 11.55, y: 0.22, w: 1.55, h: 0.35, fill: { color: COLORS.success }, line: { type: 'none' }, rectRadius: 0.17 });
-      s.addText('⚡ ' + T.quickWinBadge, { x: 11.55, y: 0.22, w: 1.55, h: 0.35, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
+      s.addShape(pptx.ShapeType.roundRect, { x: 11.55, y: 0.22, w: 1.55, h: 0.30, fill: { color: COLORS.success }, line: { type: 'none' }, rectRadius: 0.15 });
+      s.addText('⚡ ' + T.quickWinBadge, { x: 11.55, y: 0.22, w: 1.55, h: 0.30, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
     }
 
     // URL + page title (one line)
