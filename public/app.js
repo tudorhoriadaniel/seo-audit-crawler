@@ -3321,6 +3321,7 @@ function renderStrategyShell() {
       </div>
 
       <div id="csSummary" style="display:none;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px"></div>
+      <div id="csStrategicOverview"></div>
       <div id="csExcludedHint"></div>
       <div id="csCoverageHint"></div>
       <div id="csTable"></div>
@@ -3548,6 +3549,7 @@ async function runStrategyQuery() {
     }
 
     renderStrategySummary();
+    renderStrategicOverview();
     renderExcludedHint();
     renderCoverageHint();
     renderStrategyTable();
@@ -3674,8 +3676,66 @@ function renderExcludedHint() {
 // Top-of-table banner: shows whenever any opportunities lack live-page
 // coverage analysis. Without it, the slides + tables can only show what we
 // can infer from the crawl (often nothing), so this is the action that
-// makes the rest of the tab "lit up" for the user. Hides itself once
-// every visible row has been analysed.
+// Strategic overview — three big icon cards summarising the recommendation
+// mix across all opportunities. Most important "at a glance" view in the
+// tab: how much work goes into optimising existing pages vs creating new
+// landing pages, and how many quick wins exist.
+function renderStrategicOverview() {
+  const el = document.getElementById('csStrategicOverview');
+  if (!el) return;
+  if (!csState.rows || !csState.rows.length) { el.innerHTML = ''; return; }
+
+  const cats = [
+    { id: 'optimize',       icon: '✏️', color: '#16a34a', tint: 'rgba(22,163,74,.10)',
+      label: 'Optimize',           hint: 'Page is on-topic — refine titles, content depth, internal links.' },
+    { id: 'rewrite-expand', icon: '🔧', color: '#d97706', tint: 'rgba(217,119,6,.10)',
+      label: 'Rewrite & expand',   hint: 'Page partially relevant — meaningful content rework needed.' },
+    { id: 'create-landing', icon: '🆕', color: '#dc2626', tint: 'rgba(220,38,38,.10)',
+      label: 'Create new landing', hint: 'Page only tangentially related — needs a dedicated URL.' }
+  ];
+  const agg = {};
+  cats.forEach(c => agg[c.id] = { pages: 0, potential: 0 });
+  for (const r of csState.rows) {
+    const t = (r.recommendation && r.recommendation.type) || 'optimize';
+    if (!agg[t]) continue;
+    agg[t].pages++;
+    agg[t].potential += r.potentialClicks;
+  }
+
+  const cards = cats.map(c => {
+    const a = agg[c.id];
+    return `<button data-cs-rec-filter="${c.id}" title="Show only opportunities of this type" style="text-align:left;cursor:pointer;background:var(--bg-card);border:1px solid var(--border);border-left:5px solid ${c.color};border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:6px;transition:transform .12s ease,box-shadow .12s ease" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 16px -8px rgba(0,0,0,.15)'" onmouseout="this.style.transform='';this.style.boxShadow=''">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:22px">${c.icon}</span>
+        <span style="font-weight:700;color:${c.color};font-size:14px">${escapeHtml(c.label)}</span>
+      </div>
+      <div style="display:flex;align-items:baseline;gap:8px">
+        <span style="font-size:30px;font-weight:800;color:var(--text);line-height:1">${a.pages.toLocaleString()}</span>
+        <span style="font-size:12px;color:var(--text-muted)">pages</span>
+        <span style="margin-left:auto;font-size:13px;color:var(--primary);font-weight:700">+${Math.round(a.potential).toLocaleString()}</span>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(c.hint)}</div>
+    </button>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="margin-top:12px">
+      <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700;margin-bottom:8px">Strategic overview</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">${cards}</div>
+    </div>`;
+
+  el.querySelectorAll('[data-cs-rec-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      csState.recFilter = csState.recFilter === btn.dataset.csRecFilter ? null : btn.dataset.csRecFilter;
+      renderStrategicOverview();   // re-render so the active card highlights
+      renderStrategyTable();
+    });
+    if (csState.recFilter === btn.dataset.csRecFilter) {
+      btn.style.boxShadow = '0 0 0 3px ' + cats.find(c => c.id === btn.dataset.csRecFilter).color + '33';
+    }
+  });
+}
+
 function renderCoverageHint() {
   const el = document.getElementById('csCoverageHint');
   if (!el) return;
@@ -3712,12 +3772,14 @@ function renderStrategyTable() {
   const bands = activeBandIds();
   const textFilter = (document.getElementById('csTextFilter').value || '').toLowerCase();
   const quickWinsOnly = !!document.getElementById('csQuickWins')?.checked;
+  const recFilter = csState.recFilter || null;
   // A page passes if at least one of its qualifying bands is checked.
   const pageInBands = (r) => (r.bandIds || [r.band.id]).some(id => bands.has(id));
   const filtered = csState.rows.filter(r =>
     pageInBands(r) &&
     (!textFilter || r.page.toLowerCase().includes(textFilter)) &&
-    (!quickWinsOnly || r.isQuickWin === true)
+    (!quickWinsOnly || r.isQuickWin === true) &&
+    (!recFilter || (r.recommendation && r.recommendation.type === recFilter))
   );
 
   if (!filtered.length) {
@@ -3737,21 +3799,23 @@ function renderStrategyTable() {
       ? `<span title="At least one query the page ranks for is missing from the page entirely" style="background:rgba(22,163,74,.15);color:var(--success);padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600">⚡ quick win</span>`
       : '';
     const rec = r.recommendation;
+    const recIcon = rec ? (rec.type === 'optimize' ? '✏️' : rec.type === 'rewrite-expand' ? '🔧' : '🆕') : '';
     const recBadge = rec
-      ? `<span title="${escapeHtml(rec.reason)}" style="background:#${rec.color}1A;color:#${rec.color};padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid #${rec.color}40">${escapeHtml(rec.label)}</span>`
+      ? `<span title="${escapeHtml(rec.reason)}" style="display:inline-flex;align-items:center;gap:4px;background:#${rec.color}15;color:#${rec.color};padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;border:1px solid #${rec.color}55">${recIcon}<span>${escapeHtml(rec.label)}</span></span>`
       : '';
     const main = `
-      <tr data-page="${escapeHtml(r.page)}" style="cursor:pointer">
-        <td style="padding:10px 12px">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${r.band.color}" title="${escapeHtml(r.band.label)}"></span>
-            <a href="${escapeHtml(r.page)}" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none;word-break:break-all" onclick="event.stopPropagation()">${escapeHtml(r.page)}</a>
+      <tr data-page="${escapeHtml(r.page)}" style="cursor:pointer;border-left:4px solid ${r.band.color}">
+        <td style="padding:12px 14px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             ${recBadge}
             ${quickWinBadge}
+          </div>
+          <div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <a href="${escapeHtml(r.page)}" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none;word-break:break-all;font-weight:600" onclick="event.stopPropagation()">${escapeHtml(r.page)}</a>
             ${crawlTags}
           </div>
-          ${crawl && crawl.title ? `<div style="font-size:12px;color:var(--text-muted);margin-top:3px">${escapeHtml(crawl.title)}</div>` : ''}
-          ${r.bestQuery ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px">Best opportunity: <b style="color:${r.band.color}">${escapeHtml(r.bestQuery)}</b> @ rank ${r.bestQueryPosition.toFixed(1)} · ${r.bestQueryImpressions.toLocaleString()} impressions${r.qualifyingCount > 1 ? ` <span style="opacity:.7">(+${r.qualifyingCount - 1} more ranking queries)</span>` : ''}</div>` : ''}
+          ${crawl && crawl.title ? `<div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escapeHtml(crawl.title)}</div>` : ''}
+          ${r.bestQuery ? `<div style="font-size:12px;color:var(--text-muted);margin-top:5px">▸ <b style="color:${r.band.color}">${escapeHtml(r.bestQuery)}</b> · rank ${r.bestQueryPosition.toFixed(1)} · ${r.bestQueryImpressions.toLocaleString()} impr${r.qualifyingCount > 1 ? ` <span style="opacity:.7">(+${r.qualifyingCount - 1} more)</span>` : ''}</div>` : ''}
           ${rec && rec.type === 'create-landing' && rec.suggestedUrl ? `<div style="font-size:12px;margin-top:6px;padding:6px 8px;background:rgba(220,38,38,.06);border-left:3px solid #${rec.color};border-radius:4px"><b style="color:#${rec.color}">Suggested new URL:</b> <code style="background:transparent;color:var(--text)">${escapeHtml(rec.suggestedUrl)}</code></div>` : ''}
         </td>
         <td style="padding:10px 12px;font-size:12px">
@@ -3882,6 +3946,7 @@ async function loadStrategyCoverage(row, { silent } = {}) {
   if (!silent) {
     renderStrategyQueriesFor(row.page);
     renderStrategySummary();
+    renderStrategicOverview();
     renderCoverageHint();
     enableQuickWinsIfAny();
   }
@@ -4324,6 +4389,7 @@ const PPT_I18N = {
     impr: 'Impr',
     pos: 'Pos',
     inPage: 'In page?',
+    wordsOnly: 'words only',
     missingOnPage: (n, impr) => `Missing on this page  ·  ${n} ${n === 1 ? 'query' : 'queries'}  ·  ${impr.toLocaleString()} impressions`,
     allCovered: 'Every ranking query already appears somewhere on the page. Focus on titles, H1 and internal linking.',
     missingNotRun: 'Missing-keywords analysis not run yet.',
@@ -4425,6 +4491,7 @@ const PPT_I18N = {
     impr: 'Impr',
     pos: 'Pos',
     inPage: 'Sur la page ?',
+    wordsOnly: 'mots seuls',
     missingOnPage: (n, impr) => `Absent de la page  ·  ${n} ${n === 1 ? 'requête' : 'requêtes'}  ·  ${impr.toLocaleString()} impressions`,
     allCovered: 'Toutes les requêtes apparaissent déjà quelque part sur la page. Travailler le title, le H1 et le maillage interne.',
     missingNotRun: 'Analyse des mots-clés manquants pas encore lancée.',
@@ -5053,25 +5120,41 @@ async function exportStrategyPpt() {
       ];
       const tRows = topQ.map(q => {
         const c = coverageByQuery[q.query];
-        let where, whereColor = COLORS.muted;
-        if (c) {
-          if (!c.presentSomewhere) { where = (T.titleMissingLabel || 'missing').toUpperCase(); whereColor = COLORS.danger; }
-          else {
-            const parts = [];
-            if (c.phrase.inTitle) parts.push('title');
-            if (c.phrase.inMetaDescription) parts.push('desc');
-            if (c.phrase.inH1) parts.push('H1');
-            if (c.phrase.inHeadings) parts.push('Hn');
-            if (c.phrase.bodyOccurrences > 0) parts.push(`body ${c.phrase.bodyOccurrences}×`);
+        let where, whereColor = COLORS.muted, whereBold = false;
+        if (!c) {
+          where = T.notAnalysedShort;
+          whereBold = true;
+        } else if (!c.presentSomewhere) {
+          where = (T.titleMissingLabel || 'missing').toUpperCase();
+          whereColor = COLORS.danger;
+          whereBold = true;
+        } else {
+          const parts = [];
+          if (c.phrase.inTitle) parts.push('title');
+          if (c.phrase.inMetaDescription) parts.push('desc');
+          if (c.phrase.inH1) parts.push('H1');
+          if (c.phrase.inHeadings) parts.push('Hn');
+          if (c.phrase.bodyOccurrences > 0) parts.push(`body ${c.phrase.bodyOccurrences}×`);
+          if (parts.length) {
             where = parts.join(' · ');
             whereColor = COLORS.success;
+          } else if (c.looseMatch && c.looseMatch.bodyAllWords) {
+            // All words present individually in the body but not as the
+            // exact phrase. The previous version left this cell empty.
+            where = (T.wordsOnly || 'words only');
+            whereColor = COLORS.warning;
+            whereBold = true;
+          } else {
+            where = (T.titleMissingLabel || 'missing').toUpperCase();
+            whereColor = COLORS.danger;
+            whereBold = true;
           }
-        } else where = T.notAnalysedShort;
+        }
         return [
           { text: trunc(q.query, 40), options: { fontSize: 9 } },
           { text: q.impressions.toLocaleString(), options: { fontSize: 9, align: 'right' } },
           { text: q.position.toFixed(1), options: { fontSize: 9, align: 'right' } },
-          { text: where, options: { fontSize: 9, color: whereColor, bold: !c || !c.presentSomewhere } }
+          { text: where, options: { fontSize: 9, color: whereColor, bold: whereBold } }
         ];
       });
       s.addTable([tHeader, ...tRows], {
