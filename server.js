@@ -915,10 +915,17 @@ app.post('/api/gsc/query', async (req, res) => {
     const body = {
       startDate,
       endDate,
-      dimensions: dimensions && dimensions.length ? dimensions : ['query'],
       rowLimit: Math.min(parseInt(rowLimit) || 1000, 25000),
       startRow: 0
     };
+    // GSC: omit `dimensions` entirely to get period totals. Send the array
+    // when the caller supplied one; fall back to ['query'] only when the
+    // caller didn't pass any `dimensions` key at all (legacy behaviour).
+    if (Array.isArray(dimensions)) {
+      if (dimensions.length) body.dimensions = dimensions;
+    } else {
+      body.dimensions = ['query'];
+    }
     if (searchType) body.type = searchType;
     if (dataState) body.dataState = dataState;
     if (dimensionFilterGroups) body.dimensionFilterGroups = dimensionFilterGroups;
