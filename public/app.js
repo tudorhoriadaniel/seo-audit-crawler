@@ -4528,6 +4528,7 @@ const PPT_I18N = {
     execColAction: 'Action',
     execColGain: 'Extra clicks',
     execChartTitle: 'Work breakdown',
+    execBandChartTitle: 'Pages by opportunity band',
     execTopFooterNote: (n) => `Top 5 of ${n.toLocaleString()} opportunities by potential clicks. Every page has its own slide.`,
     execTargetShort: 'at rank',
     execSummaryFooter: 'Every opportunity has its own slide in this deck with the exact actions to take.',
@@ -4565,6 +4566,10 @@ const PPT_I18N = {
     kpiImpressions: 'Impressions',
     kpiAvgCtr: 'Avg. CTR',
     kpiAvgPosition: 'Avg. position',
+    kpiExtraClicks: 'Estimated extra clicks',
+    tileScopeAll: (n) => `total across the ${n} queries this page ranks for`,
+    tileScopeOverall: 'page-level average across all queries',
+    tileScopeBest: (q) => `if "${trunc(q || '', 30)}" reaches its target rank`,
     matrixTitle: 'Keyword opportunity matrix',
     matrixSubtitle: 'From GSC queries, pos. 5–20, high impressions',
     matrixQuery: 'Query',
@@ -4683,6 +4688,7 @@ const PPT_I18N = {
     execColAction: 'Action',
     execColGain: 'Clics suppl.',
     execChartTitle: 'Répartition du travail',
+    execBandChartTitle: 'Pages par bande d\'opportunité',
     execTopFooterNote: (n) => `Top 5 sur ${n.toLocaleString()} opportunités par clics potentiels. Chaque page a sa propre diapositive.`,
     execTargetShort: 'au rang',
     execSummaryFooter: 'Chaque opportunité a sa propre diapositive dans ce document avec les actions à mener.',
@@ -4719,6 +4725,10 @@ const PPT_I18N = {
     kpiImpressions: 'Impressions',
     kpiAvgCtr: 'CTR moyen',
     kpiAvgPosition: 'Position moy.',
+    kpiExtraClicks: 'Clics supplémentaires estimés',
+    tileScopeAll: (n) => `total sur les ${n} requêtes positionnées de cette page`,
+    tileScopeOverall: 'moyenne page (toutes requêtes)',
+    tileScopeBest: (q) => `si « ${trunc(q || '', 30)} » atteint son rang cible`,
     matrixTitle: 'Matrice d\'opportunités',
     matrixSubtitle: 'Requêtes GSC, pos. 5–20, fortes impressions',
     matrixQuery: 'Requête',
@@ -4855,57 +4865,69 @@ function addExecutiveSummarySlide(pptx, T, ctx) {
     const t = (r.recommendation && r.recommendation.type) || 'optimize';
     if (byRec[t] != null) byRec[t]++;
   }
+  const byBand = {};
+  for (const b of STRATEGY_BANDS) byBand[b.id] = 0;
+  for (const r of allRows) {
+    if (byBand[r.band.id] != null) byBand[r.band.id]++;
+  }
 
   const s = pptx.addSlide();
   s.background = { color: PAGE_BG };
 
   // Title row
-  s.addText(T.execSummaryTitle, { x: 0.55, y: 0.30, w: 12.2, h: 0.45, fontSize: 22, bold: true, color: TEXT });
-  s.addText(T.execSummaryKicker, { x: 0.55, y: 0.78, w: 12.2, h: 0.30, fontSize: 12, color: MUTED });
+  s.addText(T.execSummaryTitle, { x: 0.55, y: 0.25, w: 12.2, h: 0.40, fontSize: 22, bold: true, color: TEXT });
+  s.addText(T.execSummaryKicker, { x: 0.55, y: 0.68, w: 12.2, h: 0.26, fontSize: 12, color: MUTED });
 
-  // Hero number — full-width across the top so the "+N extra clicks" is
-  // the one thing the client reads first.
-  s.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 1.20, w: 12.25, h: 1.45, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
-  s.addText(`+${totalPotential.toLocaleString()}`, { x: 0.85, y: 1.30, w: 5.0, h: 1.25, fontSize: 64, bold: true, color: '#' + PRIMARY });
+  // Slim hero strip — one row across the top.
+  s.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 1.05, w: 12.25, h: 1.10, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+  s.addText(`+${totalPotential.toLocaleString()}`, { x: 0.85, y: 1.10, w: 4.7, h: 1.00, fontSize: 50, bold: true, color: '#' + PRIMARY });
   s.addText(T.execHeroSub(allRows.length, siteUrl),
-    { x: 5.95, y: 1.70, w: 6.65, h: 0.85, fontSize: 13, color: MUTED });
+    { x: 5.65, y: 1.35, w: 6.95, h: 0.65, fontSize: 12, color: MUTED });
 
-  // ── LEFT: pie chart of work breakdown ───────────────────────────────
-  s.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 2.85, w: 5.85, h: 4.20, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
-  s.addText(T.execChartTitle, { x: 0.85, y: 2.95, w: 5.4, h: 0.32, fontSize: 13, bold: true, color: TEXT });
-
-  const chartData = [{
+  // ── Middle row: two pies side-by-side ───────────────────────────────
+  // Pie 1: work breakdown (what to do)
+  s.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 2.30, w: 6.10, h: 2.85, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+  s.addText(T.execChartTitle, { x: 0.80, y: 2.38, w: 5.6, h: 0.30, fontSize: 12, bold: true, color: TEXT });
+  s.addChart(pptx.ChartType.pie, [{
     name: T.execChartTitle,
     labels: [T.rec.optimize.label, T.rec['rewrite-expand'].label, T.rec['create-landing'].label],
     values: [byRec.optimize, byRec['rewrite-expand'], byRec['create-landing']]
-  }];
-  s.addChart(pptx.ChartType.pie, chartData, {
-    x: 0.65, y: 3.30, w: 5.65, h: 3.65,
+  }], {
+    x: 0.65, y: 2.65, w: 5.90, h: 2.45,
     chartColors: ['16A34A', 'D97706', 'DC2626'],
-    showLegend: true,
-    legendPos: 'b',
-    legendFontSize: 11,
-    legendColor: TEXT,
-    showPercent: true,
-    dataLabelColor: 'FFFFFF',
-    dataLabelFontSize: 11,
-    dataLabelFontBold: true,
-    showLabel: false,
-    showValue: false
+    showLegend: true, legendPos: 'b', legendFontSize: 10, legendColor: TEXT,
+    showPercent: true, dataLabelColor: 'FFFFFF', dataLabelFontSize: 10, dataLabelFontBold: true,
+    showLabel: false, showValue: false
   });
 
-  // ── RIGHT: short table of top 5 priority pages ──────────────────────
-  s.addShape(pptx.ShapeType.roundRect, { x: 6.55, y: 2.85, w: 6.25, h: 4.20, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
-  s.addText(T.execTopHeader, { x: 6.85, y: 2.95, w: 5.8, h: 0.32, fontSize: 13, bold: true, color: TEXT });
+  // Pie 2: pages by opportunity band (how hard the wins are)
+  s.addShape(pptx.ShapeType.roundRect, { x: 6.75, y: 2.30, w: 6.05, h: 2.85, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+  s.addText(T.execBandChartTitle, { x: 7.00, y: 2.38, w: 5.6, h: 0.30, fontSize: 12, bold: true, color: TEXT });
+  s.addChart(pptx.ChartType.pie, [{
+    name: T.execBandChartTitle,
+    labels: STRATEGY_BANDS.map(b => T.band[b.id] || b.label),
+    values: STRATEGY_BANDS.map(b => byBand[b.id])
+  }], {
+    x: 6.85, y: 2.65, w: 5.85, h: 2.45,
+    chartColors: STRATEGY_BANDS.map(b => b.color.replace('#', '').toUpperCase()),
+    showLegend: true, legendPos: 'b', legendFontSize: 10, legendColor: TEXT,
+    showPercent: true, dataLabelColor: 'FFFFFF', dataLabelFontSize: 10, dataLabelFontBold: true,
+    showLabel: false, showValue: false
+  });
+
+  // ── Bottom: top 5 priority pages table ──────────────────────────────
+  s.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 5.30, w: 12.25, h: 1.75, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+  s.addText(T.execTopHeader, { x: 0.80, y: 5.38, w: 11.7, h: 0.28, fontSize: 12, bold: true, color: TEXT });
 
   const top5 = rows.slice().sort((a, b) => b.potentialClicks - a.potentialClicks).slice(0, 5);
   if (top5.length) {
     const recColorOf = (t) => t === 'create-landing' ? 'DC2626' : (t === 'rewrite-expand' ? 'D97706' : '16A34A');
     const headerStyle = { bold: true, color: MUTED, fontSize: 9, fill: { color: 'F5F1E8' } };
     const headerRow = [
-      { text: '#',                                   options: headerStyle },
-      { text: T.execColPage,                         options: headerStyle },
-      { text: T.execColGain,                         options: { ...headerStyle, align: 'right' } }
+      { text: '#',                                          options: headerStyle },
+      { text: T.execColPage,                                options: headerStyle },
+      { text: T.execColBest || 'Best query @ rank',         options: headerStyle },
+      { text: T.execColGain,                                options: { ...headerStyle, align: 'right' } }
     ];
     const dataRows = top5.map((r, i) => {
       const recType = (r.recommendation && r.recommendation.type) || 'optimize';
@@ -4913,21 +4935,20 @@ function addExecutiveSummarySlide(pptx, T, ctx) {
       try { path = new URL(r.page).pathname || '/'; } catch { /* ignore */ }
       return [
         { text: String(i + 1), options: { fontSize: 11, bold: true, color: '#' + recColorOf(recType), align: 'center' } },
-        { text: trunc(path, 42), options: { fontSize: 10, bold: true, color: TEXT } },
+        { text: trunc(path, 50), options: { fontSize: 10, bold: true, color: TEXT } },
+        { text: `"${trunc(r.bestQuery || '', 40)}"  @ ${r.bestQueryPosition.toFixed(1)}`, options: { fontSize: 10, color: TEXT } },
         { text: '+' + Math.round(r.potentialClicks).toLocaleString(), options: { fontSize: 11, bold: true, color: '#' + PRIMARY, align: 'right' } }
       ];
     });
     s.addTable([headerRow, ...dataRows], {
-      x: 6.85, y: 3.40, w: 5.75, colW: [0.45, 4.10, 1.20],
+      x: 0.80, y: 5.65, w: 11.75, colW: [0.45, 4.40, 5.30, 1.60],
       fontFace: 'Calibri', color: TEXT,
       border: { type: 'solid', color: CARD_BORDER, pt: 0.5 },
-      rowH: 0.42
+      rowH: 0.22
     });
-    s.addText(T.execTopFooterNote(rows.length),
-      { x: 6.85, y: 6.50, w: 5.75, h: 0.40, fontSize: 9, color: MUTED, italic: true });
   }
 
-  s.addText(T.preparedBy, { x: 0.55, y: 7.15, w: 12.2, h: 0.25, fontSize: 9, color: MUTED });
+  s.addText(T.preparedBy, { x: 0.55, y: 7.20, w: 12.2, h: 0.22, fontSize: 9, color: MUTED });
 }
 
 function addExecutiveDashboardSlide(pptx, T, ctx) {
@@ -5193,7 +5214,7 @@ async function exportStrategyPpt() {
   const coverKpis = [
     { label: T.opportunityPages, value: allRows.length.toLocaleString() },
     { label: T.totalImpressions, value: totalImpr.toLocaleString() },
-    { label: 'Estimated extra clicks', value: '+' + totalPot.toLocaleString(), accent: true },
+    { label: T.kpiExtraClicks || 'Estimated extra clicks', value: '+' + totalPot.toLocaleString(), accent: true },
     { label: T.quickWins,        value: totalAnalysed ? totalQuickWins.toLocaleString() : '–' }
   ];
   coverKpis.forEach((k, i) => {
@@ -5468,18 +5489,23 @@ async function exportStrategyPpt() {
       }
     }
 
-    // Metric tiles
+    // Metric tiles. Sub-label tells the reader WHICH queries the number
+    // aggregates — three of the tiles are totals across every query this
+    // page ranks for, the fourth (potential) is for the best query only.
+    const queriesCount = Array.isArray(r.topQueries) ? r.topQueries.length : 0;
     const metrics = [
-      { label: T.impressions,                  value: r.impressions.toLocaleString(),                color: COLORS.text },
-      { label: T.clicks,                       value: r.clicks.toLocaleString(),                     color: COLORS.text },
-      { label: T.ctr,                          value: (r.ctr * 100).toFixed(2) + '%',                color: COLORS.text },
-      { label: T.potentialAtRank(r.targetPos), value: '+' + Math.round(r.potentialClicks).toLocaleString(), color: COLORS.primary, accent: true }
+      { label: T.impressions, value: r.impressions.toLocaleString(),  sub: T.tileScopeAll ? T.tileScopeAll(queriesCount) : `across ${queriesCount} queries`,         color: COLORS.text },
+      { label: T.clicks,      value: r.clicks.toLocaleString(),       sub: T.tileScopeAll ? T.tileScopeAll(queriesCount) : `across ${queriesCount} queries`,         color: COLORS.text },
+      { label: T.ctr,         value: (r.ctr * 100).toFixed(2) + '%',  sub: T.tileScopeOverall || 'page-level average',                                              color: COLORS.text },
+      { label: T.potentialAtRank(r.targetPos), value: '+' + Math.round(r.potentialClicks).toLocaleString(),
+        sub: T.tileScopeBest ? T.tileScopeBest(r.bestQuery) : `if "${r.bestQuery}" hits target`, color: COLORS.primary, accent: true }
     ];
     metrics.forEach((m, i) => {
       const x = 0.6 + i * 3.15;
-      s.addShape(pptx.ShapeType.roundRect, { x, y: 2.62, w: 2.95, h: 0.72, fill: { color: m.accent ? COLORS.panelAccent : COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
-      s.addText(m.label, { x: x + 0.15, y: 2.66, w: 2.7, h: 0.25, fontSize: 9, color: COLORS.muted, bold: true });
-      s.addText(m.value, { x: x + 0.15, y: 2.88, w: 2.7, h: 0.43, fontSize: 18, bold: true, color: m.color });
+      s.addShape(pptx.ShapeType.roundRect, { x, y: 2.55, w: 2.95, h: 0.85, fill: { color: m.accent ? COLORS.panelAccent : COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+      s.addText(m.label, { x: x + 0.15, y: 2.58, w: 2.7, h: 0.20, fontSize: 9, color: COLORS.muted, bold: true });
+      s.addText(m.value, { x: x + 0.15, y: 2.76, w: 2.7, h: 0.34, fontSize: 18, bold: true, color: m.color });
+      s.addText(trunc(m.sub, 42), { x: x + 0.15, y: 3.12, w: 2.7, h: 0.24, fontSize: 8, color: COLORS.muted, italic: true });
     });
 
     // ── Left column: CURRENT PAGE
