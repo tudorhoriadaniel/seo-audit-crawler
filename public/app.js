@@ -3311,6 +3311,10 @@ function renderStrategyShell() {
             <input type="checkbox" id="csQuickWins" disabled> Quick wins only
           </label>
           <button id="csExport" class="btn btn-secondary" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export CSV</button>
+          <select id="csExportLang" title="Deck language" style="padding:7px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer;font-size:13px">
+            <option value="en">English</option>
+            <option value="fr">Français</option>
+          </select>
           <button id="csExportPpt" class="btn btn-secondary" title="One slide per opportunity, with action items based on the coverage gaps" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export PPT</button>
         </div>
         <div id="csAnalyseProgress" style="display:none;margin-top:8px;font-size:12px;color:var(--text-muted)"></div>
@@ -3326,6 +3330,11 @@ function renderStrategyShell() {
   document.getElementById('csRun').addEventListener('click', runStrategyQuery);
   document.getElementById('csExport').addEventListener('click', exportStrategyCsv);
   document.getElementById('csExportPpt').addEventListener('click', exportStrategyPpt);
+  const langSel = document.getElementById('csExportLang');
+  if (langSel) {
+    langSel.value = localStorage.getItem('cs-export-lang') || 'en';
+    langSel.addEventListener('change', () => localStorage.setItem('cs-export-lang', langSel.value));
+  }
   document.getElementById('csTextFilter').addEventListener('input', renderStrategyTable);
   document.getElementById('csAnalyse').addEventListener('click', analyseAllCoverage);
   document.getElementById('csQuickWins').addEventListener('change', renderStrategyTable);
@@ -4241,21 +4250,232 @@ async function loadPptxLib() {
 //   critical  — fixes that block ranking (missing core terms, no meta desc)
 //   important — on-page edits that should ship next (title/H1/desc rewrites)
 //   recommended — supporting work (internal links, content expansion)
-function deriveActions(r) {
+// ── PPT export i18n ─────────────────────────────────────────────────────
+// Keys cover every literal that ends up in the deck. Action templates are
+// builder functions so they can interpolate dynamic data (URLs, counts).
+const PPT_I18N = {
+  en: {
+    contentStrategy: 'CONTENT STRATEGY',
+    audit: 'AUDIT',
+    inThisDeck: 'IN THIS DECK',
+    opportunityPages: 'Opportunity pages',
+    totalImpressions: 'Total impressions',
+    quickWins: 'Quick wins',
+    heroSubtitle: 'estimated extra clicks per month if every opportunity reaches its target rank.',
+    deckIntro: (n) => `${n} opportunity slide${n === 1 ? '' : 's'}. Each slide shows the page, its title / meta description / H1, the queries it ranks for, on-page coverage gaps, and prioritised actions.`,
+    filtersLabel: (s) => `Filters: ${s}`,
+    noFilters: 'no filters',
+    filterQuickWins: 'quick wins only',
+    filterText: (t) => `text filter "${t}"`,
+    filterBands: (b) => `bands: ${b}`,
+    opportunitiesByBand: 'Opportunities by band',
+    opportunitiesByBandDesc: 'Each band groups pages by the rank of their best opportunity query. Lower bands = easier wins.',
+    band: { push: 'Push to #1', striking: 'Striking distance', page2: 'Page 2', deep: 'Hidden volume', deeper: 'Deep but searched' },
+    positionsRange: (lo, hi, t) => `Positions ${lo}–${hi}  ·  target #${t}`,
+    pagesLabel: 'pages',
+    impressionsLabel: 'impressions',
+    extraClicksAt: (t) => `extra clicks @ #${t}`,
+    includedInDeck: (a, b) => `${a} / ${b} included in this deck`,
+    distributionByPotential: 'Distribution of potential clicks',
+    strategyMix: 'Strategy mix',
+    strategyMixDesc: 'Each opportunity falls into one of three actions. Use this to plan the work split with the team.',
+    workSplit: 'Work split (by page count)',
+    rec: {
+      optimize:        { label: 'Optimize',                desc: 'Page is on-topic — refine title, content depth, internal links.',
+                         reason: 'URL slug is topically aligned — refine on-page SEO to push it higher.' },
+      'rewrite-expand':{ label: 'Rewrite & expand',        desc: 'Page partially relevant — meaningful content rework.',
+                         reason: 'Only partially relevant to the keyword. Rewrite the title/H1, add a dedicated section, and expand the content.' },
+      'create-landing':{ label: 'Create new landing page', desc: 'Page only tangentially related — needs a dedicated URL.',
+                         reason: 'The current URL is only tangentially related — a dedicated landing page would convert demand into clicks.' }
+    },
+    examples: 'EXAMPLES',
+    topOpportunitiesTitle: 'Top 5 opportunities',
+    topOpportunitiesDesc: 'Highest estimated extra-clicks if pushed to target rank. Start here.',
+    bestQueryShort: (rank) => `Best query @ #${rank.toFixed(1)}`,
+    targetShort: (t) => `Target #${t}`,
+    opportunityHeader: (a, b) => `OPPORTUNITY ${a} / ${b}`,
+    quickWinBadge: 'Quick win',
+    strategy: 'STRATEGY',
+    impressions: 'Impressions',
+    clicks: 'Clicks',
+    ctr: 'CTR',
+    position: 'Position',
+    potentialAtRank: (t) => `Potential @ rank ${t}`,
+    suggestedUrl: 'Suggested URL',
+    currentPage: 'Current page',
+    title: 'TITLE',
+    metaDescription: 'META DESCRIPTION',
+    h1Label: 'H1',
+    titleMissingLabel: 'missing',
+    notAnalysedShort: '(not analysed)',
+    notAnalysedHint: '(not analysed — click "Analyse keyword coverage" in the tool)',
+    noTitleTag: '(no <title> tag on page)',
+    noMetaDesc: '(no meta description — Google will auto-generate one)',
+    noH1: '(no H1 heading on page)',
+    runAnalysisHint: 'Click the "Analyse keyword coverage" button above the opportunity table to populate live-page data here.',
+    h1Count: (n) => `${n} H1${n === 1 ? '' : 's'}`,
+    noH1Label: 'no H1',
+    wordsOnLive: (w, q) => `${w.toLocaleString()} words on the live page  ·  ${q} queries analysed`,
+    statIn: { title: 'in title', meta: 'in meta', H1: 'in H1', body: 'in body' },
+    actionItems: 'Action items',
+    priority: { critical: 'CRITICAL', important: 'IMPORTANT', recommended: 'RECOMMENDED' },
+    topRankingQueries: 'Top ranking queries',
+    query: 'Query',
+    impr: 'Impr',
+    pos: 'Pos',
+    inPage: 'In page?',
+    missingOnPage: (n, impr) => `Missing on this page  ·  ${n} ${n === 1 ? 'query' : 'queries'}  ·  ${impr.toLocaleString()} impressions`,
+    allCovered: 'Every ranking query already appears somewhere on the page. Focus on titles, H1 and internal linking.',
+    missingNotRun: 'Missing-keywords analysis not run yet.',
+    plusMore: (n) => `+${n} more`,
+    methodologyTitle: 'How to read this deck',
+    methodologyDesc: 'A quick reference for what each metric means and how the numbers were computed.',
+    opportunityBandsHeader: 'OPPORTUNITY BANDS',
+    ctrCurveHeader: 'AVERAGE CTR BY POSITION',
+    potentialHowTitle: 'How "potential extra clicks" is computed',
+    potentialHowDesc: 'For each ranking query: potential = (query impressions × target-rank CTR) − current clicks. A page\'s total potential is the sum across all its qualifying queries. The CTR curve above is an industry average — treat figures as a directional upper bound, not a forecast.',
+    preparedBy: 'Prepared by Converta  ·  seo.converta.ro',
+    siteAndDates: (site, s, e) => `${site}  ·  ${s} → ${e}`,
+    // Action templates
+    actCreateLanding: (url, kw) => `Create a dedicated landing page at ${url} targeting "${kw}".`,
+    actRewriteAround: (kw) => `Rewrite this page around "${kw}" (title, H1, dedicated section in the body).`,
+    actRefineFor: (kw) => `Refine this page for "${kw}" — tighten the title and add depth to the relevant section.`,
+    actMissingTerms: (top, extra) => `Write content covering the missing terms: ${top}${extra ? ` (${extra})` : ''}.`,
+    actAddMetaDesc: 'Add a meta description (~150 characters) that includes the top ranking queries.',
+    actRewriteMeta: (top) => `Rewrite the meta description to include: ${top}.`,
+    actMetaTooLong: (len) => `Meta description is ${len}ch — trim under 160ch to avoid SERP truncation.`,
+    actMetaTooShort: (len) => `Meta description is only ${len}ch — expand to ~120–155ch with the main keywords.`,
+    actRewriteTitle: (top) => `Rewrite the page title to lead with: ${top}.`,
+    actSurfaceInH1: (top) => `Surface in an H1 or H2: ${top}.`,
+    actThinPage: (w) => `Page is thin (${w} words). Expand to 800–1200 words covering the queries above.`,
+    actMissingH1: 'Page has no H1 heading — add one that contains the main query.',
+    actMultipleH1: (n) => `Page has ${n} H1s — keep a single H1.`,
+    actTitleLength: (len) => `Title length (${len} ch) is outside the 30–60 sweet spot — rewrite it.`,
+    actInternalLinks: 'Boost internal links from related pages using the target keywords as anchor text.',
+    actInternalLinksAuth: 'Add internal links from high-authority pages with target-keyword anchors.',
+    actFallback: 'Refresh content, expand topical coverage, and strengthen internal linking with target-keyword anchors.'
+  },
+  fr: {
+    contentStrategy: 'STRATÉGIE DE CONTENU',
+    audit: 'AUDIT',
+    inThisDeck: 'DANS CE DOCUMENT',
+    opportunityPages: 'Pages à fort potentiel',
+    totalImpressions: 'Impressions totales',
+    quickWins: 'Gains rapides',
+    heroSubtitle: 'clics supplémentaires estimés par mois si chaque opportunité atteint son rang cible.',
+    deckIntro: (n) => `${n} diapositive${n === 1 ? '' : 's'} d'opportunité. Chaque diapositive montre la page, son title / meta description / H1, les requêtes pour lesquelles elle se positionne, les lacunes de couverture et les actions priorisées.`,
+    filtersLabel: (s) => `Filtres : ${s}`,
+    noFilters: 'aucun filtre',
+    filterQuickWins: 'gains rapides uniquement',
+    filterText: (t) => `recherche "${t}"`,
+    filterBands: (b) => `bandes : ${b}`,
+    opportunitiesByBand: 'Opportunités par bande',
+    opportunitiesByBandDesc: 'Chaque bande regroupe les pages selon le rang de leur meilleure requête. Bande basse = gain plus facile.',
+    band: { push: 'Pousser au #1', striking: 'Distance de frappe', page2: 'Page 2', deep: 'Volume caché', deeper: 'Profond mais recherché' },
+    positionsRange: (lo, hi, t) => `Positions ${lo}–${hi}  ·  cible #${t}`,
+    pagesLabel: 'pages',
+    impressionsLabel: 'impressions',
+    extraClicksAt: (t) => `clics supplémentaires @ #${t}`,
+    includedInDeck: (a, b) => `${a} / ${b} inclus dans ce document`,
+    distributionByPotential: 'Répartition des clics potentiels',
+    strategyMix: 'Mix stratégique',
+    strategyMixDesc: 'Chaque opportunité relève de l\'une des trois actions. Utilisez ceci pour planifier la répartition du travail.',
+    workSplit: 'Répartition du travail (par nombre de pages)',
+    rec: {
+      optimize:        { label: 'Optimiser',                    desc: 'Page pertinente — affiner le title, approfondir le contenu, renforcer le maillage interne.',
+                         reason: 'L\'URL est cohérente avec le sujet — affiner le SEO on-page pour gagner des positions.' },
+      'rewrite-expand':{ label: 'Réécrire et étoffer',          desc: 'Page partiellement pertinente — réécriture de contenu nécessaire.',
+                         reason: 'Pertinence partielle pour le mot-clé. Réécrire le title/H1, ajouter une section dédiée et étoffer le contenu.' },
+      'create-landing':{ label: 'Créer une nouvelle landing page', desc: 'Page peu pertinente — il faut une URL dédiée.',
+                         reason: 'L\'URL actuelle n\'est que tangentiellement liée — une landing page dédiée convertirait mieux la demande en clics.' }
+    },
+    examples: 'EXEMPLES',
+    topOpportunitiesTitle: 'Top 5 opportunités',
+    topOpportunitiesDesc: 'Plus haut potentiel de clics supplémentaires si poussées au rang cible. Commencer ici.',
+    bestQueryShort: (rank) => `Meilleure requête @ #${rank.toFixed(1)}`,
+    targetShort: (t) => `Cible #${t}`,
+    opportunityHeader: (a, b) => `OPPORTUNITÉ ${a} / ${b}`,
+    quickWinBadge: 'Gain rapide',
+    strategy: 'STRATÉGIE',
+    impressions: 'Impressions',
+    clicks: 'Clics',
+    ctr: 'CTR',
+    position: 'Position',
+    potentialAtRank: (t) => `Potentiel @ rang ${t}`,
+    suggestedUrl: 'URL suggérée',
+    currentPage: 'Page actuelle',
+    title: 'TITLE',
+    metaDescription: 'META DESCRIPTION',
+    h1Label: 'H1',
+    titleMissingLabel: 'manquant',
+    notAnalysedShort: '(non analysée)',
+    notAnalysedHint: '(non analysée — cliquer sur "Analyse keyword coverage" dans l\'outil)',
+    noTitleTag: '(aucune balise <title> sur la page)',
+    noMetaDesc: '(aucune meta description — Google en générera une)',
+    noH1: '(aucun titre H1 sur la page)',
+    runAnalysisHint: 'Cliquer sur "Analyse keyword coverage" au-dessus du tableau pour remplir les données live ici.',
+    h1Count: (n) => `${n} H1`,
+    noH1Label: 'pas de H1',
+    wordsOnLive: (w, q) => `${w.toLocaleString()} mots sur la page live  ·  ${q} requêtes analysées`,
+    statIn: { title: 'dans le title', meta: 'dans la meta', H1: 'dans le H1', body: 'dans le corps' },
+    actionItems: 'Actions à mener',
+    priority: { critical: 'CRITIQUE', important: 'IMPORTANT', recommended: 'RECOMMANDÉ' },
+    topRankingQueries: 'Top requêtes positionnées',
+    query: 'Requête',
+    impr: 'Impr',
+    pos: 'Pos',
+    inPage: 'Sur la page ?',
+    missingOnPage: (n, impr) => `Absent de la page  ·  ${n} ${n === 1 ? 'requête' : 'requêtes'}  ·  ${impr.toLocaleString()} impressions`,
+    allCovered: 'Toutes les requêtes apparaissent déjà quelque part sur la page. Travailler le title, le H1 et le maillage interne.',
+    missingNotRun: 'Analyse des mots-clés manquants pas encore lancée.',
+    plusMore: (n) => `+${n} de plus`,
+    methodologyTitle: 'Lecture du document',
+    methodologyDesc: 'Référence rapide : signification des métriques et calculs utilisés.',
+    opportunityBandsHeader: 'BANDES D\'OPPORTUNITÉ',
+    ctrCurveHeader: 'CTR MOYEN PAR POSITION',
+    potentialHowTitle: 'Comment sont calculés les "clics supplémentaires potentiels"',
+    potentialHowDesc: 'Pour chaque requête : potentiel = (impressions × CTR au rang cible) − clics actuels. Le potentiel total d\'une page est la somme sur toutes ses requêtes éligibles. La courbe CTR ci-dessus est une moyenne sectorielle — à considérer comme un plafond indicatif, pas une prévision.',
+    preparedBy: 'Préparé par Converta  ·  seo.converta.ro',
+    siteAndDates: (site, s, e) => `${site}  ·  ${s} → ${e}`,
+    actCreateLanding: (url, kw) => `Créer une landing page dédiée à ${url} ciblant « ${kw} ».`,
+    actRewriteAround: (kw) => `Réécrire la page autour de « ${kw} » (title, H1, section dédiée dans le corps).`,
+    actRefineFor: (kw) => `Affiner la page pour « ${kw} » — resserrer le title et approfondir la section concernée.`,
+    actMissingTerms: (top, extra) => `Écrire du contenu couvrant les termes manquants : ${top}${extra ? ` (${extra})` : ''}.`,
+    actAddMetaDesc: 'Ajouter une meta description (~150 caractères) incluant les requêtes principales.',
+    actRewriteMeta: (top) => `Réécrire la meta description pour inclure : ${top}.`,
+    actMetaTooLong: (len) => `Meta description de ${len}ch — réduire sous 160ch pour éviter la troncature dans le SERP.`,
+    actMetaTooShort: (len) => `Meta description de seulement ${len}ch — étendre à ~120–155ch avec les mots-clés principaux.`,
+    actRewriteTitle: (top) => `Réécrire le title pour démarrer par : ${top}.`,
+    actSurfaceInH1: (top) => `Faire apparaître dans un H1 ou H2 : ${top}.`,
+    actThinPage: (w) => `Page trop courte (${w} mots). Étendre à 800–1200 mots couvrant les requêtes ci-dessus.`,
+    actMissingH1: 'La page n\'a pas de H1 — en ajouter un contenant la requête principale.',
+    actMultipleH1: (n) => `La page a ${n} H1 — ne garder qu\'un seul H1.`,
+    actTitleLength: (len) => `Title de ${len} caractères — hors de la plage idéale 30–60. À réécrire.`,
+    actInternalLinks: 'Renforcer le maillage interne depuis les pages connexes avec les mots-clés cibles en ancre.',
+    actInternalLinksAuth: 'Ajouter des liens internes depuis les pages à forte autorité avec les mots-clés cibles en ancre.',
+    actFallback: 'Rafraîchir le contenu, étendre la couverture thématique, renforcer le maillage interne avec des ancres ciblées.'
+  }
+};
+
+function tFor(lang) {
+  return PPT_I18N[lang] || PPT_I18N.en;
+}
+
+function deriveActions(r, lang) {
+  const T = tFor(lang || 'en');
   const actions = [];
   const cov = r.coverage && Array.isArray(r.coverage.queries) ? r.coverage : null;
   const crawl = r.crawl;
   const push = (priority, text) => actions.push({ priority, text });
   const rec = r.recommendation;
 
-  // Top-line strategic recommendation always leads the list.
   if (rec) {
     if (rec.type === 'create-landing' && rec.suggestedUrl) {
-      push('critical', `Create a dedicated landing page at ${rec.suggestedUrl} targeting "${r.bestQuery}".`);
+      push('critical', T.actCreateLanding(rec.suggestedUrl, r.bestQuery));
     } else if (rec.type === 'rewrite-expand') {
-      push('critical', `Rewrite this page around "${r.bestQuery}" (title, H1, dedicated section in the body).`);
+      push('critical', T.actRewriteAround(r.bestQuery));
     } else if (rec.type === 'optimize') {
-      push('important', `Refine this page for "${r.bestQuery}" — tighten the title and add depth to the relevant section.`);
+      push('important', T.actRefineFor(r.bestQuery));
     }
   }
 
@@ -4263,59 +4483,50 @@ function deriveActions(r) {
     const missing = cov.queries.filter(q => !q.presentSomewhere);
     if (missing.length) {
       const top = missing.slice(0, 5).map(q => q.query).join(', ');
-      push('critical', `Write content covering the missing terms: ${top}${missing.length > 5 ? ` (+${missing.length - 5} more)` : ''}.`);
+      push('critical', T.actMissingTerms(top, missing.length > 5 ? T.plusMore(missing.length - 5) : null));
     }
     if (cov.metaDescriptionLength === 0) {
-      push('critical', 'Add a meta description (~150 characters) that includes the top ranking queries.');
+      push('critical', T.actAddMetaDesc);
     } else {
       const notInMeta = cov.queries.filter(q => !q.phrase.inMetaDescription && q.presentSomewhere);
       if (notInMeta.length) {
         const top = notInMeta.slice(0, 2).map(q => q.query).join(' / ');
-        push('important', `Rewrite the meta description to include: ${top}.`);
+        push('important', T.actRewriteMeta(top));
       }
-      if (cov.metaDescriptionLength > 160) {
-        push('important', `Meta description is ${cov.metaDescriptionLength}ch — trim under 160ch to avoid SERP truncation.`);
-      } else if (cov.metaDescriptionLength < 70) {
-        push('important', `Meta description is only ${cov.metaDescriptionLength}ch — expand to ~120–155ch with the main keywords.`);
-      }
+      if (cov.metaDescriptionLength > 160) push('important', T.actMetaTooLong(cov.metaDescriptionLength));
+      else if (cov.metaDescriptionLength < 70) push('important', T.actMetaTooShort(cov.metaDescriptionLength));
     }
     const notInTitle = cov.queries.filter(q => !q.phrase.inTitle && q.presentSomewhere);
     if (notInTitle.length) {
       const top = notInTitle.slice(0, 2).map(q => q.query).join(' / ');
-      push('important', `Rewrite the page title to lead with: ${top}.`);
+      push('important', T.actRewriteTitle(top));
     }
     const notInH1 = cov.queries.filter(q => !q.phrase.inH1 && !q.phrase.inHeadings && q.phrase.bodyOccurrences > 0);
     if (notInH1.length) {
       const top = notInH1.slice(0, 2).map(q => q.query).join(' / ');
-      push('important', `Surface in an H1 or H2: ${top}.`);
+      push('important', T.actSurfaceInH1(top));
     }
-    if (cov.wordCount && cov.wordCount < 500) {
-      push('recommended', `Page is thin (${cov.wordCount} words). Expand to 800–1200 words covering the queries above.`);
-    }
+    if (cov.wordCount && cov.wordCount < 500) push('recommended', T.actThinPage(cov.wordCount));
   }
-  if (crawl && (!crawl.h1Count || crawl.h1Count === 0)) {
-    push('critical', 'Page has no H1 heading — add one that contains the main query.');
-  } else if (crawl && crawl.h1Count > 1) {
-    push('important', `Page has ${crawl.h1Count} H1s — keep a single H1.`);
-  }
+  if (crawl && (!crawl.h1Count || crawl.h1Count === 0)) push('critical', T.actMissingH1);
+  else if (crawl && crawl.h1Count > 1) push('important', T.actMultipleH1(crawl.h1Count));
+
   if (crawl && crawl.titleLength && (crawl.titleLength < 30 || crawl.titleLength > 65)) {
-    push('important', `Title length (${crawl.titleLength} ch) is outside the 30–60 sweet spot — rewrite it.`);
+    push('important', T.actTitleLength(crawl.titleLength));
   }
-  if (r.band.id === 'push' || r.band.id === 'striking') {
-    push('recommended', 'Boost internal links from related pages using the target keywords as anchor text.');
-  } else if (r.band.id === 'page2') {
-    push('recommended', 'Add internal links from high-authority pages with target-keyword anchors.');
-  }
-  if (!actions.length) {
-    push('recommended', 'Refresh content, expand topical coverage, and strengthen internal linking with target-keyword anchors.');
-  }
-  // Stable priority order: critical → important → recommended
+  if (r.band.id === 'push' || r.band.id === 'striking') push('recommended', T.actInternalLinks);
+  else if (r.band.id === 'page2') push('recommended', T.actInternalLinksAuth);
+
+  if (!actions.length) push('recommended', T.actFallback);
+
   const order = { critical: 0, important: 1, recommended: 2 };
   return actions.sort((a, b) => order[a.priority] - order[b.priority]);
 }
 
 async function exportStrategyPpt() {
   if (!csState.rows.length) { alert('Run a query first.'); return; }
+  const lang = (document.getElementById('csExportLang') || {}).value || 'en';
+  const T = tFor(lang);
   const bands = activeBandIds();
   const textFilter = (document.getElementById('csTextFilter').value || '').toLowerCase();
   const quickWinsOnly = !!document.getElementById('csQuickWins')?.checked;
@@ -4387,13 +4598,13 @@ async function exportStrategyPpt() {
   const totalQuickWins = allRows.filter(r => r.isQuickWin === true).length;
 
   const filterDescParts = [];
-  if (quickWinsOnly) filterDescParts.push('quick wins only');
-  if (textFilter) filterDescParts.push(`filter "${textFilter}"`);
+  if (quickWinsOnly) filterDescParts.push(T.filterQuickWins);
+  if (textFilter) filterDescParts.push(T.filterText(textFilter));
   if (bands.size < STRATEGY_BANDS.length) {
-    const labels = STRATEGY_BANDS.filter(b => bands.has(b.id)).map(b => b.label);
-    filterDescParts.push('bands: ' + labels.join(', '));
+    const labels = STRATEGY_BANDS.filter(b => bands.has(b.id)).map(b => T.band[b.id] || b.label);
+    filterDescParts.push(T.filterBands(labels.join(', ')));
   }
-  const filterDesc = filterDescParts.length ? filterDescParts.join(' · ') : 'no filters';
+  const filterDesc = filterDescParts.length ? filterDescParts.join(' · ') : T.noFilters;
 
   const cover = pptx.addSlide();
   cover.background = { color: '0F1117' };
@@ -4403,16 +4614,15 @@ async function exportStrategyPpt() {
   cover.addShape(pptx.ShapeType.rect, { x: 9.0, y: 0, w: 4.333, h: 7.5, fill: { color: '1A1D27' }, line: { type: 'none' } });
   cover.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.35, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
 
-  cover.addText('CONTENT STRATEGY', { x: 0.85, y: 0.55, w: 8, h: 0.4, fontSize: 12, bold: true, color: '8B8FA3', charSpacing: 6 });
+  cover.addText(T.contentStrategy, { x: 0.85, y: 0.55, w: 8, h: 0.4, fontSize: 12, bold: true, color: '8B8FA3', charSpacing: 6 });
   cover.addText(`+${totalPot.toLocaleString()}`, { x: 0.85, y: 1.05, w: 8, h: 2.2, fontSize: 110, bold: true, color: 'FFFFFF' });
-  cover.addText('estimated extra clicks per month if every opportunity reaches its target rank.',
+  cover.addText(T.heroSubtitle,
     { x: 0.85, y: 3.3, w: 8, h: 0.6, fontSize: 16, color: 'E0E2F4' });
 
-  // Sub-stats row (left, on dark)
   const subStats = [
-    { label: 'Opportunity pages', value: allRows.length.toLocaleString() },
-    { label: 'Total impressions',  value: totalImpr.toLocaleString() },
-    { label: 'Quick wins',         value: totalAnalysed ? totalQuickWins.toLocaleString() : '–' }
+    { label: T.opportunityPages, value: allRows.length.toLocaleString() },
+    { label: T.totalImpressions, value: totalImpr.toLocaleString() },
+    { label: T.quickWins,        value: totalAnalysed ? totalQuickWins.toLocaleString() : '–' }
   ];
   subStats.forEach((k, i) => {
     const x = 0.85 + i * 2.7;
@@ -4420,22 +4630,19 @@ async function exportStrategyPpt() {
     cover.addText(k.label, { x, y: 5.1, w: 2.4, h: 0.3, fontSize: 11, color: '8B8FA3', bold: true, charSpacing: 2 });
   });
 
-  // Right column — site context
-  cover.addText('AUDIT', { x: 9.25, y: 0.55, w: 4, h: 0.35, fontSize: 11, bold: true, color: '8B8FA3', charSpacing: 6 });
+  cover.addText(T.audit, { x: 9.25, y: 0.55, w: 4, h: 0.35, fontSize: 11, bold: true, color: '8B8FA3', charSpacing: 6 });
   cover.addText(siteUrl, { x: 9.25, y: 0.95, w: 4, h: 1.0, fontSize: 18, bold: true, color: 'FFFFFF' });
   cover.addText(`${startDate}  →  ${endDate}`, { x: 9.25, y: 1.95, w: 4, h: 0.35, fontSize: 12, color: 'E0E2F4' });
 
-  cover.addText('IN THIS DECK', { x: 9.25, y: 2.9, w: 4, h: 0.35, fontSize: 11, bold: true, color: '8B8FA3', charSpacing: 6 });
+  cover.addText(T.inThisDeck, { x: 9.25, y: 2.9, w: 4, h: 0.35, fontSize: 11, bold: true, color: '8B8FA3', charSpacing: 6 });
   cover.addText([
-    { text: `${rows.length} opportunity slide${rows.length === 1 ? '' : 's'}\n`, options: { bold: true, color: 'FFFFFF' } },
-    { text: `Filters: ${filterDesc}\n\n`, options: { color: 'E0E2F4', fontSize: 11 } },
-    { text: 'Each slide: current title / meta description / H1, ranking queries, on-page coverage gaps, prioritised actions.',
-      options: { color: 'E0E2F4', fontSize: 11 } }
-  ], { x: 9.25, y: 3.25, w: 4, h: 3.0, fontSize: 13 });
+    { text: T.deckIntro(rows.length) + '\n\n', options: { color: 'FFFFFF', fontSize: 12 } },
+    { text: T.filtersLabel(filterDesc), options: { color: 'E0E2F4', fontSize: 11 } }
+  ], { x: 9.25, y: 3.25, w: 4, h: 3.0, fontSize: 12 });
 
   // Footer brand bar
   cover.addShape(pptx.ShapeType.rect, { x: 0, y: 7.05, w: 13.333, h: 0.45, fill: { color: COLORS.primary }, line: { type: 'none' } });
-  cover.addText('Prepared by Converta  ·  seo.converta.ro', { x: 0.85, y: 7.13, w: 12, h: 0.3, fontSize: 10, color: 'FFFFFF', bold: true });
+  cover.addText(T.preparedBy, { x: 0.85, y: 7.13, w: 12, h: 0.3, fontSize: 10, color: 'FFFFFF', bold: true });
 
   // ── Summary slide: breakdown by band ───────────────────────────────────
   // Stats use the FULL csState.rows so all bands always show real numbers,
@@ -4443,11 +4650,10 @@ async function exportStrategyPpt() {
   const summary = pptx.addSlide();
   summary.background = { color: COLORS.bg };
   summary.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.35, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
-  summary.addText('Opportunities by band', { x: 0.7, y: 0.35, w: 12, h: 0.6, fontSize: 26, bold: true, color: COLORS.text });
-  summary.addText('Each band groups pages by the rank of their best opportunity query. Lower bands = easier wins.',
+  summary.addText(T.opportunitiesByBand, { x: 0.7, y: 0.35, w: 12, h: 0.6, fontSize: 26, bold: true, color: COLORS.text });
+  summary.addText(T.opportunitiesByBandDesc,
     { x: 0.7, y: 0.95, w: 12, h: 0.4, fontSize: 12, color: COLORS.muted });
 
-  // Precompute band stats + the max potential so we can scale the bar chart.
   const bandStats = STRATEGY_BANDS.map(band => {
     const inBand = allRows.filter(r => (r.bandIds || [r.band.id]).includes(band.id));
     const impr = inBand.reduce((s, r) => s + ((r.perBand && r.perBand[band.id] && r.perBand[band.id].impressions) || 0), 0);
@@ -4455,49 +4661,64 @@ async function exportStrategyPpt() {
     const inDeck = rows.filter(r => (r.bandIds || [r.band.id]).includes(band.id)).length;
     return { band, pages: inBand.length, impressions: impr, potential: pot, inDeck };
   });
-  const maxPot = Math.max(1, ...bandStats.map(s => s.potential));
 
+  // Left column: 5 compact band rows. Right column: donut chart showing the
+  // % of total potential clicks per band — clients grasp distribution
+  // instantly from the shape.
   bandStats.forEach((s, idx) => {
     const band = s.band;
-    const y = 1.55 + idx * 1.10;
+    const y = 1.55 + idx * 1.06;
     const bc = bandColor(band);
+    const bandLabel = T.band[band.id] || band.label;
 
-    summary.addShape(pptx.ShapeType.roundRect, { x: 0.7, y, w: 12.0, h: 0.95, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.12 });
-    summary.addShape(pptx.ShapeType.rect, { x: 0.7, y, w: 0.22, h: 0.95, fill: { color: bc }, line: { type: 'none' } });
-    summary.addText(band.label, { x: 1.05, y: y + 0.08, w: 3.3, h: 0.4, fontSize: 16, bold: true, color: COLORS.text });
-    summary.addText(`Positions ${band.min === 1.5 ? 2 : Math.ceil(band.min)}–${Math.floor(band.max)}  ·  target #${band.target}`,
-      { x: 1.05, y: y + 0.48, w: 3.3, h: 0.32, fontSize: 11, color: COLORS.muted });
+    summary.addShape(pptx.ShapeType.roundRect, { x: 0.7, y, w: 7.4, h: 0.92, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+    summary.addShape(pptx.ShapeType.rect, { x: 0.7, y, w: 0.22, h: 0.92, fill: { color: bc }, line: { type: 'none' } });
+    summary.addText(bandLabel, { x: 1.05, y: y + 0.08, w: 3.0, h: 0.36, fontSize: 14, bold: true, color: COLORS.text });
+    summary.addText(T.positionsRange(band.min === 1.5 ? 2 : Math.ceil(band.min), Math.floor(band.max), band.target),
+      { x: 1.05, y: y + 0.42, w: 3.0, h: 0.3, fontSize: 10, color: COLORS.muted });
 
-    // 3 stat blocks
-    summary.addText(s.pages.toLocaleString(), { x: 4.5, y: y + 0.10, w: 1.5, h: 0.55, fontSize: 22, bold: true, color: COLORS.text, align: 'center' });
-    summary.addText('pages', { x: 4.5, y: y + 0.62, w: 1.5, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'center' });
-    summary.addText(s.impressions.toLocaleString(), { x: 6.1, y: y + 0.10, w: 2.0, h: 0.55, fontSize: 22, bold: true, color: COLORS.text, align: 'center' });
-    summary.addText('impressions', { x: 6.1, y: y + 0.62, w: 2.0, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'center' });
-
-    // Horizontal bar chart for "+potential clicks" — scaled per band, max
-    // anchored to the largest band so the differences are visible.
-    const barTrackX = 8.25, barTrackW = 3.6, barH = 0.32;
-    summary.addShape(pptx.ShapeType.rect, { x: barTrackX, y: y + 0.36, w: barTrackW, h: barH, fill: { color: 'EEF0F6' }, line: { type: 'none' } });
-    const fillW = Math.max(0.04, (s.potential / maxPot) * barTrackW);
-    if (s.potential > 0) {
-      summary.addShape(pptx.ShapeType.rect, { x: barTrackX, y: y + 0.36, w: fillW, h: barH, fill: { color: bc }, line: { type: 'none' } });
-    }
-    summary.addText(`+${s.potential.toLocaleString()} clicks @ #${band.target}`, { x: barTrackX, y: y + 0.04, w: 3.6, h: 0.28, fontSize: 11, color: bc, bold: true });
-    if (s.pages > 0) {
-      summary.addText(`${s.inDeck} / ${s.pages} included in this deck`, { x: barTrackX, y: y + 0.7, w: 3.6, h: 0.25, fontSize: 9, color: s.inDeck === s.pages ? COLORS.success : COLORS.warning, italic: true });
-    }
+    summary.addText(s.pages.toLocaleString(),       { x: 4.1, y: y + 0.10, w: 1.0, h: 0.45, fontSize: 18, bold: true, color: COLORS.text, align: 'center' });
+    summary.addText(T.pagesLabel,                   { x: 4.1, y: y + 0.54, w: 1.0, h: 0.28, fontSize: 9,  color: COLORS.muted, align: 'center' });
+    summary.addText(s.impressions.toLocaleString(), { x: 5.15, y: y + 0.10, w: 1.5, h: 0.45, fontSize: 18, bold: true, color: COLORS.text, align: 'center' });
+    summary.addText(T.impressionsLabel,             { x: 5.15, y: y + 0.54, w: 1.5, h: 0.28, fontSize: 9,  color: COLORS.muted, align: 'center' });
+    summary.addText('+' + s.potential.toLocaleString(), { x: 6.7, y: y + 0.10, w: 1.35, h: 0.45, fontSize: 18, bold: true, color: COLORS.primary, align: 'center' });
+    summary.addText(T.extraClicksAt(band.target),       { x: 6.7, y: y + 0.54, w: 1.35, h: 0.28, fontSize: 9,  color: COLORS.muted, align: 'center' });
   });
 
-  summary.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
+  // Donut chart — potential clicks distribution
+  const donutData = [{
+    name: T.distributionByPotential,
+    labels: bandStats.map(s => T.band[s.band.id] || s.band.label),
+    values: bandStats.map(s => Math.max(1, s.potential))   // 1-min so empty bands still register
+  }];
+  const donutColors = bandStats.map(s => bandColor(s.band));
+  summary.addText(T.distributionByPotential, { x: 8.3, y: 1.4, w: 4.4, h: 0.35, fontSize: 12, bold: true, color: COLORS.text, align: 'center' });
+  summary.addChart(pptx.ChartType.doughnut, donutData, {
+    x: 8.3, y: 1.7, w: 4.4, h: 4.6,
+    chartColors: donutColors,
+    showLegend: true,
+    legendPos: 'b',
+    legendFontSize: 10,
+    legendColor: COLORS.text,
+    dataLabelFontSize: 10,
+    showPercent: true,
+    showValue: false,
+    showLabel: false,
+    dataLabelColor: 'FFFFFF',
+    dataLabelFontBold: true,
+    holeSize: 60
+  });
+
+  summary.addText(T.siteAndDates(siteUrl, startDate, endDate), { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
 
   // ── Strategy mix overview ─────────────────────────────────────────────
   // Three categories — Optimize / Rewrite & expand / Create landing page.
   // Each row sums up to a single recommended action; client immediately
   // sees the work split.
   const REC_TYPES = [
-    { id: 'optimize',         label: 'Optimize',                color: '16A34A', desc: 'Page is on-topic — refine title, content depth, internal links.' },
-    { id: 'rewrite-expand',   label: 'Rewrite & expand',        color: 'D97706', desc: 'Page partially relevant — meaningful content rework.' },
-    { id: 'create-landing',   label: 'Create new landing page', color: 'DC2626', desc: 'Page only tangentially related — needs a dedicated URL.' }
+    { id: 'optimize',         color: '16A34A' },
+    { id: 'rewrite-expand',   color: 'D97706' },
+    { id: 'create-landing',   color: 'DC2626' }
   ];
   const recAgg = {};
   REC_TYPES.forEach(t => recAgg[t.id] = { pages: 0, potential: 0, samples: [] });
@@ -4511,35 +4732,55 @@ async function exportStrategyPpt() {
   const mix = pptx.addSlide();
   mix.background = { color: COLORS.bg };
   mix.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.35, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
-  mix.addText('Strategy mix', { x: 0.7, y: 0.35, w: 12, h: 0.6, fontSize: 26, bold: true, color: COLORS.text });
-  mix.addText('Each opportunity falls into one of three actions. Use this to plan the work split with the team.',
+  mix.addText(T.strategyMix, { x: 0.7, y: 0.35, w: 12, h: 0.6, fontSize: 26, bold: true, color: COLORS.text });
+  mix.addText(T.strategyMixDesc,
     { x: 0.7, y: 0.95, w: 12, h: 0.4, fontSize: 12, color: COLORS.muted });
 
+  // Top half: donut chart visualising the work split by page count.
+  mix.addText(T.workSplit, { x: 0.7, y: 1.45, w: 5.5, h: 0.3, fontSize: 11, bold: true, color: COLORS.muted, charSpacing: 3 });
+  const mixChartData = [{
+    name: T.strategyMix,
+    labels: REC_TYPES.map(t => T.rec[t.id].label),
+    values: REC_TYPES.map(t => Math.max(1, recAgg[t.id].pages))
+  }];
+  mix.addChart(pptx.ChartType.doughnut, mixChartData, {
+    x: 0.7, y: 1.75, w: 5.4, h: 3.6,
+    chartColors: REC_TYPES.map(t => t.color),
+    showLegend: true,
+    legendPos: 'r',
+    legendFontSize: 11,
+    legendColor: COLORS.text,
+    showPercent: true,
+    showValue: false,
+    showLabel: false,
+    dataLabelColor: 'FFFFFF',
+    dataLabelFontSize: 11,
+    dataLabelFontBold: true,
+    holeSize: 60
+  });
+
+  // Right half: stacked cards with examples per recommendation type.
   REC_TYPES.forEach((t, idx) => {
-    const x = 0.7 + idx * 4.05;
+    const x = 6.4;
+    const y = 1.45 + idx * 1.85;
     const agg = recAgg[t.id];
-    const tint = t.id === 'optimize' ? 'E8F7EE' : (t.id === 'rewrite-expand' ? 'FEF1E3' : 'FCE9E9');
-    mix.addShape(pptx.ShapeType.roundRect, { x, y: 1.6, w: 3.85, h: 5.0, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.12 });
-    mix.addShape(pptx.ShapeType.rect, { x, y: 1.6, w: 3.85, h: 0.55, fill: { color: tint }, line: { type: 'none' } });
-    mix.addShape(pptx.ShapeType.rect, { x, y: 1.6, w: 3.85, h: 0.05, fill: { color: '#' + t.color }, line: { type: 'none' } });
-    mix.addText(t.label, { x: x + 0.2, y: 1.68, w: 3.5, h: 0.4, fontSize: 14, bold: true, color: '#' + t.color });
-    // Big numbers
-    mix.addText(agg.pages.toLocaleString(), { x: x + 0.2, y: 2.3, w: 3.5, h: 0.7, fontSize: 38, bold: true, color: COLORS.text });
-    mix.addText(`pages  ·  +${Math.round(agg.potential).toLocaleString()} potential clicks`,
-      { x: x + 0.2, y: 3.0, w: 3.5, h: 0.3, fontSize: 11, color: COLORS.muted, bold: true });
-    mix.addText(t.desc, { x: x + 0.2, y: 3.4, w: 3.5, h: 0.6, fontSize: 10, color: COLORS.text, italic: true });
+    const lab = T.rec[t.id];
+    mix.addShape(pptx.ShapeType.roundRect, { x, y, w: 6.3, h: 1.7, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+    mix.addShape(pptx.ShapeType.rect, { x, y, w: 0.18, h: 1.7, fill: { color: '#' + t.color }, line: { type: 'none' } });
+    mix.addText(lab.label, { x: x + 0.3, y: y + 0.08, w: 3.8, h: 0.35, fontSize: 14, bold: true, color: '#' + t.color });
+    mix.addText(agg.pages.toLocaleString() + '  ', { x: x + 4.0, y: y + 0.08, w: 2.2, h: 0.35, fontSize: 18, bold: true, color: COLORS.text, align: 'right' });
+    mix.addText(`+${Math.round(agg.potential).toLocaleString()}`, { x: x + 0.3, y: y + 0.42, w: 5.8, h: 0.3, fontSize: 11, bold: true, color: COLORS.primary });
+    mix.addText(lab.desc, { x: x + 0.3, y: y + 0.72, w: 5.9, h: 0.28, fontSize: 9, color: COLORS.muted, italic: true });
     // Sample pages
     if (agg.samples.length) {
-      mix.addText('EXAMPLES', { x: x + 0.2, y: 4.1, w: 3.5, h: 0.25, fontSize: 9, bold: true, color: COLORS.muted, charSpacing: 3 });
-      agg.samples.forEach((sr, i) => {
-        const sy = 4.35 + i * 0.75;
-        mix.addText(trunc(sr.page, 55), { x: x + 0.2, y: sy, w: 3.5, h: 0.28, fontSize: 9, bold: true, color: COLORS.text, hyperlink: { url: sr.page } });
-        mix.addText(`"${trunc(sr.bestQuery || '', 36)}"  @ rank ${sr.bestQueryPosition.toFixed(1)}  ·  +${Math.round(sr.potentialClicks).toLocaleString()} clicks`,
-          { x: x + 0.2, y: sy + 0.28, w: 3.5, h: 0.30, fontSize: 9, color: COLORS.muted });
-      });
+      const examples = agg.samples.slice(0, 2).map(sr =>
+        `${trunc(sr.page.replace(/^https?:\/\//, ''), 38)}  ·  "${trunc(sr.bestQuery || '', 26)}"  →  +${Math.round(sr.potentialClicks).toLocaleString()}`
+      ).join('\n');
+      mix.addText(examples, { x: x + 0.3, y: y + 1.05, w: 5.9, h: 0.62, fontSize: 9, color: COLORS.text });
     }
   });
-  mix.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
+
+  mix.addText(T.siteAndDates(siteUrl, startDate, endDate), { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
 
   // ── Top opportunities ─────────────────────────────────────────────────
   // A separate "punch list" slide of the 5 highest-impact rows so the
@@ -4549,8 +4790,8 @@ async function exportStrategyPpt() {
     const tw = pptx.addSlide();
     tw.background = { color: COLORS.bg };
     tw.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.35, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
-    tw.addText('Top 5 opportunities', { x: 0.7, y: 0.35, w: 12, h: 0.6, fontSize: 26, bold: true, color: COLORS.text });
-    tw.addText('Highest estimated extra-clicks if pushed to target rank. Start here.',
+    tw.addText(T.topOpportunitiesTitle, { x: 0.7, y: 0.35, w: 12, h: 0.6, fontSize: 26, bold: true, color: COLORS.text });
+    tw.addText(T.topOpportunitiesDesc,
       { x: 0.7, y: 0.95, w: 12, h: 0.4, fontSize: 12, color: COLORS.muted });
 
     topRows.forEach((r, idx) => {
@@ -4566,20 +4807,19 @@ async function exportStrategyPpt() {
       // URL + best query
       tw.addText(trunc(r.page, 75), { x: 1.75, y: y + 0.1, w: 7.5, h: 0.4, fontSize: 13, bold: true, color: COLORS.primaryDark, hyperlink: { url: r.page } });
       const bestLine = r.bestQuery
-        ? `Best query: "${r.bestQuery}" @ rank ${r.bestQueryPosition.toFixed(1)} · ${r.bestQueryImpressions.toLocaleString()} impressions`
+        ? `${T.bestQueryShort(r.bestQueryPosition)} · "${r.bestQuery}" · ${r.bestQueryImpressions.toLocaleString()} ${T.impressionsLabel}`
         : '';
       tw.addText(bestLine, { x: 1.75, y: y + 0.5, w: 7.5, h: 0.4, fontSize: 11, color: COLORS.muted });
 
       // Potential clicks big
       tw.addText('+' + Math.round(r.potentialClicks).toLocaleString(), { x: 9.5, y: y + 0.12, w: 1.8, h: 0.55, fontSize: 24, bold: true, color: COLORS.primary, align: 'right' });
-      tw.addText(`@ rank #${r.targetPos}`, { x: 9.5, y: y + 0.62, w: 1.8, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'right' });
+      tw.addText(`@ #${r.targetPos}`, { x: 9.5, y: y + 0.62, w: 1.8, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'right' });
 
-      // Band pill
       tw.addShape(pptx.ShapeType.roundRect, { x: 11.45, y: y + 0.3, w: 1.15, h: 0.35, fill: { color: bc }, line: { type: 'none' }, rectRadius: 0.18 });
-      tw.addText(r.band.label, { x: 11.45, y: y + 0.3, w: 1.15, h: 0.35, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
+      tw.addText(T.band[r.band.id] || r.band.label, { x: 11.45, y: y + 0.3, w: 1.15, h: 0.35, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
     });
 
-    tw.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
+    tw.addText(T.siteAndDates(siteUrl, startDate, endDate), { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
   }
 
   // ── Per-opportunity slides ─────────────────────────────────────────────
@@ -4596,74 +4836,65 @@ async function exportStrategyPpt() {
     // Slim accent on top + dark header strip with band pill
     s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.12, fill: { color: bc }, line: { type: 'none' } });
     s.addShape(pptx.ShapeType.rect, { x: 0, y: 0.12, w: 13.333, h: 0.6, fill: { color: '0F1117' }, line: { type: 'none' } });
-    s.addText(`OPPORTUNITY ${idx + 1} / ${rows.length}`,
+    s.addText(T.opportunityHeader(idx + 1, rows.length),
       { x: 0.6, y: 0.22, w: 4, h: 0.35, fontSize: 11, color: '8B8FA3', bold: true, charSpacing: 4 });
-    // Band pill
     s.addShape(pptx.ShapeType.roundRect, { x: 4.6, y: 0.22, w: 2.0, h: 0.35, fill: { color: bc }, line: { type: 'none' }, rectRadius: 0.17 });
-    s.addText(r.band.label, { x: 4.6, y: 0.22, w: 2.0, h: 0.35, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
-    s.addText(`Best query @ #${r.bestQueryPosition.toFixed(1)}  ·  Target #${r.targetPos}`,
+    s.addText(T.band[r.band.id] || r.band.label, { x: 4.6, y: 0.22, w: 2.0, h: 0.35, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
+    s.addText(`${T.bestQueryShort(r.bestQueryPosition)}  ·  ${T.targetShort(r.targetPos)}`,
       { x: 6.7, y: 0.22, w: 4.7, h: 0.35, fontSize: 11, color: 'E0E2F4' });
     if (r.isQuickWin) {
       s.addShape(pptx.ShapeType.roundRect, { x: 11.55, y: 0.22, w: 1.55, h: 0.35, fill: { color: COLORS.success }, line: { type: 'none' }, rectRadius: 0.17 });
-      s.addText('⚡ Quick win', { x: 11.55, y: 0.22, w: 1.55, h: 0.35, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
+      s.addText('⚡ ' + T.quickWinBadge, { x: 11.55, y: 0.22, w: 1.55, h: 0.35, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
     }
 
-    // URL + crawl/live title + best-opportunity caption
-    const truncatedUrl = trunc(r.page, 95);
-    s.addText(truncatedUrl, { x: 0.6, y: 0.78, w: 12.1, h: 0.42, fontSize: 16, bold: true, color: COLORS.primaryDark, hyperlink: { url: r.page } });
+    // URL + page title (one line)
+    const truncatedUrl = trunc(r.page, 105);
+    s.addText(truncatedUrl, { x: 0.6, y: 0.78, w: 12.1, h: 0.40, fontSize: 15, bold: true, color: COLORS.primaryDark, hyperlink: { url: r.page } });
     const pageTitle = (cov && cov.title) || (r.crawl && r.crawl.title) || '';
     if (pageTitle) {
-      s.addText(pageTitle, { x: 0.6, y: 1.18, w: 12.1, h: 0.28, fontSize: 11, color: COLORS.muted, italic: true });
-    }
-    if (r.bestQuery) {
-      s.addText([
-        { text: 'Best opportunity:  ', options: { color: COLORS.muted } },
-        { text: `"${r.bestQuery}"`,    options: { color: bc, bold: true } },
-        { text: `  @ rank ${r.bestQueryPosition.toFixed(1)} · ${r.bestQueryImpressions.toLocaleString()} impressions${r.qualifyingCount > 1 ? ` · +${r.qualifyingCount - 1} more ranking queries` : ''}`,
-          options: { color: COLORS.text } }
-      ], { x: 0.6, y: pageTitle ? 1.46 : 1.18, w: 12.1, h: 0.3, fontSize: 11 });
+      s.addText(pageTitle, { x: 0.6, y: 1.16, w: 12.1, h: 0.26, fontSize: 11, color: COLORS.muted, italic: true });
     }
 
-    // ── Strategic recommendation banner — the headline of every slide.
+    // ── Strategic recommendation banner — headline of every slide.
     const rec = r.recommendation;
     if (rec) {
       const recColor = '#' + rec.color;
-      // Soft tint background to make the banner pop without overpowering.
       const tint = rec.type === 'optimize'       ? 'E8F7EE'
                  : rec.type === 'rewrite-expand' ? 'FEF1E3'
-                 : /* create-landing */            'FCE9E9';
-      s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 1.65, w: 12.13, h: 0.85, fill: { color: tint }, line: { color: recColor, width: 1 }, rectRadius: 0.12 });
-      // Left coloured rail
-      s.addShape(pptx.ShapeType.rect, { x: 0.6, y: 1.65, w: 0.18, h: 0.85, fill: { color: recColor }, line: { type: 'none' } });
-      s.addText('STRATEGY', { x: 0.92, y: 1.73, w: 1.5, h: 0.25, fontSize: 9, bold: true, color: recColor, charSpacing: 4 });
-      s.addText(rec.label, { x: 0.92, y: 1.96, w: 5.5, h: 0.4, fontSize: 18, bold: true, color: recColor });
-      s.addText(rec.reason, { x: 6.5, y: 1.78, w: 6.3, h: 0.66, fontSize: 10, color: COLORS.text });
+                 :                                  'FCE9E9';
+      const recLabel  = (T.rec[rec.type] && T.rec[rec.type].label)  || rec.label;
+      const recReason = (T.rec[rec.type] && T.rec[rec.type].reason) || rec.reason;
+      s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 1.52, w: 12.13, h: 0.95, fill: { color: tint }, line: { color: recColor, width: 1 }, rectRadius: 0.12 });
+      s.addShape(pptx.ShapeType.rect, { x: 0.6, y: 1.52, w: 0.18, h: 0.95, fill: { color: recColor }, line: { type: 'none' } });
+      s.addText(T.strategy, { x: 0.92, y: 1.58, w: 1.6, h: 0.25, fontSize: 9, bold: true, color: recColor, charSpacing: 4 });
+      s.addText(recLabel, { x: 0.92, y: 1.82, w: 5.5, h: 0.4, fontSize: 17, bold: true, color: recColor });
+      s.addText(recReason, { x: 6.5, y: 1.62, w: 6.3, h: 0.6, fontSize: 10, color: COLORS.text });
       if (rec.type === 'create-landing' && rec.suggestedUrl) {
-        s.addShape(pptx.ShapeType.rect, { x: 6.5, y: 2.15, w: 6.13, h: 0.30, fill: { color: 'FFFFFF' }, line: { color: COLORS.border, width: 0.5 } });
+        s.addShape(pptx.ShapeType.rect, { x: 6.5, y: 2.18, w: 6.13, h: 0.25, fill: { color: 'FFFFFF' }, line: { color: COLORS.border, width: 0.5 } });
         s.addText([
-          { text: 'Suggested URL  ', options: { color: COLORS.muted, fontSize: 9, bold: true } },
-          { text: trunc(rec.suggestedUrl, 80),     options: { color: recColor,   fontSize: 10, bold: true } }
-        ], { x: 6.6, y: 2.16, w: 5.9, h: 0.28 });
+          { text: T.suggestedUrl + '  ', options: { color: COLORS.muted, fontSize: 9, bold: true } },
+          { text: trunc(rec.suggestedUrl, 78), options: { color: recColor, fontSize: 10, bold: true } }
+        ], { x: 6.6, y: 2.19, w: 5.9, h: 0.23 });
       }
     }
 
-    // Metric tiles (slightly compressed to make room for the banner above)
+    // Metric tiles
     const metrics = [
-      { label: 'Impressions',                value: r.impressions.toLocaleString(),                color: COLORS.text },
-      { label: 'Clicks',                     value: r.clicks.toLocaleString(),                     color: COLORS.text },
-      { label: 'CTR',                        value: (r.ctr * 100).toFixed(2) + '%',                color: COLORS.text },
-      { label: `Potential @ rank ${r.targetPos}`, value: '+' + Math.round(r.potentialClicks).toLocaleString(), color: COLORS.primary, accent: true }
+      { label: T.impressions,                  value: r.impressions.toLocaleString(),                color: COLORS.text },
+      { label: T.clicks,                       value: r.clicks.toLocaleString(),                     color: COLORS.text },
+      { label: T.ctr,                          value: (r.ctr * 100).toFixed(2) + '%',                color: COLORS.text },
+      { label: T.potentialAtRank(r.targetPos), value: '+' + Math.round(r.potentialClicks).toLocaleString(), color: COLORS.primary, accent: true }
     ];
     metrics.forEach((m, i) => {
       const x = 0.6 + i * 3.15;
-      s.addShape(pptx.ShapeType.roundRect, { x, y: 2.65, w: 2.95, h: 0.75, fill: { color: m.accent ? COLORS.panelAccent : COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
-      s.addText(m.label, { x: x + 0.15, y: 2.70, w: 2.7, h: 0.25, fontSize: 9, color: COLORS.muted, bold: true });
-      s.addText(m.value, { x: x + 0.15, y: 2.93, w: 2.7, h: 0.45, fontSize: 18, bold: true, color: m.color });
+      s.addShape(pptx.ShapeType.roundRect, { x, y: 2.62, w: 2.95, h: 0.72, fill: { color: m.accent ? COLORS.panelAccent : COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+      s.addText(m.label, { x: x + 0.15, y: 2.66, w: 2.7, h: 0.25, fontSize: 9, color: COLORS.muted, bold: true });
+      s.addText(m.value, { x: x + 0.15, y: 2.88, w: 2.7, h: 0.43, fontSize: 18, bold: true, color: m.color });
     });
 
-    // ── Left column: CURRENT PAGE (title/meta/H1/words) + coverage chips
-    s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 3.55, w: 6.1, h: 3.4, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
-    s.addText('Current page', { x: 0.78, y: 3.62, w: 5.9, h: 0.3, fontSize: 12, bold: true, color: COLORS.text });
+    // ── Left column: CURRENT PAGE
+    s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 3.48, w: 6.1, h: 3.45, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+    s.addText(T.currentPage, { x: 0.78, y: 3.55, w: 5.9, h: 0.3, fontSize: 12, bold: true, color: COLORS.text });
 
     // TITLE — distinguish three cases: analysed-and-present (green/amber
     // by length), analysed-and-absent (red "missing"), and not-analysed
@@ -4685,15 +4916,15 @@ async function exportStrategyPpt() {
       ? ((titleLen >= 30 && titleLen <= 60) ? COLORS.success : COLORS.warning)
       : (titleStatus === 'missing' ? COLORS.danger : COLORS.muted);
     const titleLenLabel = titleStatus === 'present' ? `${titleLen}ch`
-                       : (titleStatus === 'missing' ? 'missing' : '(not analysed)');
+                       : (titleStatus === 'missing' ? T.titleMissingLabel : T.notAnalysedShort);
     s.addText([
-      { text: 'TITLE', options: { fontSize: 9, color: COLORS.muted, bold: true } },
+      { text: T.title, options: { fontSize: 9, color: COLORS.muted, bold: true } },
       { text: `  ${titleLenLabel}`, options: { fontSize: 9, color: titleLenColor, bold: true } }
-    ], { x: 0.78, y: 3.92, w: 5.9, h: 0.22 });
+    ], { x: 0.78, y: 3.85, w: 5.9, h: 0.22 });
     const titleBody = liveTitle
       ? liveTitle
-      : (titleStatus === 'missing' ? '(no <title> tag on page)' : '(not analysed — click "Analyse keyword coverage" in the tool)');
-    s.addText(titleBody, { x: 0.78, y: 4.10, w: 5.9, h: 0.30, fontSize: 10,
+      : (titleStatus === 'missing' ? T.noTitleTag : T.notAnalysedHint);
+    s.addText(titleBody, { x: 0.78, y: 4.03, w: 5.9, h: 0.30, fontSize: 10,
       color: liveTitle ? COLORS.text : (titleStatus === 'missing' ? COLORS.danger : COLORS.muted),
       italic: !liveTitle });
 
@@ -4710,15 +4941,15 @@ async function exportStrategyPpt() {
       ? (metaLen >= 70 && metaLen <= 160 ? COLORS.success : COLORS.warning)
       : (metaStatus === 'missing' ? COLORS.danger : COLORS.muted);
     const metaLenLabel = metaStatus === 'present' ? `${metaLen}ch`
-                     : (metaStatus === 'missing' ? 'missing' : '(not analysed)');
+                     : (metaStatus === 'missing' ? T.titleMissingLabel : T.notAnalysedShort);
     s.addText([
-      { text: 'META DESCRIPTION', options: { fontSize: 9, color: COLORS.muted, bold: true } },
+      { text: T.metaDescription, options: { fontSize: 9, color: COLORS.muted, bold: true } },
       { text: `  ${metaLenLabel}`, options: { fontSize: 9, color: metaLenColor, bold: true } }
-    ], { x: 0.78, y: 4.45, w: 5.9, h: 0.22 });
+    ], { x: 0.78, y: 4.40, w: 5.9, h: 0.22 });
     const metaBody = metaText
       ? metaText
-      : (metaStatus === 'missing' ? '(no meta description — Google will auto-generate one)' : '(not analysed — click "Analyse keyword coverage" in the tool)');
-    s.addText(metaBody, { x: 0.78, y: 4.63, w: 5.9, h: 0.55, fontSize: 10,
+      : (metaStatus === 'missing' ? T.noMetaDesc : T.notAnalysedHint);
+    s.addText(metaBody, { x: 0.78, y: 4.58, w: 5.9, h: 0.55, fontSize: 10,
       color: metaText ? COLORS.text : (metaStatus === 'missing' ? COLORS.danger : COLORS.muted),
       italic: !metaText });
 
@@ -4737,16 +4968,16 @@ async function exportStrategyPpt() {
     const h1Color = h1Status === 'present'
       ? (h1Count === 1 ? COLORS.success : COLORS.warning)
       : (h1Status === 'missing' ? COLORS.danger : COLORS.muted);
-    const h1Label = h1Status === 'present' ? `${h1Count} H1${h1Count === 1 ? '' : 's'}`
-                : (h1Status === 'missing' ? 'no H1' : '(not analysed)');
+    const h1Label = h1Status === 'present' ? T.h1Count(h1Count)
+                : (h1Status === 'missing' ? T.noH1Label : T.notAnalysedShort);
     s.addText([
-      { text: 'H1', options: { fontSize: 9, color: COLORS.muted, bold: true } },
+      { text: T.h1Label, options: { fontSize: 9, color: COLORS.muted, bold: true } },
       { text: `  ${h1Label}`, options: { fontSize: 9, color: h1Color, bold: true } }
-    ], { x: 0.78, y: 5.23, w: 5.9, h: 0.22 });
+    ], { x: 0.78, y: 5.20, w: 5.9, h: 0.22 });
     const h1Body = liveH1
       ? liveH1
-      : (h1Status === 'missing' ? '(no H1 heading on page)' : '(not analysed — click "Analyse keyword coverage" in the tool)');
-    s.addText(h1Body, { x: 0.78, y: 5.41, w: 5.9, h: 0.32, fontSize: 10,
+      : (h1Status === 'missing' ? T.noH1 : T.notAnalysedHint);
+    s.addText(h1Body, { x: 0.78, y: 5.38, w: 5.9, h: 0.32, fontSize: 10,
       color: liveH1 ? COLORS.text : (h1Status === 'missing' ? COLORS.danger : COLORS.muted),
       italic: !liveH1 });
 
@@ -4759,88 +4990,72 @@ async function exportStrategyPpt() {
       const inB = cov.queries.filter(q => q.phrase.bodyOccurrences > 0).length;
       const tone = (n) => n === 0 ? COLORS.danger : (n < total / 2 ? COLORS.warning : COLORS.success);
 
-      s.addText(`${cov.wordCount.toLocaleString()} words on the live page  ·  ${total} queries analysed`,
-        { x: 0.78, y: 5.77, w: 5.9, h: 0.22, fontSize: 9, color: COLORS.muted, italic: true });
+      s.addText(T.wordsOnLive(cov.wordCount, total),
+        { x: 0.78, y: 5.74, w: 5.9, h: 0.22, fontSize: 9, color: COLORS.muted, italic: true });
 
       const stats = [
-        { label: 'title', n: inT },
-        { label: 'meta',  n: inM },
-        { label: 'H1',    n: inH1c },
-        { label: 'body',  n: inB }
+        { label: T.statIn.title, n: inT },
+        { label: T.statIn.meta,  n: inM },
+        { label: T.statIn.H1,    n: inH1c },
+        { label: T.statIn.body,  n: inB }
       ];
       stats.forEach((st, i) => {
         const sx = 0.78 + i * 1.42;
-        s.addShape(pptx.ShapeType.roundRect, { x: sx, y: 6.05, w: 1.32, h: 0.80, fill: { color: 'FFFFFF' }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.06 });
-        s.addText(`${st.n}/${total}`, { x: sx, y: 6.10, w: 1.32, h: 0.38, fontSize: 15, bold: true, color: tone(st.n), align: 'center' });
-        s.addText('in ' + st.label, { x: sx, y: 6.50, w: 1.32, h: 0.32, fontSize: 9, color: COLORS.muted, align: 'center' });
+        s.addShape(pptx.ShapeType.roundRect, { x: sx, y: 5.98, w: 1.32, h: 0.80, fill: { color: 'FFFFFF' }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.06 });
+        s.addText(`${st.n}/${total}`, { x: sx, y: 6.02, w: 1.32, h: 0.36, fontSize: 15, bold: true, color: tone(st.n), align: 'center' });
+        s.addText(st.label, { x: sx, y: 6.40, w: 1.32, h: 0.32, fontSize: 9, color: COLORS.muted, align: 'center' });
       });
     } else {
-      s.addText('Click the "Analyse keyword coverage" button above the opportunity table to populate live-page data here.',
+      s.addText(T.runAnalysisHint,
         { x: 0.78, y: 5.8, w: 5.9, h: 0.45, fontSize: 10, color: COLORS.muted, italic: true });
     }
 
-    // ── Right column: ACTION ITEMS (priority-coded)
-    s.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 3.55, w: 5.88, h: 1.95, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
-    s.addText('Action items', { x: 7.03, y: 3.62, w: 5.6, h: 0.30, fontSize: 12, bold: true, color: COLORS.text });
-    const actions = deriveActions(r);
-    const actionLines = actions.slice(0, 6).map(a => ({
-      text: `[${priorityLabel(a.priority).toUpperCase()}] ${a.text}`,
+    // ── Right column: ACTION ITEMS (priority-coded) — top half
+    s.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 3.48, w: 5.88, h: 1.65, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+    s.addText(T.actionItems, { x: 7.03, y: 3.55, w: 5.6, h: 0.28, fontSize: 11, bold: true, color: COLORS.text });
+    const actions = deriveActions(r, lang);
+    const actionLines = actions.slice(0, 4).map(a => ({
+      text: `[${T.priority[a.priority]}] ${a.text}`,
       options: { color: priorityColor(a.priority), bullet: { code: '25CF' }, breakLine: true, bold: a.priority === 'critical' }
     }));
-    s.addText(actionLines, { x: 7.03, y: 3.94, w: 5.6, h: 1.50, fontSize: 9, paraSpaceAfter: 4, color: COLORS.text });
+    s.addText(actionLines, { x: 7.03, y: 3.84, w: 5.6, h: 1.25, fontSize: 9, paraSpaceAfter: 3, color: COLORS.text });
 
-    // ── Bottom right: MISSING QUERIES highlight
-    s.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 5.60, w: 5.88, h: 1.35, fill: { color: 'FFF5F5' }, line: { color: COLORS.danger, width: 0.75 }, rectRadius: 0.1 });
-    if (cov) {
-      const missing = cov.queries.filter(q => !q.presentSomewhere);
-      const missingImpr = missing.reduce((sum, q) => {
-        const t = (r.topQueries || []).find(x => x.query === q.query);
-        return sum + (t ? t.impressions : 0);
-      }, 0);
-      s.addText(`Missing on this page  ·  ${missing.length} ${missing.length === 1 ? 'query' : 'queries'}  ·  ${missingImpr.toLocaleString()} impressions`,
-        { x: 7.03, y: 5.66, w: 5.6, h: 0.28, fontSize: 11, bold: true, color: COLORS.danger });
-      if (missing.length) {
-        const list = missing.slice(0, 8).map(q => q.query).join('   ·   ');
-        s.addText(list + (missing.length > 8 ? `   ·   +${missing.length - 8} more` : ''),
-          { x: 7.03, y: 5.96, w: 5.6, h: 0.92, fontSize: 9, color: COLORS.text });
-      } else {
-        s.addText('Every ranking query already appears somewhere on the page. Focus on titles, H1 and internal linking.',
-          { x: 7.03, y: 5.98, w: 5.6, h: 0.88, fontSize: 10, color: COLORS.text, italic: true });
-      }
-    } else {
-      s.addText('Missing-keywords analysis not run yet.', { x: 7.03, y: 6.05, w: 5.6, h: 0.5, fontSize: 10, color: COLORS.muted, italic: true });
-    }
+    // ── Right column: TOP RANKING QUERIES TABLE — bottom half (replaces
+    //   the second slide we used to generate; client gets the data inline.)
+    const topQ = Array.isArray(r.topQueries) ? r.topQueries.slice(0, 6) : [];
+    const coverageByQuery = {};
+    if (cov) for (const q of cov.queries) coverageByQuery[q.query] = q;
 
-    // Footer
-    s.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.6, y: 7.12, w: 12.1, h: 0.3, fontSize: 9, color: COLORS.muted });
-
-    // ── Second slide per opportunity: top queries detail table ─────────
-    // Skip if no queries fetched yet (user didn't expand row or run bulk).
-    const topQ = Array.isArray(r.topQueries) ? r.topQueries.slice(0, 12) : [];
     if (topQ.length) {
-      const d = pptx.addSlide();
-      d.background = { color: COLORS.bg };
-      d.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.55, fill: { color: bc }, line: { type: 'none' } });
-      d.addText(`${idx + 1} / ${rows.length}   ${r.band.label}  ·  Queries detail`, { x: 0.6, y: 0.1, w: 12, h: 0.4, fontSize: 13, color: 'FFFFFF', bold: true });
-      d.addText(trunc(r.page, 110), { x: 0.6, y: 0.75, w: 12.1, h: 0.4, fontSize: 14, bold: true, color: COLORS.primaryDark, hyperlink: { url: r.page } });
+      // Tiny header with missing-count callout to preserve the signal we used to
+      // dedicate a red panel to.
+      let missingCount = 0, missingImpr = 0;
+      if (cov) {
+        const missing = cov.queries.filter(q => !q.presentSomewhere);
+        missingCount = missing.length;
+        missingImpr = missing.reduce((sum, q) => {
+          const t = (r.topQueries || []).find(x => x.query === q.query);
+          return sum + (t ? t.impressions : 0);
+        }, 0);
+      }
+      s.addText([
+        { text: T.topRankingQueries, options: { bold: true, color: COLORS.text } },
+        { text: missingCount ? `   ·   ${T.missingOnPage(missingCount, missingImpr)}` : (cov ? `   ·   ${T.allCovered}` : ''),
+          options: { color: missingCount ? COLORS.danger : COLORS.muted, italic: !missingCount } }
+      ], { x: 7.03, y: 5.20, w: 5.6, h: 0.28, fontSize: 10 });
 
-      const coverageByQuery = {};
-      if (cov) for (const q of cov.queries) coverageByQuery[q.query] = q;
-
-      const headerStyle = { bold: true, fill: { color: COLORS.panelAccent }, color: COLORS.text, fontSize: 11 };
+      const headerStyle = { bold: true, fill: { color: COLORS.panelAccent }, color: COLORS.text, fontSize: 9 };
       const tHeader = [
-        { text: 'Query', options: headerStyle },
-        { text: 'Impressions', options: { ...headerStyle, align: 'right' } },
-        { text: 'Clicks',      options: { ...headerStyle, align: 'right' } },
-        { text: 'CTR',         options: { ...headerStyle, align: 'right' } },
-        { text: 'Position',    options: { ...headerStyle, align: 'right' } },
-        { text: 'In page?',    options: headerStyle }
+        { text: T.query,         options: headerStyle },
+        { text: T.impr,          options: { ...headerStyle, align: 'right' } },
+        { text: T.pos,           options: { ...headerStyle, align: 'right' } },
+        { text: T.inPage,        options: headerStyle }
       ];
       const tRows = topQ.map(q => {
         const c = coverageByQuery[q.query];
         let where, whereColor = COLORS.muted;
         if (c) {
-          if (!c.presentSomewhere) { where = 'MISSING'; whereColor = COLORS.danger; }
+          if (!c.presentSomewhere) { where = (T.titleMissingLabel || 'missing').toUpperCase(); whereColor = COLORS.danger; }
           else {
             const parts = [];
             if (c.phrase.inTitle) parts.push('title');
@@ -4851,49 +5066,49 @@ async function exportStrategyPpt() {
             where = parts.join(' · ');
             whereColor = COLORS.success;
           }
-        } else where = '(not analysed)';
+        } else where = T.notAnalysedShort;
         return [
-          { text: trunc(q.query, 60), options: { fontSize: 10 } },
-          { text: q.impressions.toLocaleString(), options: { fontSize: 10, align: 'right' } },
-          { text: q.clicks.toLocaleString(), options: { fontSize: 10, align: 'right' } },
-          { text: (q.ctr * 100).toFixed(2) + '%', options: { fontSize: 10, align: 'right' } },
-          { text: q.position.toFixed(1), options: { fontSize: 10, align: 'right' } },
-          { text: where, options: { fontSize: 10, color: whereColor, bold: !c || !c.presentSomewhere } }
+          { text: trunc(q.query, 40), options: { fontSize: 9 } },
+          { text: q.impressions.toLocaleString(), options: { fontSize: 9, align: 'right' } },
+          { text: q.position.toFixed(1), options: { fontSize: 9, align: 'right' } },
+          { text: where, options: { fontSize: 9, color: whereColor, bold: !c || !c.presentSomewhere } }
         ];
       });
-      d.addTable([tHeader, ...tRows], {
-        x: 0.6, y: 1.35, w: 12.1, colW: [4.4, 1.4, 1.1, 1.1, 1.2, 2.9],
+      s.addTable([tHeader, ...tRows], {
+        x: 6.85, y: 5.45, w: 5.88, colW: [2.6, 0.9, 0.6, 1.78],
         fontFace: 'Calibri', color: COLORS.text,
-        border: { type: 'solid', color: COLORS.border, pt: 0.5 },
-        rowH: 0.32
+        border: { type: 'solid', color: COLORS.border, pt: 0.4 },
+        rowH: 0.21
       });
-      d.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.6, y: 7.12, w: 12.1, h: 0.3, fontSize: 9, color: COLORS.muted });
+    } else {
+      s.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 5.20, w: 5.88, h: 1.75, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+      s.addText(T.missingNotRun, { x: 7.03, y: 5.9, w: 5.6, h: 0.4, fontSize: 10, color: COLORS.muted, italic: true, align: 'center' });
     }
+
+    s.addText(T.siteAndDates(siteUrl, startDate, endDate), { x: 0.6, y: 7.12, w: 12.1, h: 0.3, fontSize: 9, color: COLORS.muted });
   }
 
   // ── Closing methodology slide ────────────────────────────────────────
   const m = pptx.addSlide();
   m.background = { color: COLORS.bg };
   m.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.35, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
-  m.addText('How to read this deck', { x: 0.7, y: 0.4, w: 12, h: 0.6, fontSize: 24, bold: true, color: COLORS.text });
-  m.addText('A quick reference for what each metric means and how the numbers were computed.',
+  m.addText(T.methodologyTitle, { x: 0.7, y: 0.4, w: 12, h: 0.6, fontSize: 24, bold: true, color: COLORS.text });
+  m.addText(T.methodologyDesc,
     { x: 0.7, y: 1.0, w: 12, h: 0.4, fontSize: 12, color: COLORS.muted });
 
-  // Bands legend
-  m.addText('OPPORTUNITY BANDS', { x: 0.7, y: 1.6, w: 12, h: 0.3, fontSize: 11, bold: true, color: COLORS.muted, charSpacing: 4 });
+  m.addText(T.opportunityBandsHeader, { x: 0.7, y: 1.6, w: 12, h: 0.3, fontSize: 11, bold: true, color: COLORS.muted, charSpacing: 4 });
   STRATEGY_BANDS.forEach((b, i) => {
     const x = 0.7 + (i % 3) * 4.15;
     const y = 1.95 + Math.floor(i / 3) * 0.85;
     const bc = bandColor(b);
     m.addShape(pptx.ShapeType.roundRect, { x, y, w: 4.0, h: 0.75, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
     m.addShape(pptx.ShapeType.rect, { x, y, w: 0.18, h: 0.75, fill: { color: bc }, line: { type: 'none' } });
-    m.addText(b.label, { x: x + 0.3, y: y + 0.07, w: 3.6, h: 0.28, fontSize: 12, bold: true, color: COLORS.text });
-    m.addText(`Positions ${b.min === 1.5 ? 2 : Math.ceil(b.min)}–${Math.floor(b.max)} → target rank #${b.target}`,
+    m.addText(T.band[b.id] || b.label, { x: x + 0.3, y: y + 0.07, w: 3.6, h: 0.28, fontSize: 12, bold: true, color: COLORS.text });
+    m.addText(T.positionsRange(b.min === 1.5 ? 2 : Math.ceil(b.min), Math.floor(b.max), b.target),
       { x: x + 0.3, y: y + 0.36, w: 3.6, h: 0.32, fontSize: 10, color: COLORS.muted });
   });
 
-  // CTR curve
-  m.addText('AVERAGE CTR BY POSITION', { x: 0.7, y: 4.0, w: 12, h: 0.3, fontSize: 11, bold: true, color: COLORS.muted, charSpacing: 4 });
+  m.addText(T.ctrCurveHeader, { x: 0.7, y: 4.0, w: 12, h: 0.3, fontSize: 11, bold: true, color: COLORS.muted, charSpacing: 4 });
   const ctrSamples = [1, 2, 3, 4, 5, 7, 10, 15, 25].map(p => ({ p, ctr: ctrAtPosition(p) }));
   const ctrMax = Math.max(...ctrSamples.map(s => s.ctr));
   const ctrChartX = 0.7, ctrChartY = 4.4, ctrChartW = 12.0, ctrChartH = 1.4;
@@ -4908,13 +5123,12 @@ async function exportStrategyPpt() {
     m.addText('#' + s.p, { x, y: ctrChartY + ctrChartH - 0.3, w: barW, h: 0.25, fontSize: 10, color: COLORS.muted, align: 'center', bold: true });
   });
 
-  // Notes panel
   m.addShape(pptx.ShapeType.roundRect, { x: 0.7, y: 6.0, w: 12.0, h: 1.0, fill: { color: COLORS.panelAccent }, line: { type: 'none' }, rectRadius: 0.1 });
-  m.addText('How "potential extra clicks" is computed', { x: 0.9, y: 6.08, w: 11.6, h: 0.3, fontSize: 11, bold: true, color: COLORS.primaryDark });
-  m.addText('For each ranking query: potential = (query impressions × target-rank CTR) − current clicks. A page\'s total potential is the sum across all its qualifying queries. The CTR curve above is an industry average — treat figures as a directional upper bound, not a forecast.',
+  m.addText(T.potentialHowTitle, { x: 0.9, y: 6.08, w: 11.6, h: 0.3, fontSize: 11, bold: true, color: COLORS.primaryDark });
+  m.addText(T.potentialHowDesc,
     { x: 0.9, y: 6.36, w: 11.6, h: 0.6, fontSize: 11, color: COLORS.text });
 
-  m.addText(`${siteUrl}  ·  ${startDate} → ${endDate}  ·  Prepared by Converta`, { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
+  m.addText(`${T.siteAndDates(siteUrl, startDate, endDate)}  ·  ${T.preparedBy.replace(/\s+·\s+seo\.converta\.ro$/, '')}`, { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
 
   const safe = siteUrl.replace(/[^a-z0-9]/gi, '_');
   await pptx.writeFile({ fileName: `content-strategy_${safe}_${startDate}_${endDate}.pptx` });
