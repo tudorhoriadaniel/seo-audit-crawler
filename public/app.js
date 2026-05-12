@@ -3493,10 +3493,10 @@ function renderExcludedHint() {
   const lines = STRATEGY_BANDS.map(b => {
     const s = ex[b.id] || { queries: 0, impressions: 0 };
     if (!s.queries) return '';
-    return `<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid var(--border);border-radius:999px;background:var(--bg-input);font-size:12px;margin:2px 4px 2px 0">
+    return `<button data-cs-band-focus="${b.id}" title="Click to lower threshold to 1 and filter the table to ${escapeHtml(b.label)}" style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid ${b.color};border-radius:999px;background:var(--bg-input);color:var(--text);font-size:12px;margin:2px 4px 2px 0;cursor:pointer">
         <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${b.color}"></span>
         <b>${s.queries}</b> in ${escapeHtml(b.label)} <span style="color:var(--text-muted)">(${s.impressions.toLocaleString()} impr)</span>
-      </span>`;
+      </button>`;
   }).filter(Boolean).join('');
 
   const totalExcluded = STRATEGY_BANDS.reduce((sum, b) => sum + ((ex[b.id] && ex[b.id].queries) || 0), 0);
@@ -3521,6 +3521,20 @@ function renderExcludedHint() {
   el.querySelectorAll('[data-cs-lower]').forEach(btn => {
     btn.addEventListener('click', () => {
       document.getElementById('csMinImpressions').value = btn.dataset.csLower;
+      runStrategyQuery();
+    });
+  });
+
+  el.querySelectorAll('[data-cs-band-focus]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const bandId = btn.dataset.csBandFocus;
+      // Lower threshold so the dropped queries become opportunities, and
+      // narrow the band filter to just this band. Re-run, then re-render
+      // so the table reflects only that band.
+      document.getElementById('csMinImpressions').value = '1';
+      for (const cb of document.querySelectorAll('.strategy-band')) {
+        cb.checked = cb.dataset.band === bandId;
+      }
       runStrategyQuery();
     });
   });
@@ -4170,9 +4184,9 @@ async function exportStrategyPpt() {
   const trunc = (s, n) => (s || '').length > n ? s.slice(0, n - 1) + '…' : (s || '');
 
   // ── Cover slide ────────────────────────────────────────────────────────
-  // Numbers are computed against the FULL csState.rows so the headline
-  // figures match what the user sees in the tool, even if filters are
-  // applied to the per-opportunity slides.
+  // Headline numbers are computed against the FULL csState.rows so the
+  // figures match what the user sees in the tool, independent of any
+  // filter applied to the per-opportunity slides.
   const allRows = csState.rows;
   const totalImpr = allRows.reduce((s, r) => s + r.impressions, 0);
   const totalPot = Math.round(allRows.reduce((s, r) => s + r.potentialClicks, 0));
@@ -4189,81 +4203,140 @@ async function exportStrategyPpt() {
   const filterDesc = filterDescParts.length ? filterDescParts.join(' · ') : 'no filters';
 
   const cover = pptx.addSlide();
-  cover.background = { color: COLORS.bg };
-  // Gradient-feel header bar
-  cover.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 1.2, fill: { color: COLORS.primary }, line: { type: 'none' } });
-  cover.addShape(pptx.ShapeType.rect, { x: 0, y: 1.2, w: 13.333, h: 0.08, fill: { color: COLORS.primaryDark }, line: { type: 'none' } });
-  cover.addText('Content Strategy', { x: 0.6, y: 0.18, w: 12, h: 0.65, fontSize: 36, bold: true, color: 'FFFFFF' });
-  cover.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.6, y: 0.78, w: 12, h: 0.4, fontSize: 14, color: 'E0E2F4' });
+  cover.background = { color: '0F1117' };
 
-  cover.addText('Search opportunity audit', { x: 0.6, y: 1.7, w: 12, h: 0.5, fontSize: 22, bold: true, color: COLORS.text });
-  cover.addText('Pages already ranking on Google but below position 1, with on-page coverage gaps and recommended fixes.',
-    { x: 0.6, y: 2.18, w: 12, h: 0.45, fontSize: 13, color: COLORS.muted });
+  // Full-bleed dark hero with a colour-accent corner.
+  cover.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: '0F1117' }, line: { type: 'none' } });
+  cover.addShape(pptx.ShapeType.rect, { x: 9.0, y: 0, w: 4.333, h: 7.5, fill: { color: '1A1D27' }, line: { type: 'none' } });
+  cover.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.35, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
 
-  const kpis = [
-    { label: 'Opportunities', value: allRows.length.toLocaleString(), color: COLORS.text },
-    { label: 'Total impressions', value: totalImpr.toLocaleString(), color: COLORS.text },
-    { label: 'Estimated extra clicks', value: '+' + totalPot.toLocaleString(), color: COLORS.primary },
-    { label: 'Quick wins identified', value: totalAnalysed ? totalQuickWins.toLocaleString() : '–', color: COLORS.success }
+  cover.addText('CONTENT STRATEGY', { x: 0.85, y: 0.55, w: 8, h: 0.4, fontSize: 12, bold: true, color: '8B8FA3', charSpacing: 6 });
+  cover.addText(`+${totalPot.toLocaleString()}`, { x: 0.85, y: 1.05, w: 8, h: 2.2, fontSize: 110, bold: true, color: 'FFFFFF' });
+  cover.addText('estimated extra clicks per month if every opportunity reaches its target rank.',
+    { x: 0.85, y: 3.3, w: 8, h: 0.6, fontSize: 16, color: 'E0E2F4' });
+
+  // Sub-stats row (left, on dark)
+  const subStats = [
+    { label: 'Opportunity pages', value: allRows.length.toLocaleString() },
+    { label: 'Total impressions',  value: totalImpr.toLocaleString() },
+    { label: 'Quick wins',         value: totalAnalysed ? totalQuickWins.toLocaleString() : '–' }
   ];
-  kpis.forEach((k, i) => {
-    const x = 0.6 + i * 3.15;
-    cover.addShape(pptx.ShapeType.roundRect, { x, y: 3.0, w: 2.95, h: 1.7, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.75 }, rectRadius: 0.12 });
-    cover.addText(k.label, { x: x + 0.18, y: 3.15, w: 2.7, h: 0.4, fontSize: 11, color: COLORS.muted, bold: true });
-    cover.addText(k.value, { x: x + 0.18, y: 3.55, w: 2.7, h: 0.95, fontSize: 36, bold: true, color: k.color });
+  subStats.forEach((k, i) => {
+    const x = 0.85 + i * 2.7;
+    cover.addText(k.value, { x, y: 4.4, w: 2.4, h: 0.7, fontSize: 30, bold: true, color: 'FFFFFF' });
+    cover.addText(k.label, { x, y: 5.1, w: 2.4, h: 0.3, fontSize: 11, color: '8B8FA3', bold: true, charSpacing: 2 });
   });
 
-  // What's in this deck
-  cover.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 5.0, w: 12.13, h: 1.55, fill: { color: COLORS.panelAccent }, line: { type: 'none' }, rectRadius: 0.12 });
-  cover.addText('What\'s in this deck', { x: 0.85, y: 5.1, w: 12, h: 0.4, fontSize: 13, bold: true, color: COLORS.primaryDark });
-  cover.addText(`${rows.length} opportunity slide${rows.length === 1 ? '' : 's'} (filters: ${filterDesc}) — sorted by estimated extra clicks. Each slide shows the page, its current title / meta description / H1, the queries it ranks for, the on-page coverage gaps, and prioritised action items.`,
-    { x: 0.85, y: 5.45, w: 11.7, h: 1.0, fontSize: 12, color: COLORS.text });
+  // Right column — site context
+  cover.addText('AUDIT', { x: 9.25, y: 0.55, w: 4, h: 0.35, fontSize: 11, bold: true, color: '8B8FA3', charSpacing: 6 });
+  cover.addText(siteUrl, { x: 9.25, y: 0.95, w: 4, h: 1.0, fontSize: 18, bold: true, color: 'FFFFFF' });
+  cover.addText(`${startDate}  →  ${endDate}`, { x: 9.25, y: 1.95, w: 4, h: 0.35, fontSize: 12, color: 'E0E2F4' });
 
-  cover.addText('Prepared by Converta  ·  seo.converta.ro', { x: 0.6, y: 6.95, w: 12, h: 0.4, fontSize: 10, color: COLORS.muted });
+  cover.addText('IN THIS DECK', { x: 9.25, y: 2.9, w: 4, h: 0.35, fontSize: 11, bold: true, color: '8B8FA3', charSpacing: 6 });
+  cover.addText([
+    { text: `${rows.length} opportunity slide${rows.length === 1 ? '' : 's'}\n`, options: { bold: true, color: 'FFFFFF' } },
+    { text: `Filters: ${filterDesc}\n\n`, options: { color: 'E0E2F4', fontSize: 11 } },
+    { text: 'Each slide: current title / meta description / H1, ranking queries, on-page coverage gaps, prioritised actions.',
+      options: { color: 'E0E2F4', fontSize: 11 } }
+  ], { x: 9.25, y: 3.25, w: 4, h: 3.0, fontSize: 13 });
+
+  // Footer brand bar
+  cover.addShape(pptx.ShapeType.rect, { x: 0, y: 7.05, w: 13.333, h: 0.45, fill: { color: COLORS.primary }, line: { type: 'none' } });
+  cover.addText('Prepared by Converta  ·  seo.converta.ro', { x: 0.85, y: 7.13, w: 12, h: 0.3, fontSize: 10, color: 'FFFFFF', bold: true });
 
   // ── Summary slide: breakdown by band ───────────────────────────────────
   // Stats use the FULL csState.rows so all bands always show real numbers,
   // independent of the filter the user has in the tool when exporting.
   const summary = pptx.addSlide();
   summary.background = { color: COLORS.bg };
-  summary.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.18, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
-  summary.addText('Opportunities by band', { x: 0.6, y: 0.35, w: 12, h: 0.6, fontSize: 26, bold: true, color: COLORS.text });
-  summary.addText('Each band groups pages by their current Google rank. Lower bands = easier wins.',
-    { x: 0.6, y: 0.95, w: 12, h: 0.4, fontSize: 12, color: COLORS.muted });
+  summary.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.35, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
+  summary.addText('Opportunities by band', { x: 0.7, y: 0.35, w: 12, h: 0.6, fontSize: 26, bold: true, color: COLORS.text });
+  summary.addText('Each band groups pages by the rank of their best opportunity query. Lower bands = easier wins.',
+    { x: 0.7, y: 0.95, w: 12, h: 0.4, fontSize: 12, color: COLORS.muted });
 
-  STRATEGY_BANDS.forEach((band, idx) => {
-    // Count every page that has a qualifying query in this band — not just
-    // the pages whose primary band matches — so the deck reflects all the
-    // opportunity surface area at each rank, not the volume-weighted primary.
+  // Precompute band stats + the max potential so we can scale the bar chart.
+  const bandStats = STRATEGY_BANDS.map(band => {
     const inBand = allRows.filter(r => (r.bandIds || [r.band.id]).includes(band.id));
     const impr = inBand.reduce((s, r) => s + ((r.perBand && r.perBand[band.id] && r.perBand[band.id].impressions) || 0), 0);
     const pot = Math.round(inBand.reduce((s, r) => s + ((r.perBand && r.perBand[band.id] && r.perBand[band.id].potential) || 0), 0));
     const inDeck = rows.filter(r => (r.bandIds || [r.band.id]).includes(band.id)).length;
+    return { band, pages: inBand.length, impressions: impr, potential: pot, inDeck };
+  });
+  const maxPot = Math.max(1, ...bandStats.map(s => s.potential));
+
+  bandStats.forEach((s, idx) => {
+    const band = s.band;
     const y = 1.55 + idx * 1.10;
     const bc = bandColor(band);
 
-    summary.addShape(pptx.ShapeType.roundRect, { x: 0.6, y, w: 12.13, h: 0.95, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
-    summary.addShape(pptx.ShapeType.rect, { x: 0.6, y, w: 0.22, h: 0.95, fill: { color: bc }, line: { type: 'none' } });
-    summary.addText(band.label, { x: 1.0, y: y + 0.08, w: 3.5, h: 0.4, fontSize: 16, bold: true, color: COLORS.text });
-    summary.addText(`Positions ${band.min === 1.5 ? 2 : Math.ceil(band.min)}–${Math.floor(band.max)}  ·  target rank ${band.target}`,
-      { x: 1.0, y: y + 0.48, w: 3.5, h: 0.32, fontSize: 11, color: COLORS.muted });
+    summary.addShape(pptx.ShapeType.roundRect, { x: 0.7, y, w: 12.0, h: 0.95, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.12 });
+    summary.addShape(pptx.ShapeType.rect, { x: 0.7, y, w: 0.22, h: 0.95, fill: { color: bc }, line: { type: 'none' } });
+    summary.addText(band.label, { x: 1.05, y: y + 0.08, w: 3.3, h: 0.4, fontSize: 16, bold: true, color: COLORS.text });
+    summary.addText(`Positions ${band.min === 1.5 ? 2 : Math.ceil(band.min)}–${Math.floor(band.max)}  ·  target #${band.target}`,
+      { x: 1.05, y: y + 0.48, w: 3.3, h: 0.32, fontSize: 11, color: COLORS.muted });
 
     // 3 stat blocks
-    const blocks = [
-      { x: 4.7,  label: 'opportunities', value: inBand.length.toLocaleString(), color: COLORS.text },
-      { x: 6.65, label: 'impressions',   value: impr.toLocaleString(),          color: COLORS.text },
-      { x: 9.0,  label: `extra clicks @ rank ${band.target}`, value: '+' + pot.toLocaleString(), color: COLORS.primary }
-    ];
-    blocks.forEach(b => {
-      summary.addText(b.value, { x: b.x, y: y + 0.10, w: 2.0, h: 0.55, fontSize: 22, bold: true, color: b.color, align: 'center' });
-      summary.addText(b.label, { x: b.x, y: y + 0.62, w: 2.0, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'center' });
-    });
-    if (inBand.length > 0) {
-      summary.addText(`${inDeck} of ${inBand.length} included in this deck`, { x: 11.05, y: y + 0.33, w: 1.6, h: 0.4, fontSize: 10, color: inDeck === inBand.length ? COLORS.success : COLORS.warning, align: 'center', italic: true });
+    summary.addText(s.pages.toLocaleString(), { x: 4.5, y: y + 0.10, w: 1.5, h: 0.55, fontSize: 22, bold: true, color: COLORS.text, align: 'center' });
+    summary.addText('pages', { x: 4.5, y: y + 0.62, w: 1.5, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'center' });
+    summary.addText(s.impressions.toLocaleString(), { x: 6.1, y: y + 0.10, w: 2.0, h: 0.55, fontSize: 22, bold: true, color: COLORS.text, align: 'center' });
+    summary.addText('impressions', { x: 6.1, y: y + 0.62, w: 2.0, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'center' });
+
+    // Horizontal bar chart for "+potential clicks" — scaled per band, max
+    // anchored to the largest band so the differences are visible.
+    const barTrackX = 8.25, barTrackW = 3.6, barH = 0.32;
+    summary.addShape(pptx.ShapeType.rect, { x: barTrackX, y: y + 0.36, w: barTrackW, h: barH, fill: { color: 'EEF0F6' }, line: { type: 'none' } });
+    const fillW = Math.max(0.04, (s.potential / maxPot) * barTrackW);
+    if (s.potential > 0) {
+      summary.addShape(pptx.ShapeType.rect, { x: barTrackX, y: y + 0.36, w: fillW, h: barH, fill: { color: bc }, line: { type: 'none' } });
+    }
+    summary.addText(`+${s.potential.toLocaleString()} clicks @ #${band.target}`, { x: barTrackX, y: y + 0.04, w: 3.6, h: 0.28, fontSize: 11, color: bc, bold: true });
+    if (s.pages > 0) {
+      summary.addText(`${s.inDeck} / ${s.pages} included in this deck`, { x: barTrackX, y: y + 0.7, w: 3.6, h: 0.25, fontSize: 9, color: s.inDeck === s.pages ? COLORS.success : COLORS.warning, italic: true });
     }
   });
 
-  summary.addText(`Site: ${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.6, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
+  summary.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
+
+  // ── Top quick wins (if any analysed) ──────────────────────────────────
+  // A separate "punch list" slide of the 5 highest-impact rows so the
+  // client sees the headline actions before drilling into details.
+  const topRows = rows.slice(0, 5);
+  if (topRows.length) {
+    const tw = pptx.addSlide();
+    tw.background = { color: COLORS.bg };
+    tw.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.35, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
+    tw.addText('Top 5 opportunities', { x: 0.7, y: 0.35, w: 12, h: 0.6, fontSize: 26, bold: true, color: COLORS.text });
+    tw.addText('Highest estimated extra-clicks if pushed to target rank. Start here.',
+      { x: 0.7, y: 0.95, w: 12, h: 0.4, fontSize: 12, color: COLORS.muted });
+
+    topRows.forEach((r, idx) => {
+      const y = 1.6 + idx * 1.05;
+      const bc = bandColor(r.band);
+      tw.addShape(pptx.ShapeType.roundRect, { x: 0.7, y, w: 12.0, h: 0.95, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.12 });
+      tw.addShape(pptx.ShapeType.rect, { x: 0.7, y, w: 0.22, h: 0.95, fill: { color: bc }, line: { type: 'none' } });
+
+      // Rank circle
+      tw.addShape(pptx.ShapeType.ellipse, { x: 1.05, y: y + 0.2, w: 0.55, h: 0.55, fill: { color: bc }, line: { type: 'none' } });
+      tw.addText(String(idx + 1), { x: 1.05, y: y + 0.2, w: 0.55, h: 0.55, fontSize: 18, bold: true, color: 'FFFFFF', align: 'center', valign: 'middle' });
+
+      // URL + best query
+      tw.addText(trunc(r.page, 75), { x: 1.75, y: y + 0.1, w: 7.5, h: 0.4, fontSize: 13, bold: true, color: COLORS.primaryDark, hyperlink: { url: r.page } });
+      const bestLine = r.bestQuery
+        ? `Best query: "${r.bestQuery}" @ rank ${r.bestQueryPosition.toFixed(1)} · ${r.bestQueryImpressions.toLocaleString()} impressions`
+        : '';
+      tw.addText(bestLine, { x: 1.75, y: y + 0.5, w: 7.5, h: 0.4, fontSize: 11, color: COLORS.muted });
+
+      // Potential clicks big
+      tw.addText('+' + Math.round(r.potentialClicks).toLocaleString(), { x: 9.5, y: y + 0.12, w: 1.8, h: 0.55, fontSize: 24, bold: true, color: COLORS.primary, align: 'right' });
+      tw.addText(`@ rank #${r.targetPos}`, { x: 9.5, y: y + 0.62, w: 1.8, h: 0.3, fontSize: 10, color: COLORS.muted, align: 'right' });
+
+      // Band pill
+      tw.addShape(pptx.ShapeType.roundRect, { x: 11.45, y: y + 0.3, w: 1.15, h: 0.35, fill: { color: bc }, line: { type: 'none' }, rectRadius: 0.18 });
+      tw.addText(r.band.label, { x: 11.45, y: y + 0.3, w: 1.15, h: 0.35, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
+    });
+
+    tw.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
+  }
 
   // ── Per-opportunity slides ─────────────────────────────────────────────
   const priorityColor = (p) => p === 'critical' ? COLORS.danger : (p === 'important' ? COLORS.warning : COLORS.primary);
@@ -4276,13 +4349,19 @@ async function exportStrategyPpt() {
     const bc = bandColor(r.band);
     const cov = r.coverage && Array.isArray(r.coverage.queries) ? r.coverage : null;
 
-    // Coloured header strip
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.65, fill: { color: bc }, line: { type: 'none' } });
-    s.addText(`${idx + 1} / ${rows.length}   ${r.band.label}   ·   Best query @ rank ${r.bestQueryPosition.toFixed(1)}   ·   Target rank ${r.targetPos}`,
-      { x: 0.6, y: 0.13, w: 9, h: 0.4, fontSize: 13, color: 'FFFFFF', bold: true });
+    // Slim accent on top + dark header strip with band pill
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.12, fill: { color: bc }, line: { type: 'none' } });
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 0.12, w: 13.333, h: 0.6, fill: { color: '0F1117' }, line: { type: 'none' } });
+    s.addText(`OPPORTUNITY ${idx + 1} / ${rows.length}`,
+      { x: 0.6, y: 0.22, w: 4, h: 0.35, fontSize: 11, color: '8B8FA3', bold: true, charSpacing: 4 });
+    // Band pill
+    s.addShape(pptx.ShapeType.roundRect, { x: 4.6, y: 0.22, w: 2.0, h: 0.35, fill: { color: bc }, line: { type: 'none' }, rectRadius: 0.17 });
+    s.addText(r.band.label, { x: 4.6, y: 0.22, w: 2.0, h: 0.35, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
+    s.addText(`Best query @ #${r.bestQueryPosition.toFixed(1)}  ·  Target #${r.targetPos}`,
+      { x: 6.7, y: 0.22, w: 4.7, h: 0.35, fontSize: 11, color: 'E0E2F4' });
     if (r.isQuickWin) {
-      s.addShape(pptx.ShapeType.roundRect, { x: 11.55, y: 0.13, w: 1.55, h: 0.4, fill: { color: 'FFFFFF' }, line: { type: 'none' }, rectRadius: 0.18 });
-      s.addText('⚡ Quick win', { x: 11.55, y: 0.13, w: 1.55, h: 0.4, fontSize: 11, color: bc, bold: true, align: 'center' });
+      s.addShape(pptx.ShapeType.roundRect, { x: 11.55, y: 0.22, w: 1.55, h: 0.35, fill: { color: COLORS.success }, line: { type: 'none' }, rectRadius: 0.17 });
+      s.addText('⚡ Quick win', { x: 11.55, y: 0.22, w: 1.55, h: 0.35, fontSize: 10, color: 'FFFFFF', bold: true, align: 'center' });
     }
 
     // URL + crawl/live title + best-opportunity caption
@@ -4472,6 +4551,51 @@ async function exportStrategyPpt() {
       d.addText(`${siteUrl}  ·  ${startDate} → ${endDate}`, { x: 0.6, y: 7.12, w: 12.1, h: 0.3, fontSize: 9, color: COLORS.muted });
     }
   }
+
+  // ── Closing methodology slide ────────────────────────────────────────
+  const m = pptx.addSlide();
+  m.background = { color: COLORS.bg };
+  m.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.35, h: 7.5, fill: { color: COLORS.primary }, line: { type: 'none' } });
+  m.addText('How to read this deck', { x: 0.7, y: 0.4, w: 12, h: 0.6, fontSize: 24, bold: true, color: COLORS.text });
+  m.addText('A quick reference for what each metric means and how the numbers were computed.',
+    { x: 0.7, y: 1.0, w: 12, h: 0.4, fontSize: 12, color: COLORS.muted });
+
+  // Bands legend
+  m.addText('OPPORTUNITY BANDS', { x: 0.7, y: 1.6, w: 12, h: 0.3, fontSize: 11, bold: true, color: COLORS.muted, charSpacing: 4 });
+  STRATEGY_BANDS.forEach((b, i) => {
+    const x = 0.7 + (i % 3) * 4.15;
+    const y = 1.95 + Math.floor(i / 3) * 0.85;
+    const bc = bandColor(b);
+    m.addShape(pptx.ShapeType.roundRect, { x, y, w: 4.0, h: 0.75, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+    m.addShape(pptx.ShapeType.rect, { x, y, w: 0.18, h: 0.75, fill: { color: bc }, line: { type: 'none' } });
+    m.addText(b.label, { x: x + 0.3, y: y + 0.07, w: 3.6, h: 0.28, fontSize: 12, bold: true, color: COLORS.text });
+    m.addText(`Positions ${b.min === 1.5 ? 2 : Math.ceil(b.min)}–${Math.floor(b.max)} → target rank #${b.target}`,
+      { x: x + 0.3, y: y + 0.36, w: 3.6, h: 0.32, fontSize: 10, color: COLORS.muted });
+  });
+
+  // CTR curve
+  m.addText('AVERAGE CTR BY POSITION', { x: 0.7, y: 4.0, w: 12, h: 0.3, fontSize: 11, bold: true, color: COLORS.muted, charSpacing: 4 });
+  const ctrSamples = [1, 2, 3, 4, 5, 7, 10, 15, 25].map(p => ({ p, ctr: ctrAtPosition(p) }));
+  const ctrMax = Math.max(...ctrSamples.map(s => s.ctr));
+  const ctrChartX = 0.7, ctrChartY = 4.4, ctrChartW = 12.0, ctrChartH = 1.4;
+  m.addShape(pptx.ShapeType.rect, { x: ctrChartX, y: ctrChartY, w: ctrChartW, h: ctrChartH, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 } });
+  const barW = (ctrChartW - 0.4) / ctrSamples.length;
+  ctrSamples.forEach((s, i) => {
+    const h = (s.ctr / ctrMax) * (ctrChartH - 0.5);
+    const x = ctrChartX + 0.2 + i * barW;
+    const y = ctrChartY + ctrChartH - 0.35 - h;
+    m.addShape(pptx.ShapeType.rect, { x: x + 0.1, y, w: barW - 0.2, h, fill: { color: COLORS.primary }, line: { type: 'none' } });
+    m.addText((s.ctr * 100).toFixed(1) + '%', { x, y: y - 0.3, w: barW, h: 0.28, fontSize: 9, color: COLORS.text, align: 'center', bold: true });
+    m.addText('#' + s.p, { x, y: ctrChartY + ctrChartH - 0.3, w: barW, h: 0.25, fontSize: 10, color: COLORS.muted, align: 'center', bold: true });
+  });
+
+  // Notes panel
+  m.addShape(pptx.ShapeType.roundRect, { x: 0.7, y: 6.0, w: 12.0, h: 1.0, fill: { color: COLORS.panelAccent }, line: { type: 'none' }, rectRadius: 0.1 });
+  m.addText('How "potential extra clicks" is computed', { x: 0.9, y: 6.08, w: 11.6, h: 0.3, fontSize: 11, bold: true, color: COLORS.primaryDark });
+  m.addText('For each ranking query: potential = (query impressions × target-rank CTR) − current clicks. A page\'s total potential is the sum across all its qualifying queries. The CTR curve above is an industry average — treat figures as a directional upper bound, not a forecast.',
+    { x: 0.9, y: 6.36, w: 11.6, h: 0.6, fontSize: 11, color: COLORS.text });
+
+  m.addText(`${siteUrl}  ·  ${startDate} → ${endDate}  ·  Prepared by Converta`, { x: 0.7, y: 7.1, w: 12, h: 0.3, fontSize: 9, color: COLORS.muted });
 
   const safe = siteUrl.replace(/[^a-z0-9]/gi, '_');
   await pptx.writeFile({ fileName: `content-strategy_${safe}_${startDate}_${endDate}.pptx` });
