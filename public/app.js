@@ -4318,6 +4318,122 @@ async function loadPptxLib() {
 // ── PPT export i18n ─────────────────────────────────────────────────────
 // Keys cover every literal that ends up in the deck. Action templates are
 // builder functions so they can interpolate dynamic data (URLs, counts).
+// ── PPT executive-dashboard helpers ──────────────────────────────────────
+
+// Lightweight search-intent classifier. Heuristics only — flags clear
+// question / informational patterns (FR + EN + DE) and obvious commercial
+// signals; everything else defaults to Info. Returns 'Info' | 'Trans.' | 'Nav.'
+function classifyIntent(query) {
+  const q = String(query || '').toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '');
+  if (!q) return 'Info';
+  if (/\b(buy|cheap|price|cost|deal|discount|best|top|vs|review|comparison|acheter|prix|coût|cout|tarif|tarifs|meilleur|meilleure|comparatif|avis|promo|soldes|kaufen|preis|kosten|vergleich)\b/.test(q)) return 'Trans.';
+  if (/\b(login|sign in|sign up|connexion|connecter|inscription|portal|portail|anmelden|kontakt)\b/.test(q)) return 'Nav.';
+  return 'Info';
+}
+
+// Map our recommendation type to a one-word editorial action.
+function mapActionFromRec(recType, T) {
+  if (recType === 'create-landing') return T.actNew;
+  if (recType === 'rewrite-expand') return T.actGuide;
+  return T.actRefresh;   // optimize → Refresh
+}
+
+// Cluster opportunities by URL-path prefix (first non-empty segment after
+// the domain). Pages that share a parent path almost always cover the same
+// topic on a real site. Returns up to N clusters sorted by impressions.
+function clusterTopics(rows, max = 6) {
+  const palette = ['EEEAFE', 'E6F4EE', 'FDEEDA', 'FDE7E7', 'EEE8E0', 'E3EBF6'];
+  const accents = ['7C3AED', '16A34A', 'D97706', 'DC2626', '92704B', '2563EB'];
+  const buckets = new Map();
+  for (const r of rows) {
+    let key = 'root';
+    try {
+      const u = new URL(r.page);
+      const seg = u.pathname.split('/').filter(Boolean)[0];
+      if (seg) key = seg;
+    } catch { /* ignore */ }
+    if (!buckets.has(key)) buckets.set(key, { id: key, pages: 0, impressions: 0 });
+    const b = buckets.get(key);
+    b.pages++;
+    b.impressions += r.impressions;
+  }
+  const arr = [...buckets.values()].sort((a, b) => b.impressions - a.impressions).slice(0, max);
+  arr.forEach((b, i) => {
+    b.tint = palette[i % palette.length];
+    b.accent = accents[i % accents.length];
+    b.label = b.id === 'root'
+      ? 'Homepage'
+      : b.id.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  });
+  return arr;
+}
+
+// Identify the top "pages losing traffic" — rows whose previous-period
+// impressions outpace current impressions by the biggest %. Needs the
+// previous-period map keyed by URL.
+function findLosingPages(rows, prevByUrl, limit = 4) {
+  if (!prevByUrl || !prevByUrl.size) return [];
+  const losing = [];
+  for (const r of rows) {
+    const prev = prevByUrl.get(r.page);
+    if (!prev || prev.impressions < 20) continue;   // ignore noise
+    const delta = (r.impressions - prev.impressions) / prev.impressions;
+    if (delta < -0.05) losing.push({ page: r.page, prev: prev.impressions, curr: r.impressions, delta });
+  }
+  losing.sort((a, b) => a.delta - b.delta);
+  return losing.slice(0, limit);
+}
+
+// Hits the existing /api/gsc/query route to pull totals for an explicit
+// date range. Returns { clicks, impressions, ctr, position } or null.
+async function fetchPeriodTotals(siteUrl, startDate, endDate, searchType, country) {
+  const body = { siteUrl, startDate, endDate, dimensions: [], rowLimit: 1, searchType };
+  const cf = gscCountryFilterGroup(country);
+  if (cf) body.dimensionFilterGroups = cf;
+  try {
+    const r = await fetch('/api/gsc/query', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) return null;
+    const data = await r.json();
+    const row = (data.rows || [])[0];
+    return row ? { clicks: row.clicks || 0, impressions: row.impressions || 0, ctr: row.ctr || 0, position: row.position || 0 } : { clicks: 0, impressions: 0, ctr: 0, position: 0 };
+  } catch { return null; }
+}
+
+// Per-page totals for the previous period — used to flag pages losing
+// traffic. Same route, with dimension=page.
+async function fetchPreviousPagesByUrl(siteUrl, startDate, endDate, searchType, country) {
+  // Compute the "previous" date range of equal length, ending the day
+  // before startDate.
+  const start = new Date(startDate + 'T00:00:00Z');
+  const end   = new Date(endDate   + 'T00:00:00Z');
+  const days  = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
+  const prevEnd = new Date(start); prevEnd.setUTCDate(prevEnd.getUTCDate() - 1);
+  const prevStart = new Date(prevEnd); prevStart.setUTCDate(prevStart.getUTCDate() - days + 1);
+  const fmt = d => d.toISOString().slice(0, 10);
+
+  const body = { siteUrl, startDate: fmt(prevStart), endDate: fmt(prevEnd), dimensions: ['page'], rowLimit: 5000, searchType };
+  const cf = gscCountryFilterGroup(country);
+  if (cf) body.dimensionFilterGroups = cf;
+  try {
+    const r = await fetch('/api/gsc/query', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) return { byUrl: new Map(), startDate: fmt(prevStart), endDate: fmt(prevEnd) };
+    const data = await r.json();
+    const byUrl = new Map();
+    for (const row of (data.rows || [])) {
+      const u = (row.keys || [])[0];
+      if (u) byUrl.set(u, { impressions: row.impressions || 0, clicks: row.clicks || 0 });
+    }
+    return { byUrl, startDate: fmt(prevStart), endDate: fmt(prevEnd) };
+  } catch { return { byUrl: new Map(), startDate: '', endDate: '' }; }
+}
+
 const PPT_I18N = {
   en: {
     contentStrategy: 'CONTENT STRATEGY',
@@ -4402,6 +4518,37 @@ const PPT_I18N = {
     potentialHowDesc: 'For each ranking query: potential = (query impressions × target-rank CTR) − current clicks. A page\'s total potential is the sum across all its qualifying queries. The CTR curve above is an industry average — treat figures as a directional upper bound, not a forecast.',
     preparedBy: 'Prepared by Converta  ·  seo.converta.ro',
     siteAndDates: (site, s, e) => `${site}  ·  ${s} → ${e}`,
+    // Executive dashboard slide
+    dashTitle: 'Executive dashboard',
+    dashSubtitle: 'Search performance, opportunity matrix, topic clusters and a 4-week editorial plan — at a glance.',
+    kpiClicks: 'Clicks',
+    kpiImpressions: 'Impressions',
+    kpiAvgCtr: 'Avg. CTR',
+    kpiAvgPosition: 'Avg. position',
+    matrixTitle: 'Keyword opportunity matrix',
+    matrixSubtitle: 'From GSC queries, pos. 5–20, high impressions',
+    matrixQuery: 'Query',
+    matrixPos: 'Pos.',
+    matrixImpr: 'Impr.',
+    matrixIntent: 'Intent',
+    matrixAction: 'Action',
+    clustersTitle: 'Topic clusters',
+    clustersSubtitle: 'Grouped from GSC pages + queries',
+    clusterPagesShort: (n, imp) => `${n} pages · ${(imp / 1000).toFixed(1)}k impr.`,
+    calendarTitle: 'Editorial calendar — next 4 weeks',
+    week: 'Week',
+    losingTitle: 'Pages losing traffic',
+    losingSubtitle: 'Compared vs previous period',
+    losingNoneAnalysed: 'Previous-period comparison unavailable.',
+    losingNone: 'No pages losing more than 5% impressions vs previous period.',
+    goalsTitle: 'Quarterly goals',
+    goalOrganicClicks: 'Organic clicks',
+    goalTop10: 'Top-10 keywords',
+    goalNewPages: 'New cluster pages',
+    actRefresh: 'Refresh',
+    actNew: 'New post',
+    actGuide: 'Guide',
+    actExpand: 'Expand',
     // Action templates
     actCreateLanding: (url, kw) => `Create a dedicated landing page at ${url} targeting "${kw}".`,
     actRewriteAround: (kw) => `Rewrite this page around "${kw}" (title, H1, dedicated section in the body).`,
@@ -4504,6 +4651,36 @@ const PPT_I18N = {
     potentialHowDesc: 'Pour chaque requête : potentiel = (impressions × CTR au rang cible) − clics actuels. Le potentiel total d\'une page est la somme sur toutes ses requêtes éligibles. La courbe CTR ci-dessus est une moyenne sectorielle — à considérer comme un plafond indicatif, pas une prévision.',
     preparedBy: 'Préparé par Converta  ·  seo.converta.ro',
     siteAndDates: (site, s, e) => `${site}  ·  ${s} → ${e}`,
+    dashTitle: 'Tableau de bord exécutif',
+    dashSubtitle: 'Performance de recherche, matrice d\'opportunités, clusters thématiques et plan éditorial sur 4 semaines.',
+    kpiClicks: 'Clics',
+    kpiImpressions: 'Impressions',
+    kpiAvgCtr: 'CTR moyen',
+    kpiAvgPosition: 'Position moy.',
+    matrixTitle: 'Matrice d\'opportunités',
+    matrixSubtitle: 'Requêtes GSC, pos. 5–20, fortes impressions',
+    matrixQuery: 'Requête',
+    matrixPos: 'Pos.',
+    matrixImpr: 'Impr.',
+    matrixIntent: 'Intention',
+    matrixAction: 'Action',
+    clustersTitle: 'Clusters thématiques',
+    clustersSubtitle: 'Pages et requêtes GSC regroupées',
+    clusterPagesShort: (n, imp) => `${n} pages · ${(imp / 1000).toFixed(1)}k impr.`,
+    calendarTitle: 'Calendrier éditorial — 4 prochaines semaines',
+    week: 'Semaine',
+    losingTitle: 'Pages perdant du trafic',
+    losingSubtitle: 'Comparées à la période précédente',
+    losingNoneAnalysed: 'Comparaison à la période précédente indisponible.',
+    losingNone: 'Aucune page ne perd plus de 5% d\'impressions par rapport à la période précédente.',
+    goalsTitle: 'Objectifs trimestriels',
+    goalOrganicClicks: 'Clics organiques',
+    goalTop10: 'Mots-clés top 10',
+    goalNewPages: 'Nouvelles pages cluster',
+    actRefresh: 'Rafraîchir',
+    actNew: 'Nouvel article',
+    actGuide: 'Guide',
+    actExpand: 'Étoffer',
     actCreateLanding: (url, kw) => `Créer une landing page dédiée à ${url} ciblant « ${kw} ».`,
     actRewriteAround: (kw) => `Réécrire la page autour de « ${kw} » (title, H1, section dédiée dans le corps).`,
     actRefineFor: (kw) => `Affiner la page pour « ${kw} » — resserrer le title et approfondir la section concernée.`,
@@ -4588,6 +4765,169 @@ function deriveActions(r, lang) {
 
   const order = { critical: 0, important: 1, recommended: 2 };
   return actions.sort((a, b) => order[a.priority] - order[b.priority]);
+}
+
+// Build the executive dashboard slide. Lays out six sections per the
+// template the user provided: KPI strip, opportunity matrix, topic
+// clusters, editorial calendar, pages losing traffic, quarterly goals.
+function addExecutiveDashboardSlide(pptx, T, ctx) {
+  const { siteUrl, startDate, endDate, allRows, rows, curTotals, prevTotals, prevPagesData, COLORS, bandColor } = ctx;
+  const PAGE_BG = 'FAF8F4';        // warm cream, matches the template
+  const CARD_BG = 'FFFFFF';
+  const CARD_BORDER = 'E8E3D9';
+  const TEXT = '1A1D2E';
+  const MUTED = '6B7085';
+  const ACCENT = '6366F1';
+  const POS_DELTA = '16A34A';
+  const NEG_DELTA = 'DC2626';
+
+  const d = pptx.addSlide();
+  d.background = { color: PAGE_BG };
+
+  // Header
+  d.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.18, h: 7.5, fill: { color: ACCENT }, line: { type: 'none' } });
+  d.addText(T.dashTitle, { x: 0.45, y: 0.22, w: 12.5, h: 0.5, fontSize: 22, bold: true, color: TEXT });
+  d.addText(T.dashSubtitle, { x: 0.45, y: 0.7, w: 12.5, h: 0.32, fontSize: 11, color: MUTED });
+
+  // ── KPI strip (4 cards across) ──────────────────────────────────────
+  const kpis = [
+    { label: T.kpiClicks,       curr: curTotals && curTotals.clicks,      prev: prevTotals && prevTotals.clicks,      fmt: (n) => Number(n).toLocaleString() },
+    { label: T.kpiImpressions,  curr: curTotals && curTotals.impressions, prev: prevTotals && prevTotals.impressions, fmt: (n) => n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : (n >= 10000 ? (n/1000).toFixed(0) + 'k' : Number(n).toLocaleString()) },
+    { label: T.kpiAvgCtr,       curr: curTotals && curTotals.ctr,         prev: prevTotals && prevTotals.ctr,         fmt: (v) => (v * 100).toFixed(1) + '%' },
+    { label: T.kpiAvgPosition,  curr: curTotals && curTotals.position,    prev: prevTotals && prevTotals.position,    fmt: (v) => v.toFixed(1) }
+  ];
+  kpis.forEach((k, i) => {
+    const x = 0.45 + i * 3.18;
+    d.addShape(pptx.ShapeType.roundRect, { x, y: 1.20, w: 3.05, h: 1.05, fill: { color: 'F5F1E8' }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.14 });
+    d.addText(k.label, { x: x + 0.22, y: 1.27, w: 2.7, h: 0.28, fontSize: 11, color: MUTED });
+    d.addText(k.curr != null ? k.fmt(k.curr) : '—', { x: x + 0.22, y: 1.50, w: 2.7, h: 0.55, fontSize: 24, bold: true, color: TEXT });
+    // Delta vs previous period
+    if (k.curr != null && k.prev != null && k.prev !== 0) {
+      let delta, up, dispLabel;
+      if (k.label === T.kpiAvgPosition) {
+        // For position lower is better — invert.
+        delta = k.prev - k.curr;
+        up = delta > 0;
+        dispLabel = (Math.abs(delta)).toFixed(1);
+      } else if (k.label === T.kpiAvgCtr) {
+        delta = (k.curr - k.prev) * 100;
+        up = delta > 0;
+        dispLabel = Math.abs(delta).toFixed(1) + '%';
+      } else {
+        delta = ((k.curr - k.prev) / k.prev) * 100;
+        up = delta > 0;
+        dispLabel = Math.abs(delta).toFixed(0) + '%';
+      }
+      const color = up ? POS_DELTA : NEG_DELTA;
+      d.addText((up ? '▲ ' : '▼ ') + dispLabel, { x: x + 0.22, y: 2.0, w: 2.7, h: 0.22, fontSize: 10, color, bold: true });
+    }
+  });
+
+  // ── Keyword opportunity matrix ──────────────────────────────────────
+  d.addShape(pptx.ShapeType.roundRect, { x: 0.45, y: 2.40, w: 7.65, h: 2.55, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.14 });
+  d.addText('◎  ' + T.matrixTitle, { x: 0.65, y: 2.48, w: 7.3, h: 0.32, fontSize: 13, bold: true, color: TEXT });
+  d.addText(T.matrixSubtitle, { x: 0.65, y: 2.78, w: 7.3, h: 0.26, fontSize: 10, color: MUTED });
+
+  const intentTints = { 'Info': 'DBEAFE', 'Trans.': 'FFEDD5', 'Nav.': 'F3E8FF' };
+  const intentColors = { 'Info': '1D4ED8', 'Trans.': 'C2410C', 'Nav.': '6D28D9' };
+
+  // Top 5 page-level opportunities, mapping the best query / intent / action
+  const topMatrix = (rows.length ? rows : allRows).slice(0, 5);
+  const headerStyle = { bold: true, color: MUTED, fontSize: 9, fill: { color: 'F5F1E8' } };
+  const matrixHeader = [
+    { text: T.matrixQuery,  options: headerStyle },
+    { text: T.matrixPos,    options: { ...headerStyle, align: 'right' } },
+    { text: T.matrixImpr,   options: { ...headerStyle, align: 'right' } },
+    { text: T.matrixIntent, options: headerStyle },
+    { text: T.matrixAction, options: headerStyle }
+  ];
+  const matrixRows = topMatrix.map(r => {
+    const intent = classifyIntent(r.bestQuery || '');
+    const action = mapActionFromRec((r.recommendation && r.recommendation.type) || 'optimize', T);
+    return [
+      { text: trunc(r.bestQuery || '', 36), options: { fontSize: 10, color: TEXT } },
+      { text: r.bestQueryPosition.toFixed(1), options: { fontSize: 10, align: 'right', color: TEXT } },
+      { text: r.bestQueryImpressions.toLocaleString(), options: { fontSize: 10, align: 'right', color: TEXT } },
+      { text: ' ' + intent + ' ', options: { fontSize: 9, color: intentColors[intent], fill: { color: intentTints[intent] }, bold: true } },
+      { text: action, options: { fontSize: 10, color: TEXT, bold: true } }
+    ];
+  });
+  if (matrixRows.length) {
+    d.addTable([matrixHeader, ...matrixRows], {
+      x: 0.65, y: 3.08, w: 7.3, colW: [3.0, 0.7, 0.95, 1.05, 1.6],
+      fontFace: 'Calibri', color: TEXT,
+      border: { type: 'solid', color: CARD_BORDER, pt: 0.4 },
+      rowH: 0.34
+    });
+  }
+
+  // ── Topic clusters ──────────────────────────────────────────────────
+  d.addShape(pptx.ShapeType.roundRect, { x: 8.25, y: 2.40, w: 4.65, h: 2.55, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.14 });
+  d.addText('⌭  ' + T.clustersTitle, { x: 8.45, y: 2.48, w: 4.4, h: 0.32, fontSize: 13, bold: true, color: TEXT });
+  d.addText(T.clustersSubtitle, { x: 8.45, y: 2.78, w: 4.4, h: 0.26, fontSize: 10, color: MUTED });
+  const clusters = clusterTopics(allRows, 5);
+  clusters.forEach((c, i) => {
+    const cy = 3.05 + i * 0.38;
+    d.addShape(pptx.ShapeType.roundRect, { x: 8.45, y: cy, w: 4.30, h: 0.34, fill: { color: c.tint }, line: { type: 'none' }, rectRadius: 0.08 });
+    d.addText(c.label, { x: 8.55, y: cy + 0.04, w: 2.4, h: 0.27, fontSize: 10, bold: true, color: '#' + c.accent });
+    d.addText(T.clusterPagesShort(c.pages, c.impressions), { x: 10.95, y: cy + 0.04, w: 1.75, h: 0.27, fontSize: 9, color: '#' + c.accent, align: 'right' });
+  });
+
+  // ── Editorial calendar — next 4 weeks ───────────────────────────────
+  d.addShape(pptx.ShapeType.roundRect, { x: 0.45, y: 5.08, w: 12.45, h: 1.30, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.14 });
+  d.addText('▣  ' + T.calendarTitle, { x: 0.65, y: 5.14, w: 12.0, h: 0.32, fontSize: 13, bold: true, color: TEXT });
+  const editorial = rows.slice(0, 4);
+  editorial.forEach((r, i) => {
+    const x = 0.65 + i * 3.05;
+    const rec = r.recommendation || {};
+    const action = mapActionFromRec(rec.type || 'optimize', T);
+    const intent = classifyIntent(r.bestQuery || '');
+    d.addText(T.week + ' ' + (i + 1), { x, y: 5.50, w: 2.85, h: 0.22, fontSize: 9, color: MUTED, bold: true });
+    d.addText(trunc(r.bestQuery || trunc(r.page.replace(/^https?:\/\/[^/]+/, ''), 32), 30), { x, y: 5.70, w: 2.85, h: 0.28, fontSize: 11, bold: true, color: TEXT });
+    d.addText(`${action}  ·  ${intent}`, { x, y: 5.98, w: 2.85, h: 0.22, fontSize: 9, color: MUTED });
+    // Tag pill
+    const tagColor = rec.type === 'create-landing' ? 'DC2626' : (rec.type === 'rewrite-expand' ? 'D97706' : '16A34A');
+    const tagTint  = rec.type === 'create-landing' ? 'FDE7E7' : (rec.type === 'rewrite-expand' ? 'FDEEDA' : 'E6F4EE');
+    d.addShape(pptx.ShapeType.roundRect, { x, y: 6.22, w: 1.3, h: 0.20, fill: { color: tagTint }, line: { type: 'none' }, rectRadius: 0.10 });
+    d.addText(action, { x, y: 6.22, w: 1.3, h: 0.20, fontSize: 8, color: '#' + tagColor, bold: true, align: 'center' });
+  });
+
+  // ── Pages losing traffic + Quarterly goals (bottom row) ─────────────
+  d.addShape(pptx.ShapeType.roundRect, { x: 0.45, y: 6.50, w: 6.20, h: 0.60, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.14 });
+  d.addText('↘  ' + T.losingTitle, { x: 0.65, y: 6.56, w: 5.8, h: 0.22, fontSize: 11, bold: true, color: TEXT });
+  d.addText(T.losingSubtitle, { x: 0.65, y: 6.77, w: 5.8, h: 0.20, fontSize: 9, color: MUTED });
+  const losing = findLosingPages(allRows, prevPagesData && prevPagesData.byUrl, 3);
+  if (losing.length) {
+    losing.forEach((p, i) => {
+      const ly = 6.58 + i * 0.18;
+      d.addText(trunc((new URL(p.page).pathname), 50), { x: 3.4, y: ly, w: 2.5, h: 0.16, fontSize: 9, color: TEXT });
+      d.addText(`${(p.delta * 100).toFixed(0)}%`, { x: 5.95, y: ly, w: 0.65, h: 0.16, fontSize: 9, color: NEG_DELTA, bold: true, align: 'right' });
+    });
+  } else {
+    d.addText(prevPagesData && prevPagesData.byUrl && prevPagesData.byUrl.size ? T.losingNone : T.losingNoneAnalysed,
+      { x: 3.4, y: 6.68, w: 3.2, h: 0.4, fontSize: 9, color: MUTED, italic: true });
+  }
+
+  d.addShape(pptx.ShapeType.roundRect, { x: 6.80, y: 6.50, w: 6.10, h: 0.60, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.14 });
+  d.addText('⚑  ' + T.goalsTitle, { x: 7.00, y: 6.56, w: 5.7, h: 0.22, fontSize: 11, bold: true, color: TEXT });
+  // Compute goal progress from current data — simple defaults.
+  const totalClicks = curTotals ? curTotals.clicks : allRows.reduce((s, r) => s + r.clicks, 0);
+  const prevClicks  = prevTotals ? prevTotals.clicks : 0;
+  const clicksGrowth = prevClicks ? ((totalClicks - prevClicks) / prevClicks) * 100 : 0;
+  const goals = [
+    { label: T.goalOrganicClicks, value: (clicksGrowth >= 0 ? '+' : '') + clicksGrowth.toFixed(0) + '%', pct: Math.min(1, Math.max(0, (clicksGrowth + 25) / 50)), color: '16A34A' },
+    { label: T.goalTop10,         value: String(allRows.filter(r => r.bestQueryPosition <= 10).length), pct: Math.min(1, allRows.filter(r => r.bestQueryPosition <= 10).length / 120), color: '2563EB' },
+    { label: T.goalNewPages,      value: String(allRows.filter(r => r.recommendation && r.recommendation.type === 'create-landing').length),
+      pct: Math.min(1, allRows.filter(r => r.recommendation && r.recommendation.type === 'create-landing').length / 16), color: 'D97706' }
+  ];
+  goals.forEach((g, i) => {
+    const gx = 7.00 + (i % 3) * 1.94;
+    const gy = 6.77;
+    d.addText(g.label, { x: gx, y: gy, w: 1.6, h: 0.16, fontSize: 8, color: MUTED, bold: true });
+    d.addText(g.value, { x: gx, y: gy + 0.13, w: 1.6, h: 0.18, fontSize: 11, bold: true, color: '#' + g.color });
+  });
+
+  d.addText(T.siteAndDates(siteUrl, startDate, endDate), { x: 0.45, y: 7.15, w: 12.5, h: 0.25, fontSize: 9, color: MUTED });
 }
 
 async function exportStrategyPpt() {
@@ -4710,6 +5050,31 @@ async function exportStrategyPpt() {
   // Footer brand bar
   cover.addShape(pptx.ShapeType.rect, { x: 0, y: 7.05, w: 13.333, h: 0.45, fill: { color: COLORS.primary }, line: { type: 'none' } });
   cover.addText(T.preparedBy, { x: 0.85, y: 7.13, w: 12, h: 0.3, fontSize: 10, color: 'FFFFFF', bold: true });
+
+  // ── Executive dashboard ───────────────────────────────────────────────
+  // Fetch this period + the matching prior period from GSC, then build a
+  // one-slide overview that mirrors the template: KPI strip, opportunity
+  // matrix, topic clusters, editorial calendar, pages losing traffic,
+  // quarterly goals.
+  const searchType = (document.getElementById('csType') || {}).value || 'web';
+  const country = (document.getElementById('csCountry') || {}).value || '';
+  const [curTotals, prevTotals, prevPagesData] = await Promise.all([
+    fetchPeriodTotals(siteUrl, startDate, endDate, searchType, country),
+    (async () => {
+      const start = new Date(startDate + 'T00:00:00Z'), end = new Date(endDate + 'T00:00:00Z');
+      const days = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
+      const prevEnd = new Date(start); prevEnd.setUTCDate(prevEnd.getUTCDate() - 1);
+      const prevStart = new Date(prevEnd); prevStart.setUTCDate(prevStart.getUTCDate() - days + 1);
+      const fmt = d => d.toISOString().slice(0, 10);
+      return fetchPeriodTotals(siteUrl, fmt(prevStart), fmt(prevEnd), searchType, country);
+    })(),
+    fetchPreviousPagesByUrl(siteUrl, startDate, endDate, searchType, country)
+  ]);
+
+  addExecutiveDashboardSlide(pptx, T, {
+    siteUrl, startDate, endDate, allRows, rows,
+    curTotals, prevTotals, prevPagesData, COLORS, bandColor
+  });
 
   // ── Summary slide: breakdown by band ───────────────────────────────────
   // Stats use the FULL csState.rows so all bands always show real numbers,
