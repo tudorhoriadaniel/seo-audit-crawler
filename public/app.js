@@ -4538,6 +4538,12 @@ const PPT_I18N = {
     execSummaryFooter: 'Every opportunity has its own slide in this deck with the exact actions to take.',
     printSave: 'Print → Save as PDF',
     printHint: 'Tip: choose "Save as PDF" in your browser print dialog.',
+    pdfTagTitle: 'title',
+    pdfTagMeta: 'meta description',
+    pdfTagH1: 'H1',
+    pdfTagSubheadings: 'subheadings',
+    pdfTagBody: 'body',
+    pdfAbsent: 'absent',
     execKeyInsightLabel: 'KEY INSIGHT',
     execKeyInsight: ({ strikingPages, strikingPot, strikingShare, totalPages, quickWins }) => {
       const wins = quickWins
@@ -4718,6 +4724,12 @@ const PPT_I18N = {
     execSummaryFooter: 'Chaque opportunité a sa propre diapositive dans ce document avec les actions à mener.',
     printSave: 'Imprimer → Enregistrer en PDF',
     printHint: 'Astuce : choisir « Enregistrer en PDF » dans la boîte de dialogue d\'impression.',
+    pdfTagTitle: 'title',
+    pdfTagMeta: 'meta description',
+    pdfTagH1: 'H1',
+    pdfTagSubheadings: 'sous-titres',
+    pdfTagBody: 'corps',
+    pdfAbsent: 'absent',
     execKeyInsightLabel: 'IDÉE CLÉ',
     execKeyInsight: ({ strikingPages, strikingPot, strikingShare, totalPages, quickWins }) => {
       const wins = quickWins
@@ -6016,9 +6028,20 @@ function exportStrategyPdf() {
           <tbody>
             ${(r.topQueries || []).slice(0, 8).map(q => {
               const c = (cov.queries || []).find(x => x.query === q.query);
-              const inSect = c
-                ? [c.phrase.inTitle && 'T', c.phrase.inH1 && 'H1', c.phrase.bodyOccurrences > 0 && `B${c.phrase.bodyOccurrences}×`, c.phrase.inMetaDescription && 'M'].filter(Boolean).join(' · ') || (c.looseMatch.bodyAllWords ? '<span class="warn">words only</span>' : '<span class="danger">absent</span>')
-                : '<span class="muted">—</span>';
+              let inSect;
+              if (!c) {
+                inSect = '<span class="muted">—</span>';
+              } else {
+                const tags = [];
+                if (c.phrase.inTitle)            tags.push(`<span class="tag">${esc(T.pdfTagTitle || 'title')}</span>`);
+                if (c.phrase.inMetaDescription)  tags.push(`<span class="tag">${esc(T.pdfTagMeta || 'meta description')}</span>`);
+                if (c.phrase.inH1)               tags.push(`<span class="tag">${esc(T.pdfTagH1 || 'H1')}</span>`);
+                if (c.phrase.inHeadings)         tags.push(`<span class="tag">${esc(T.pdfTagSubheadings || 'subheadings')}</span>`);
+                if (c.phrase.bodyOccurrences > 0) tags.push(`<span class="tag">${esc((T.pdfTagBody || 'body') + ' (' + c.phrase.bodyOccurrences + '×)')}</span>`);
+                if (tags.length) inSect = tags.join(' ');
+                else if (c.looseMatch.bodyAllWords) inSect = `<span class="warn">${esc(T.wordsOnly || 'words only')}</span>`;
+                else inSect = `<span class="danger">${esc(T.pdfAbsent || 'absent')}</span>`;
+              }
               return `<tr><td>${esc(q.query)}</td><td class="num">${q.impressions.toLocaleString()}</td><td class="num">${q.position.toFixed(1)}</td><td>${inSect}</td></tr>`;
             }).join('')}
           </tbody>
@@ -6138,8 +6161,9 @@ function exportStrategyPdf() {
       .kpis .kpi .val { font-size: 18px; font-weight: 700; margin-top: 4px; display: block; }
       .kpis .kpi.accent .val { color: #6366F1; }
       .qheader { font-size: 11px; font-weight: 700; color: #6B7085; text-transform: uppercase; letter-spacing: 0.08em; margin: 12px 0 6px; }
-      .qtbl th, .qtbl td { padding: 5px 8px; font-size: 11px; }
-      .qtbl .qt-q { width: 50%; }
+      .qtbl th, .qtbl td { padding: 5px 8px; font-size: 11px; vertical-align: middle; }
+      .qtbl .qt-q { width: 42%; }
+      .qtbl .tag { display: inline-block; background: #EEF2FF; color: #4F46E5; border: 1px solid #C7D2FE; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 600; margin: 1px 3px 1px 0; white-space: nowrap; }
       .appendix h2 { margin-bottom: 12px; }
       .apx th, .apx td { padding: 6px 8px; font-size: 11px; }
       .apx .bandc { font-weight: 600; }
