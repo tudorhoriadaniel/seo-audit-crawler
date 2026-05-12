@@ -3793,87 +3793,75 @@ function renderStrategyTable() {
     return;
   }
 
-  const rowsHtml = filtered.map((r, idx) => {
+  // Card layout: each opportunity is a self-contained card. Replaces the
+  // earlier 8-column table that forced horizontal scrolling on laptops —
+  // the URL now wraps, stats sit inline, and the potential-clicks number
+  // is right-anchored as the visual anchor.
+  const cardsHtml = filtered.map((r, idx) => {
     const isOpen = csState.expanded.has(r.page);
     const crawl = r.crawl;
-    const crawlTags = crawl ? `
-      <span style="color:var(--text-muted);font-size:12px">·</span>
-      <span style="font-size:12px;color:var(--text-muted)" title="From the active crawl">
-        ${crawl.wordCount} words · ${crawl.h1Count} H1${crawl.h1Count === 1 ? '' : 's'} · title ${crawl.titleLength}ch
-      </span>` : '';
     const quickWinBadge = r.isQuickWin === true
-      ? `<span title="At least one query the page ranks for is missing from the page entirely" style="background:rgba(22,163,74,.15);color:var(--success);padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600">⚡ quick win</span>`
+      ? `<span title="At least one query the page ranks for is missing from the page entirely" style="background:rgba(22,163,74,.15);color:var(--success);padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;white-space:nowrap">⚡ quick win</span>`
       : '';
     const rec = r.recommendation;
     const recIcon = rec ? (rec.type === 'optimize' ? '✏️' : rec.type === 'rewrite-expand' ? '🔧' : '🆕') : '';
     const recBadge = rec
-      ? `<span title="${escapeHtml(rec.reason)}" style="display:inline-flex;align-items:center;gap:4px;background:#${rec.color}15;color:#${rec.color};padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;border:1px solid #${rec.color}55">${recIcon}<span>${escapeHtml(rec.label)}</span></span>`
+      ? `<span title="${escapeHtml(rec.reason)}" style="display:inline-flex;align-items:center;gap:5px;background:#${rec.color}15;color:#${rec.color};padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;border:1px solid #${rec.color}55;white-space:nowrap">${recIcon}<span>${escapeHtml(rec.label)}</span></span>`
       : '';
-    const main = `
-      <tr data-page="${escapeHtml(r.page)}" style="cursor:pointer;border-left:4px solid ${r.band.color}">
-        <td style="padding:12px 14px">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    const bandPills = STRATEGY_BANDS.filter(b => (r.bandIds || [r.band.id]).includes(b.id)).map(b => {
+      const slot = r.perBand && r.perBand[b.id];
+      const isPrimary = b.id === r.band.id;
+      const count = slot ? slot.queryCount : 0;
+      const pot = slot ? Math.round(slot.potential) : 0;
+      return `<span title="${count} ranking ${count === 1 ? 'query' : 'queries'} in this band · +${pot.toLocaleString()} potential clicks" style="display:inline-block;background:${b.color}22;color:${b.color};padding:2px 8px;border-radius:999px;font-weight:${isPrimary ? '600' : '500'};font-size:11px;${isPrimary ? '' : 'opacity:.85'};white-space:nowrap">${escapeHtml(b.label)} <span style="opacity:.75">×${count}</span></span>`;
+    }).join('');
+
+    const card = `
+      <div class="cs-card" data-page="${escapeHtml(r.page)}" style="cursor:pointer;background:var(--bg-card);border:1px solid var(--border);border-left:4px solid ${r.band.color};border-radius:8px;padding:14px 16px;margin-bottom:${isOpen ? '0' : '10px'};${isOpen ? 'border-bottom-left-radius:0;border-bottom-right-radius:0;' : ''}display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:start">
+        <div style="min-width:0">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
             ${recBadge}
             ${quickWinBadge}
           </div>
-          <div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <a href="${escapeHtml(r.page)}" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none;word-break:break-all;font-weight:600" onclick="event.stopPropagation()">${escapeHtml(r.page)}</a>
-            ${crawlTags}
+          <a href="${escapeHtml(r.page)}" target="_blank" rel="noopener" onclick="event.stopPropagation()"
+             style="color:var(--text);text-decoration:none;font-weight:600;word-break:break-word;display:inline-block;line-height:1.35">${escapeHtml(r.page)}</a>
+          ${crawl && crawl.title ? `<div style="font-size:12px;color:var(--text-muted);margin-top:3px;word-break:break-word">${escapeHtml(crawl.title)}</div>` : ''}
+          ${r.bestQuery ? `<div style="font-size:12px;color:var(--text-muted);margin-top:7px">▸ <b style="color:${r.band.color}">${escapeHtml(r.bestQuery)}</b> · rank ${r.bestQueryPosition.toFixed(1)} · ${r.bestQueryImpressions.toLocaleString()} impr${r.qualifyingCount > 1 ? ` <span style="opacity:.7">(+${r.qualifyingCount - 1} more)</span>` : ''}</div>` : ''}
+          <div style="margin-top:9px;display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-muted)">
+            <span><b style="color:var(--text)">${r.impressions.toLocaleString()}</b> impr</span>
+            <span><b style="color:var(--text)">${r.clicks.toLocaleString()}</b> clicks</span>
+            <span><b style="color:var(--text)">${(r.ctr * 100).toFixed(2)}%</b> CTR</span>
+            <span title="Page-average rank across all queries">pos <b style="color:var(--text)">${r.position.toFixed(1)}</b></span>
           </div>
-          ${crawl && crawl.title ? `<div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escapeHtml(crawl.title)}</div>` : ''}
-          ${r.bestQuery ? `<div style="font-size:12px;color:var(--text-muted);margin-top:5px">▸ <b style="color:${r.band.color}">${escapeHtml(r.bestQuery)}</b> · rank ${r.bestQueryPosition.toFixed(1)} · ${r.bestQueryImpressions.toLocaleString()} impr${r.qualifyingCount > 1 ? ` <span style="opacity:.7">(+${r.qualifyingCount - 1} more)</span>` : ''}</div>` : ''}
-          ${rec && rec.type === 'create-landing' && rec.suggestedUrl ? `<div style="font-size:12px;margin-top:6px;padding:6px 8px;background:rgba(220,38,38,.06);border-left:3px solid #${rec.color};border-radius:4px"><b style="color:#${rec.color}">Suggested new URL:</b> <code style="background:transparent;color:var(--text)">${escapeHtml(rec.suggestedUrl)}</code></div>` : ''}
-        </td>
-        <td style="padding:10px 12px;font-size:12px">
-          ${STRATEGY_BANDS.filter(b => (r.bandIds || [r.band.id]).includes(b.id)).map(b => {
-            const slot = r.perBand && r.perBand[b.id];
-            const isPrimary = b.id === r.band.id;
-            const count = slot ? slot.queryCount : 0;
-            const pot = slot ? Math.round(slot.potential) : 0;
-            return `<span title="${count} ranking ${count === 1 ? 'query' : 'queries'} in this band · +${pot.toLocaleString()} potential clicks" style="display:inline-block;background:${b.color}22;color:${b.color};padding:2px 8px;border-radius:999px;font-weight:${isPrimary ? '600' : '500'};font-size:11px;margin-right:4px;margin-bottom:2px;${isPrimary ? '' : 'opacity:.85'}">${escapeHtml(b.label)} <span style="opacity:.75">×${count}</span></span>`;
-          }).join('')}
-        </td>
-        <td style="padding:10px 12px;text-align:right">${r.impressions.toLocaleString()}</td>
-        <td style="padding:10px 12px;text-align:right">${r.clicks.toLocaleString()}</td>
-        <td style="padding:10px 12px;text-align:right">${(r.ctr * 100).toFixed(2)}%</td>
-        <td style="padding:10px 12px;text-align:right" title="Page-average rank across all queries">${r.position.toFixed(1)}</td>
-        <td style="padding:10px 12px;text-align:right"><b>+${Math.round(r.potentialClicks).toLocaleString()}</b><div style="font-size:11px;color:var(--text-muted)">if @${r.targetPos}</div></td>
-        <td style="padding:10px 12px;text-align:center;color:var(--text-muted)">${isOpen ? '▾' : '▸'}</td>
-      </tr>`;
+          ${bandPills ? `<div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap">${bandPills}</div>` : ''}
+          ${crawl ? `<div style="margin-top:7px;font-size:11px;color:var(--text-muted)">From crawl: ${crawl.wordCount} words · ${crawl.h1Count} H1${crawl.h1Count === 1 ? '' : 's'} · title ${crawl.titleLength}ch</div>` : ''}
+          ${rec && rec.type === 'create-landing' && rec.suggestedUrl ? `<div style="font-size:12px;margin-top:8px;padding:6px 10px;background:rgba(220,38,38,.06);border-left:3px solid #${rec.color};border-radius:4px;word-break:break-all"><b style="color:#${rec.color}">Suggested new URL:</b> <code style="background:transparent;color:var(--text)">${escapeHtml(rec.suggestedUrl)}</code></div>` : ''}
+        </div>
+        <div style="text-align:right;min-width:120px;display:flex;flex-direction:column;align-items:flex-end">
+          <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600">Potential</div>
+          <div style="font-size:26px;font-weight:800;color:var(--primary);line-height:1.05;margin-top:2px">+${Math.round(r.potentialClicks).toLocaleString()}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:3px">if @ #${r.targetPos}</div>
+          <div style="font-size:14px;color:var(--text-muted);margin-top:10px">${isOpen ? '▾' : '▸'}</div>
+        </div>
+      </div>`;
     const expansion = isOpen ? `
-      <tr data-expansion="${escapeHtml(r.page)}">
-        <td colspan="8" style="background:var(--bg-hover);padding:14px 18px">
-          <div id="csQueries-${idx}" style="font-size:13px;color:var(--text-muted)">Loading top queries…</div>
-        </td>
-      </tr>` : '';
-    return main + expansion;
+      <div data-expansion="${escapeHtml(r.page)}" style="background:var(--bg-hover);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;padding:14px 16px;margin-bottom:10px">
+        <div id="csQueries-${idx}" style="font-size:13px;color:var(--text-muted)">Loading top queries…</div>
+      </div>` : '';
+    return card + expansion;
   }).join('');
 
   wrap.innerHTML = `
-    <div class="table-container" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
-        <thead>
-          <tr style="background:var(--bg-hover)">
-            <th style="padding:10px 12px;text-align:left;border-bottom:1px solid var(--border)">Page</th>
-            <th style="padding:10px 12px;text-align:left;border-bottom:1px solid var(--border)">Band</th>
-            <th style="padding:10px 12px;text-align:right;border-bottom:1px solid var(--border)">Impressions</th>
-            <th style="padding:10px 12px;text-align:right;border-bottom:1px solid var(--border)">Clicks</th>
-            <th style="padding:10px 12px;text-align:right;border-bottom:1px solid var(--border)">CTR</th>
-            <th style="padding:10px 12px;text-align:right;border-bottom:1px solid var(--border)">Position</th>
-            <th style="padding:10px 12px;text-align:right;border-bottom:1px solid var(--border)">Potential clicks</th>
-            <th style="padding:10px 12px;border-bottom:1px solid var(--border)"></th>
-          </tr>
-        </thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-    </div>
+    <div>${cardsHtml}</div>
     <div style="padding:10px 4px;color:var(--text-muted);font-size:12px">Showing ${filtered.length.toLocaleString()} of ${csState.rows.length.toLocaleString()} opportunities. Potential-clicks estimate uses an average CTR-by-position curve and is a rough upper-bound.</div>
   `;
 
-  // Row click → toggle expansion + load queries on first open.
-  wrap.querySelectorAll('tr[data-page]').forEach((tr, idx) => {
-    const page = tr.dataset.page;
-    tr.addEventListener('click', async () => {
+  // Card click → toggle expansion + load queries on first open.
+  // Scoped to .cs-card so nested th[data-page] inside the expansion's
+  // per-query sort headers doesn't get caught here.
+  wrap.querySelectorAll('.cs-card').forEach((el) => {
+    const page = el.dataset.page;
+    el.addEventListener('click', async () => {
       if (csState.expanded.has(page)) {
         csState.expanded.delete(page);
       } else {
@@ -4062,9 +4050,9 @@ function enableQuickWinsIfAny() {
 
 function renderStrategyQueriesFor(page) {
   const row = csState.rows.find(r => r.page === page);
-  const tr = document.querySelector(`tr[data-expansion="${CSS.escape(page)}"]`);
-  if (!row || !tr) return;
-  const target = tr.querySelector('td > div');
+  const container = document.querySelector(`[data-expansion="${CSS.escape(page)}"]`);
+  if (!row || !container) return;
+  const target = container.querySelector('div[id^="csQueries-"]');
   if (!target) return;
   if (!row.topQueries) { target.textContent = 'Loading top queries…'; return; }
   if (row.topQueries.error) { target.innerHTML = `<span style="color:var(--danger)">Error loading queries: ${escapeHtml(row.topQueries.error)}</span>`; return; }
