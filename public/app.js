@@ -3745,7 +3745,7 @@ async function analyseAllCoverage() {
   const bands = activeBandIds();
   const textFilter = (document.getElementById('csTextFilter').value || '').toLowerCase();
   const targets = csState.rows.filter(r =>
-    bands.has(r.band.id) &&
+    (r.bandIds || [r.band.id]).some(id => bands.has(id)) &&
     (!textFilter || r.page.toLowerCase().includes(textFilter)) &&
     !(r.coverage && Array.isArray(r.coverage.queries))
   );
@@ -3990,7 +3990,7 @@ function exportStrategyCsv() {
   const textFilter = (document.getElementById('csTextFilter').value || '').toLowerCase();
   const quickWinsOnly = !!document.getElementById('csQuickWins')?.checked;
   const rows = csState.rows.filter(r =>
-    bands.has(r.band.id) &&
+    (r.bandIds || [r.band.id]).some(id => bands.has(id)) &&
     (!textFilter || r.page.toLowerCase().includes(textFilter)) &&
     (!quickWinsOnly || r.isQuickWin === true)
   );
@@ -4144,12 +4144,29 @@ async function exportStrategyPpt() {
   const textFilter = (document.getElementById('csTextFilter').value || '').toLowerCase();
   const quickWinsOnly = !!document.getElementById('csQuickWins')?.checked;
   const rows = csState.rows.filter(r =>
-    bands.has(r.band.id) &&
+    (r.bandIds || [r.band.id]).some(id => bands.has(id)) &&
     (!textFilter || r.page.toLowerCase().includes(textFilter)) &&
     (!quickWinsOnly || r.isQuickWin === true)
   );
   if (!rows.length) { alert('No opportunities match the current filters.'); return; }
   if (rows.length > 60 && !confirm(`This will create ${rows.length + 2} slides — that can take a minute. Continue?`)) return;
+
+  // Pre-flight: if any rows still lack live-page analysis, offer to run it
+  // first so the slides accurately show each page's real title / meta /
+  // H1 instead of "(not analysed)".
+  const unanalysed = rows.filter(r => !(r.coverage && Array.isArray(r.coverage.queries)));
+  if (unanalysed.length) {
+    const choice = confirm(
+      `${unanalysed.length} of ${rows.length} pages haven't been analysed yet. Without that, the slides will show "(not analysed)" for each page's title, meta description and H1.\n\n` +
+      `Run keyword-coverage analysis now (slower but accurate)?\n\n` +
+      `OK = run analysis first.\nCancel = export now with placeholders.`
+    );
+    if (choice) {
+      // Run the existing bulk analysis. Mirrors the user clicking "Analyse
+      // keyword coverage", but blocks until done so we can continue.
+      await analyseAllCoverage();
+    }
+  }
 
   const btn = document.getElementById('csExportPpt');
   btn.disabled = true;
@@ -4398,38 +4415,90 @@ async function exportStrategyPpt() {
     s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 2.75, w: 6.1, h: 4.2, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
     s.addText('Current page', { x: 0.78, y: 2.85, w: 5.9, h: 0.35, fontSize: 13, bold: true, color: COLORS.text });
 
-    const liveTitle = (cov && cov.title) || (r.crawl && r.crawl.title) || '';
-    const liveTitleLen = liveTitle.length;
-    const titleLenColor = (liveTitleLen >= 30 && liveTitleLen <= 60) ? COLORS.success : (liveTitleLen === 0 ? COLORS.danger : COLORS.warning);
+    // TITLE — distinguish three cases: analysed-and-present (green/amber
+    // by length), analysed-and-absent (red "missing"), and not-analysed
+    // (muted "(not analysed)"). The previous version conflated the last
+    // two and falsely reported "missing" for pages we hadn't fetched.
+    let liveTitle = '';
+    let titleLen = 0;
+    let titleStatus = 'unknown';   // 'present' | 'missing' | 'unknown'
+    if (cov) {
+      liveTitle = cov.title || '';
+      titleLen = liveTitle.length;
+      titleStatus = titleLen > 0 ? 'present' : 'missing';
+    } else if (r.crawl && r.crawl.title) {
+      liveTitle = r.crawl.title;
+      titleLen = r.crawl.titleLength || liveTitle.length;
+      titleStatus = 'present';
+    }
+    const titleLenColor = titleStatus === 'present'
+      ? ((titleLen >= 30 && titleLen <= 60) ? COLORS.success : COLORS.warning)
+      : (titleStatus === 'missing' ? COLORS.danger : COLORS.muted);
+    const titleLenLabel = titleStatus === 'present' ? `${titleLen}ch`
+                       : (titleStatus === 'missing' ? 'missing' : '(not analysed)');
     s.addText([
       { text: 'TITLE', options: { fontSize: 9, color: COLORS.muted, bold: true } },
-      { text: liveTitleLen ? `  ${liveTitleLen}ch` : '  missing', options: { fontSize: 9, color: titleLenColor, bold: true } }
+      { text: `  ${titleLenLabel}`, options: { fontSize: 9, color: titleLenColor, bold: true } }
     ], { x: 0.78, y: 3.22, w: 5.9, h: 0.25 });
-    s.addText(liveTitle || '(no <title>)', { x: 0.78, y: 3.45, w: 5.9, h: 0.45, fontSize: 11, color: COLORS.text, italic: !liveTitle });
+    const titleBody = liveTitle
+      ? liveTitle
+      : (titleStatus === 'missing' ? '(no <title> tag on page)' : '(not analysed — run "Analyse keyword coverage")');
+    s.addText(titleBody, { x: 0.78, y: 3.45, w: 5.9, h: 0.45, fontSize: 11,
+      color: liveTitle ? COLORS.text : (titleStatus === 'missing' ? COLORS.danger : COLORS.muted),
+      italic: !liveTitle });
 
-    const metaText = cov ? cov.metaDescription : '';
-    const metaLen = cov ? cov.metaDescriptionLength : -1;
-    const metaLenColor = metaLen === -1 ? COLORS.muted
-                       : metaLen === 0 ? COLORS.danger
-                       : (metaLen >= 70 && metaLen <= 160 ? COLORS.success : COLORS.warning);
-    const metaLenLabel = metaLen === -1 ? '' : (metaLen === 0 ? 'missing' : `${metaLen}ch`);
+    // META DESCRIPTION — same three-state logic.
+    let metaText = '';
+    let metaLen = 0;
+    let metaStatus = 'unknown';
+    if (cov) {
+      metaText = cov.metaDescription || '';
+      metaLen = cov.metaDescriptionLength || 0;
+      metaStatus = metaLen > 0 ? 'present' : 'missing';
+    }
+    const metaLenColor = metaStatus === 'present'
+      ? (metaLen >= 70 && metaLen <= 160 ? COLORS.success : COLORS.warning)
+      : (metaStatus === 'missing' ? COLORS.danger : COLORS.muted);
+    const metaLenLabel = metaStatus === 'present' ? `${metaLen}ch`
+                     : (metaStatus === 'missing' ? 'missing' : '(not analysed)');
     s.addText([
       { text: 'META DESCRIPTION', options: { fontSize: 9, color: COLORS.muted, bold: true } },
-      { text: metaLenLabel ? `  ${metaLenLabel}` : '', options: { fontSize: 9, color: metaLenColor, bold: true } }
+      { text: `  ${metaLenLabel}`, options: { fontSize: 9, color: metaLenColor, bold: true } }
     ], { x: 0.78, y: 3.98, w: 5.9, h: 0.25 });
-    s.addText(metaText || (cov ? '(missing — Google will auto-generate one)' : '(not analysed)'),
-      { x: 0.78, y: 4.21, w: 5.9, h: 0.65, fontSize: 11, color: metaText ? COLORS.text : COLORS.danger, italic: !metaText });
+    const metaBody = metaText
+      ? metaText
+      : (metaStatus === 'missing' ? '(no meta description — Google will auto-generate one)' : '(not analysed — run "Analyse keyword coverage")');
+    s.addText(metaBody, { x: 0.78, y: 4.21, w: 5.9, h: 0.65, fontSize: 11,
+      color: metaText ? COLORS.text : (metaStatus === 'missing' ? COLORS.danger : COLORS.muted),
+      italic: !metaText });
 
-    const liveH1 = (cov && cov.h1 && cov.h1[0]) || '';
-    const h1Count = cov ? (cov.h1 ? cov.h1.length : 0) : (r.crawl ? r.crawl.h1Count : -1);
-    const h1Color = h1Count === 1 ? COLORS.success : (h1Count === 0 || h1Count === -1 ? COLORS.danger : COLORS.warning);
-    const h1Label = h1Count === -1 ? '' : (h1Count === 1 ? '1 H1' : `${h1Count} H1${h1Count === 1 ? '' : 's'}`);
+    // H1 — same three-state logic.
+    let liveH1 = '';
+    let h1Count = 0;
+    let h1Status = 'unknown';
+    if (cov) {
+      liveH1 = (cov.h1 && cov.h1[0]) || '';
+      h1Count = cov.h1 ? cov.h1.length : 0;
+      h1Status = h1Count > 0 ? 'present' : 'missing';
+    } else if (r.crawl && typeof r.crawl.h1Count === 'number') {
+      h1Count = r.crawl.h1Count;
+      h1Status = h1Count > 0 ? 'present' : 'missing';
+    }
+    const h1Color = h1Status === 'present'
+      ? (h1Count === 1 ? COLORS.success : COLORS.warning)
+      : (h1Status === 'missing' ? COLORS.danger : COLORS.muted);
+    const h1Label = h1Status === 'present' ? `${h1Count} H1${h1Count === 1 ? '' : 's'}`
+                : (h1Status === 'missing' ? 'no H1' : '(not analysed)');
     s.addText([
       { text: 'H1', options: { fontSize: 9, color: COLORS.muted, bold: true } },
-      { text: h1Label ? `  ${h1Label}` : '', options: { fontSize: 9, color: h1Color, bold: true } }
+      { text: `  ${h1Label}`, options: { fontSize: 9, color: h1Color, bold: true } }
     ], { x: 0.78, y: 4.94, w: 5.9, h: 0.25 });
-    s.addText(liveH1 || (cov ? '(no H1 on page)' : '(not analysed)'),
-      { x: 0.78, y: 5.17, w: 5.9, h: 0.4, fontSize: 11, color: liveH1 ? COLORS.text : COLORS.danger, italic: !liveH1 });
+    const h1Body = liveH1
+      ? liveH1
+      : (h1Status === 'missing' ? '(no H1 heading on page)' : '(not analysed — run "Analyse keyword coverage")');
+    s.addText(h1Body, { x: 0.78, y: 5.17, w: 5.9, h: 0.4, fontSize: 11,
+      color: liveH1 ? COLORS.text : (h1Status === 'missing' ? COLORS.danger : COLORS.muted),
+      italic: !liveH1 });
 
     // Coverage stats grid
     if (cov) {
