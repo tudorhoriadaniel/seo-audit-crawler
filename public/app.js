@@ -3183,6 +3183,9 @@ function renderStrategyShell() {
           <span style="font-size:12px;color:var(--text-muted);margin-right:4px">Bands:</span>
           ${bandCheckboxes}
         </div>
+        <div style="margin-top:8px;font-size:11px;color:var(--text-muted)">
+          A page is counted in every band where it has at least one ranking query above the min-impressions threshold, so the same page can appear in multiple bands (Push-to-#1 for one query, Page 2 for another).
+        </div>
         <div style="display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;align-items:center">
           <input type="text" id="csTextFilter" placeholder="Filter rows (URL or query)…" style="flex:1;min-width:200px;padding:7px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
           <button id="csAnalyse" class="btn btn-secondary" title="Fetch each page and analyse whether the queries it ranks for actually appear on the page" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Analyse keyword coverage</button>
@@ -3342,6 +3345,25 @@ async function runStrategyQuery() {
       }
       if (!bestQuery) continue;   // no qualifying query → not an opportunity
 
+      // Per-band aggregates for this page: queryCount, impressions, potential,
+      // and the best (highest-potential) query in that band. Lets a page count
+      // in every band where it has at least one qualifying query.
+      const perBand = {};
+      for (const q of qualifying) {
+        const id = q._band.id;
+        if (!perBand[id]) {
+          perBand[id] = {
+            band: q._band, queryCount: 0, impressions: 0, potential: 0, bestQuery: null
+          };
+        }
+        const slot = perBand[id];
+        slot.queryCount++;
+        slot.impressions += q.impressions;
+        slot.potential += q._potential;
+        if (!slot.bestQuery || q._potential > slot.bestQuery._potential) slot.bestQuery = q;
+      }
+      const bandIds = Object.keys(perBand);
+
       // Sort the per-page queries: best opportunity first (potential clicks),
       // then by impressions — gives a clean drill-down without an extra API call.
       p.queries.sort((a, b) => {
@@ -3360,7 +3382,9 @@ async function runStrategyQuery() {
         clicks: p.totalClicks,
         ctr: avgCtr,
         position: avgPosition,
-        band: bestQuery._band,
+        band: bestQuery._band,           // primary band = band of the highest-potential query overall
+        bandIds,                          // every band this page qualifies for
+        perBand,                          // per-band aggregates (count / impr / potential / bestQuery)
         targetPos: bestQuery._band.target,
         potentialClicks: totalPotential,
         bestQuery: bestQuery.query,
@@ -3397,9 +3421,20 @@ function renderStrategySummary() {
   const total = csState.rows.length;
   const totalPotential = csState.rows.reduce((s, r) => s + r.potentialClicks, 0);
   const totalImpressions = csState.rows.reduce((s, r) => s + r.impressions, 0);
+
+  // A page counts in every band where it has at least one qualifying query,
+  // so the sum of band counts can exceed the page count.
   const byBand = {};
-  for (const b of STRATEGY_BANDS) byBand[b.id] = 0;
-  for (const r of csState.rows) byBand[r.band.id]++;
+  for (const b of STRATEGY_BANDS) byBand[b.id] = { pages: 0, impressions: 0, potential: 0 };
+  for (const r of csState.rows) {
+    for (const bandId of r.bandIds || [r.band.id]) {
+      byBand[bandId].pages++;
+      if (r.perBand && r.perBand[bandId]) {
+        byBand[bandId].impressions += r.perBand[bandId].impressions;
+        byBand[bandId].potential   += r.perBand[bandId].potential;
+      }
+    }
+  }
 
   const card = (label, value, hint) => `
     <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:14px">
@@ -3407,11 +3442,15 @@ function renderStrategySummary() {
       <div style="font-size:22px;font-weight:700;margin-top:4px">${value}</div>
       ${hint ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">${hint}</div>` : ''}
     </div>`;
-  const bandChips = STRATEGY_BANDS.map(b =>
-    `<div style="display:flex;align-items:center;gap:6px;font-size:12px">
+  const bandChips = STRATEGY_BANDS.map(b => {
+    const s = byBand[b.id];
+    const pot = Math.round(s.potential);
+    return `<div style="display:flex;align-items:center;gap:6px;font-size:12px" title="${s.impressions.toLocaleString()} impressions · +${pot.toLocaleString()} potential clicks">
        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${b.color}"></span>
-       <b>${byBand[b.id]}</b> <span style="color:var(--text-muted)">${escapeHtml(b.label)}</span>
-     </div>`).join('');
+       <b>${s.pages}</b> <span style="color:var(--text-muted)">${escapeHtml(b.label)}</span>
+       ${s.pages ? `<span style="color:var(--text-muted);margin-left:auto">+${pot.toLocaleString()}</span>` : ''}
+     </div>`;
+  }).join('');
 
   const quickWins = csState.rows.filter(r => r.isQuickWin === true).length;
   const analysed = csState.rows.filter(r => r.coverage && Array.isArray(r.coverage.queries)).length;
@@ -3442,8 +3481,10 @@ function renderStrategyTable() {
   const bands = activeBandIds();
   const textFilter = (document.getElementById('csTextFilter').value || '').toLowerCase();
   const quickWinsOnly = !!document.getElementById('csQuickWins')?.checked;
+  // A page passes if at least one of its qualifying bands is checked.
+  const pageInBands = (r) => (r.bandIds || [r.band.id]).some(id => bands.has(id));
   const filtered = csState.rows.filter(r =>
-    bands.has(r.band.id) &&
+    pageInBands(r) &&
     (!textFilter || r.page.toLowerCase().includes(textFilter)) &&
     (!quickWinsOnly || r.isQuickWin === true)
   );
@@ -3476,7 +3517,15 @@ function renderStrategyTable() {
           ${crawl && crawl.title ? `<div style="font-size:12px;color:var(--text-muted);margin-top:3px">${escapeHtml(crawl.title)}</div>` : ''}
           ${r.bestQuery ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px">Best opportunity: <b style="color:${r.band.color}">${escapeHtml(r.bestQuery)}</b> @ rank ${r.bestQueryPosition.toFixed(1)} · ${r.bestQueryImpressions.toLocaleString()} impressions${r.qualifyingCount > 1 ? ` <span style="opacity:.7">(+${r.qualifyingCount - 1} more ranking queries)</span>` : ''}</div>` : ''}
         </td>
-        <td style="padding:10px 12px;font-size:12px"><span style="background:${r.band.color}22;color:${r.band.color};padding:2px 8px;border-radius:999px;font-weight:600" title="Band reflects the best opportunity query — not the page's average rank.">${escapeHtml(r.band.label)}</span></td>
+        <td style="padding:10px 12px;font-size:12px">
+          ${STRATEGY_BANDS.filter(b => (r.bandIds || [r.band.id]).includes(b.id)).map(b => {
+            const slot = r.perBand && r.perBand[b.id];
+            const isPrimary = b.id === r.band.id;
+            const count = slot ? slot.queryCount : 0;
+            const pot = slot ? Math.round(slot.potential) : 0;
+            return `<span title="${count} ranking ${count === 1 ? 'query' : 'queries'} in this band · +${pot.toLocaleString()} potential clicks" style="display:inline-block;background:${b.color}22;color:${b.color};padding:2px 8px;border-radius:999px;font-weight:${isPrimary ? '600' : '500'};font-size:11px;margin-right:4px;margin-bottom:2px;${isPrimary ? '' : 'opacity:.85'}">${escapeHtml(b.label)} <span style="opacity:.75">×${count}</span></span>`;
+          }).join('')}
+        </td>
         <td style="padding:10px 12px;text-align:right">${r.impressions.toLocaleString()}</td>
         <td style="padding:10px 12px;text-align:right">${r.clicks.toLocaleString()}</td>
         <td style="padding:10px 12px;text-align:right">${(r.ctr * 100).toFixed(2)}%</td>
@@ -3876,7 +3925,7 @@ function exportStrategyCsv() {
   );
   const headers = [
     'page','band','impressions','clicks','ctr','page_avg_position','potential_clicks','target_position',
-    'best_query','best_query_position','best_query_impressions','qualifying_query_count',
+    'primary_band_id','all_bands','best_query','best_query_position','best_query_impressions','qualifying_query_count',
     'crawl_title','crawl_word_count',
     'coverage_analysed','page_word_count','queries_analysed',
     'queries_in_title','queries_in_meta_description','queries_in_h1','queries_in_body',
@@ -3912,6 +3961,7 @@ function exportStrategyCsv() {
     lines.push([
       r.page, r.band.label, r.impressions, r.clicks, r.ctr, r.position,
       Math.round(r.potentialClicks), r.targetPos,
+      r.band.id, (r.bandIds || [r.band.id]).join('|'),
       r.bestQuery || '', r.bestQueryPosition != null ? r.bestQueryPosition.toFixed(1) : '',
       r.bestQueryImpressions || '', r.qualifyingCount || '',
       r.crawl ? r.crawl.title : '',
@@ -4125,10 +4175,13 @@ async function exportStrategyPpt() {
     { x: 0.6, y: 0.95, w: 12, h: 0.4, fontSize: 12, color: COLORS.muted });
 
   STRATEGY_BANDS.forEach((band, idx) => {
-    const inBand = allRows.filter(r => r.band.id === band.id);
-    const impr = inBand.reduce((s, r) => s + r.impressions, 0);
-    const pot = Math.round(inBand.reduce((s, r) => s + r.potentialClicks, 0));
-    const inDeck = rows.filter(r => r.band.id === band.id).length;
+    // Count every page that has a qualifying query in this band — not just
+    // the pages whose primary band matches — so the deck reflects all the
+    // opportunity surface area at each rank, not the volume-weighted primary.
+    const inBand = allRows.filter(r => (r.bandIds || [r.band.id]).includes(band.id));
+    const impr = inBand.reduce((s, r) => s + ((r.perBand && r.perBand[band.id] && r.perBand[band.id].impressions) || 0), 0);
+    const pot = Math.round(inBand.reduce((s, r) => s + ((r.perBand && r.perBand[band.id] && r.perBand[band.id].potential) || 0), 0));
+    const inDeck = rows.filter(r => (r.bandIds || [r.band.id]).includes(band.id)).length;
     const y = 1.55 + idx * 1.10;
     const bc = bandColor(band);
 
