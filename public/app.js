@@ -4569,7 +4569,11 @@ const PPT_I18N = {
     kpiExtraClicks: 'Estimated extra clicks',
     tileScopeAll: (n) => `total across the ${n} queries this page ranks for`,
     tileScopeOverall: 'page-level average across all queries',
-    tileScopeBest: (q) => `if "${trunc(q || '', 30)}" reaches its target rank`,
+    tileScopeBest: (q) => {
+      const s = String(q || '');
+      const short = s.length > 30 ? s.slice(0, 29) + '…' : s;
+      return `if "${short}" reaches its target rank`;
+    },
     matrixTitle: 'Keyword opportunity matrix',
     matrixSubtitle: 'From GSC queries, pos. 5–20, high impressions',
     matrixQuery: 'Query',
@@ -4728,7 +4732,11 @@ const PPT_I18N = {
     kpiExtraClicks: 'Clics supplémentaires estimés',
     tileScopeAll: (n) => `total sur les ${n} requêtes positionnées de cette page`,
     tileScopeOverall: 'moyenne page (toutes requêtes)',
-    tileScopeBest: (q) => `si « ${trunc(q || '', 30)} » atteint son rang cible`,
+    tileScopeBest: (q) => {
+      const s = String(q || '');
+      const short = s.length > 30 ? s.slice(0, 29) + '…' : s;
+      return `si « ${short} » atteint son rang cible`;
+    },
     matrixTitle: 'Matrice d\'opportunités',
     matrixSubtitle: 'Requêtes GSC, pos. 5–20, fortes impressions',
     matrixQuery: 'Requête',
