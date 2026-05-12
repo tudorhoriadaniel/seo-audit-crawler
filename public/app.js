@@ -4527,6 +4527,8 @@ const PPT_I18N = {
     execColBest: 'Best query @ rank',
     execColAction: 'Action',
     execColGain: 'Extra clicks',
+    execChartTitle: 'Work breakdown',
+    execTopFooterNote: (n) => `Top 5 of ${n.toLocaleString()} opportunities by potential clicks. Every page has its own slide.`,
     execTargetShort: 'at rank',
     execSummaryFooter: 'Every opportunity has its own slide in this deck with the exact actions to take.',
     execSummaryPara1: (a) =>
@@ -4680,6 +4682,8 @@ const PPT_I18N = {
     execColBest: 'Meilleure requête @ rang',
     execColAction: 'Action',
     execColGain: 'Clics suppl.',
+    execChartTitle: 'Répartition du travail',
+    execTopFooterNote: (n) => `Top 5 sur ${n.toLocaleString()} opportunités par clics potentiels. Chaque page a sa propre diapositive.`,
     execTargetShort: 'au rang',
     execSummaryFooter: 'Chaque opportunité a sa propre diapositive dans ce document avec les actions à mener.',
     execSummaryPara1: (a) =>
@@ -4845,89 +4849,85 @@ function addExecutiveSummarySlide(pptx, T, ctx) {
   const MUTED = '6B7085';
   const PRIMARY = '6366F1';
 
-  const totalImpr = allRows.reduce((s, r) => s + r.impressions, 0);
-  const totalClicks = allRows.reduce((s, r) => s + r.clicks, 0);
   const totalPotential = Math.round(allRows.reduce((s, r) => s + r.potentialClicks, 0));
   const byRec = { optimize: 0, 'rewrite-expand': 0, 'create-landing': 0 };
   for (const r of allRows) {
     const t = (r.recommendation && r.recommendation.type) || 'optimize';
     if (byRec[t] != null) byRec[t]++;
   }
-  const quickWins = allRows.filter(r => r.isQuickWin === true).length;
 
   const s = pptx.addSlide();
   s.background = { color: PAGE_BG };
 
+  // Title row
   s.addText(T.execSummaryTitle, { x: 0.55, y: 0.30, w: 12.2, h: 0.45, fontSize: 22, bold: true, color: TEXT });
   s.addText(T.execSummaryKicker, { x: 0.55, y: 0.78, w: 12.2, h: 0.30, fontSize: 12, color: MUTED });
 
-  // ── Headline number + sub-text (very compact, no waffle) ────────────
-  s.addText(`+${totalPotential.toLocaleString()}`, { x: 0.55, y: 1.15, w: 5.5, h: 1.0, fontSize: 64, bold: true, color: '#6366F1' });
-  s.addText(T.execHeroSub
-      ? T.execHeroSub(allRows.length, siteUrl)
-      : `extra clicks/month available across ${allRows.length} ranking pages on ${siteUrl}`,
-    { x: 0.55, y: 2.10, w: 5.5, h: 0.50, fontSize: 11, color: MUTED, italic: true });
+  // Hero number — full-width across the top so the "+N extra clicks" is
+  // the one thing the client reads first.
+  s.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 1.20, w: 12.25, h: 1.45, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+  s.addText(`+${totalPotential.toLocaleString()}`, { x: 0.85, y: 1.30, w: 5.0, h: 1.25, fontSize: 64, bold: true, color: '#' + PRIMARY });
+  s.addText(T.execHeroSub(allRows.length, siteUrl),
+    { x: 5.95, y: 1.70, w: 6.65, h: 0.85, fontSize: 13, color: MUTED });
 
-  // Work-split mini-chips on the right of the hero
-  const workSplit = [
-    { label: T.rec.optimize.label,         value: byRec.optimize,          color: '16A34A', tint: 'E6F4EE' },
-    { label: T.rec['rewrite-expand'].label,value: byRec['rewrite-expand'], color: 'D97706', tint: 'FDEEDA' },
-    { label: T.rec['create-landing'].label,value: byRec['create-landing'], color: 'DC2626', tint: 'FDE7E7' }
-  ];
-  workSplit.forEach((w, i) => {
-    const x = 6.4 + i * 2.15;
-    s.addShape(pptx.ShapeType.roundRect, { x, y: 1.30, w: 2.00, h: 1.30, fill: { color: w.tint }, line: { type: 'none' }, rectRadius: 0.12 });
-    s.addText(w.value.toLocaleString(), { x, y: 1.40, w: 2.00, h: 0.65, fontSize: 32, bold: true, color: '#' + w.color, align: 'center' });
-    s.addText(w.label,                   { x, y: 2.02, w: 2.00, h: 0.55, fontSize: 10, bold: true, color: '#' + w.color, align: 'center' });
+  // ── LEFT: pie chart of work breakdown ───────────────────────────────
+  s.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 2.85, w: 5.85, h: 4.20, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+  s.addText(T.execChartTitle, { x: 0.85, y: 2.95, w: 5.4, h: 0.32, fontSize: 13, bold: true, color: TEXT });
+
+  const chartData = [{
+    name: T.execChartTitle,
+    labels: [T.rec.optimize.label, T.rec['rewrite-expand'].label, T.rec['create-landing'].label],
+    values: [byRec.optimize, byRec['rewrite-expand'], byRec['create-landing']]
+  }];
+  s.addChart(pptx.ChartType.pie, chartData, {
+    x: 0.65, y: 3.30, w: 5.65, h: 3.65,
+    chartColors: ['16A34A', 'D97706', 'DC2626'],
+    showLegend: true,
+    legendPos: 'b',
+    legendFontSize: 11,
+    legendColor: TEXT,
+    showPercent: true,
+    dataLabelColor: 'FFFFFF',
+    dataLabelFontSize: 11,
+    dataLabelFontBold: true,
+    showLabel: false,
+    showValue: false
   });
 
-  // ── "Start here — top 5 priority pages" concrete list ───────────────
-  s.addText(T.execTopHeader || 'Start here — top 5 priority pages',
-    { x: 0.55, y: 2.85, w: 12.2, h: 0.35, fontSize: 14, bold: true, color: TEXT });
-  s.addShape(pptx.ShapeType.roundRect, { x: 0.55, y: 3.25, w: 12.25, h: 3.60, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+  // ── RIGHT: short table of top 5 priority pages ──────────────────────
+  s.addShape(pptx.ShapeType.roundRect, { x: 6.55, y: 2.85, w: 6.25, h: 4.20, fill: { color: CARD_BG }, line: { color: CARD_BORDER, width: 0.5 }, rectRadius: 0.12 });
+  s.addText(T.execTopHeader, { x: 6.85, y: 2.95, w: 5.8, h: 0.32, fontSize: 13, bold: true, color: TEXT });
 
   const top5 = rows.slice().sort((a, b) => b.potentialClicks - a.potentialClicks).slice(0, 5);
-
-  // Render top-5 as a proper table — pptxgenjs handles tables far more
-  // reliably than ~30 individually-positioned addText/addShape calls, and
-  // the per-row layout never drifts.
   if (top5.length) {
     const recColorOf = (t) => t === 'create-landing' ? 'DC2626' : (t === 'rewrite-expand' ? 'D97706' : '16A34A');
-    const recTintOf  = (t) => t === 'create-landing' ? 'FDE7E7' : (t === 'rewrite-expand' ? 'FDEEDA' : 'E6F4EE');
-
     const headerStyle = { bold: true, color: MUTED, fontSize: 9, fill: { color: 'F5F1E8' } };
     const headerRow = [
       { text: '#',                                   options: headerStyle },
-      { text: T.execColPage || 'Page',               options: headerStyle },
-      { text: T.execColBest || 'Best query @ rank',  options: headerStyle },
-      { text: T.execColAction || 'Action',           options: headerStyle },
-      { text: T.execColGain || 'Extra clicks',       options: { ...headerStyle, align: 'right' } }
+      { text: T.execColPage,                         options: headerStyle },
+      { text: T.execColGain,                         options: { ...headerStyle, align: 'right' } }
     ];
-
     const dataRows = top5.map((r, i) => {
       const recType = (r.recommendation && r.recommendation.type) || 'optimize';
-      const recLabel = T.rec[recType].label;
       let path = r.page;
       try { path = new URL(r.page).pathname || '/'; } catch { /* ignore */ }
       return [
-        { text: String(i + 1), options: { fontSize: 13, bold: true, color: '#' + recColorOf(recType), align: 'center' } },
-        { text: trunc(path, 48), options: { fontSize: 11, bold: true, color: TEXT } },
-        { text: `"${trunc(r.bestQuery || '', 36)}"  @ ${r.bestQueryPosition.toFixed(1)}`, options: { fontSize: 10, color: TEXT } },
-        { text: ' ' + recLabel + ' ', options: { fontSize: 10, bold: true, color: '#' + recColorOf(recType), fill: { color: recTintOf(recType) } } },
-        { text: '+' + Math.round(r.potentialClicks).toLocaleString() + `   ${T.execTargetShort || 'at'} #${r.targetPos}`, options: { fontSize: 11, bold: true, color: '#6366F1', align: 'right' } }
+        { text: String(i + 1), options: { fontSize: 11, bold: true, color: '#' + recColorOf(recType), align: 'center' } },
+        { text: trunc(path, 42), options: { fontSize: 10, bold: true, color: TEXT } },
+        { text: '+' + Math.round(r.potentialClicks).toLocaleString(), options: { fontSize: 11, bold: true, color: '#' + PRIMARY, align: 'right' } }
       ];
     });
-
     s.addTable([headerRow, ...dataRows], {
-      x: 0.55, y: 3.30, w: 12.25, colW: [0.6, 4.20, 3.85, 1.80, 1.80],
+      x: 6.85, y: 3.40, w: 5.75, colW: [0.45, 4.10, 1.20],
       fontFace: 'Calibri', color: TEXT,
       border: { type: 'solid', color: CARD_BORDER, pt: 0.5 },
-      rowH: 0.55
+      rowH: 0.42
     });
+    s.addText(T.execTopFooterNote(rows.length),
+      { x: 6.85, y: 6.50, w: 5.75, h: 0.40, fontSize: 9, color: MUTED, italic: true });
   }
 
-  s.addText(T.execSummaryFooter,
-    { x: 0.55, y: 7.00, w: 12.2, h: 0.30, fontSize: 10, color: MUTED, italic: true });
+  s.addText(T.preparedBy, { x: 0.55, y: 7.15, w: 12.2, h: 0.25, fontSize: 9, color: MUTED });
 }
 
 function addExecutiveDashboardSlide(pptx, T, ctx) {
