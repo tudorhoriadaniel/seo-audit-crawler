@@ -3608,11 +3608,7 @@ function renderStrategySummary() {
     card('Estimated extra clicks', Math.round(totalPotential).toLocaleString(), 'if moved to target rank') +
     (analysed > 0
       ? card('Quick wins', quickWins.toLocaleString(), `pages missing ≥ 1 ranked keyword (analysed ${analysed} / ${total})`)
-      : '') +
-    `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:14px">
-       <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">By band</div>
-       <div style="display:flex;flex-direction:column;gap:5px">${bandChips}</div>
-     </div>`;
+      : '');
 }
 
 // Highlights ranking queries that were dropped by the min-impressions
@@ -3623,47 +3619,46 @@ function renderExcludedHint() {
   const ex = csState.excluded;
   if (!ex) { el.innerHTML = ''; return; }
 
-  const lines = STRATEGY_BANDS.map(b => {
-    const s = ex[b.id] || { queries: 0, impressions: 0 };
-    if (!s.queries) return '';
-    return `<button data-cs-band-focus="${b.id}" title="Click to lower threshold to 1 and filter the table to ${escapeHtml(b.label)}" style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid ${b.color};border-radius:999px;background:var(--bg-input);color:var(--text);font-size:12px;margin:2px 4px 2px 0;cursor:pointer">
-        <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${b.color}"></span>
-        <b>${s.queries}</b> in ${escapeHtml(b.label)} <span style="color:var(--text-muted)">(${s.impressions.toLocaleString()} impr)</span>
-      </button>`;
-  }).filter(Boolean).join('');
-
   const totalExcluded = STRATEGY_BANDS.reduce((sum, b) => sum + ((ex[b.id] && ex[b.id].queries) || 0), 0);
   if (!totalExcluded) { el.innerHTML = ''; return; }
 
+  // Per-band chips moved into a <details>, so the strip stays one line
+  // unless the user actively wants the breakdown.
+  const bandChips = STRATEGY_BANDS.map(b => {
+    const s = ex[b.id] || { queries: 0, impressions: 0 };
+    if (!s.queries) return '';
+    return `<button data-cs-band-focus="${b.id}" title="Lower threshold to 1 and filter to ${escapeHtml(b.label)}" style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border:1px solid ${b.color};border-radius:999px;background:var(--bg-input);color:var(--text);font-size:11px;margin:2px 4px 0 0;cursor:pointer">
+        <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${b.color}"></span>
+        <b>${s.queries}</b> ${escapeHtml(b.label)}
+      </button>`;
+  }).filter(Boolean).join('');
+
   el.innerHTML = `
-    <div style="background:rgba(217,119,6,.08);border:1px solid var(--warning);border-radius:8px;padding:12px 14px;margin-top:12px">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-        <div style="font-size:13px;color:var(--text)">
-          <b>${totalExcluded.toLocaleString()} ranking ${totalExcluded === 1 ? 'query' : 'queries'}</b> dropped by your <b>${csState.minImpressions.toLocaleString()}</b>-impressions filter
-          <span style="color:var(--text-muted)">— that's why some bands read zero.</span>
-        </div>
-        <div style="display:flex;gap:6px">
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;background:rgba(217,119,6,.06);border:1px solid rgba(217,119,6,.30);font-size:13px;color:var(--text)">
+        <span style="font-size:14px">⚠️</span>
+        <span><b>${totalExcluded.toLocaleString()} queries</b> below your ${csState.minImpressions.toLocaleString()}-impression filter — some bands may be undercounted.</span>
+        <span style="margin-left:auto;display:flex;gap:6px" onclick="event.stopPropagation()">
           ${[5, 1].filter(v => v < csState.minImpressions).map(v =>
-            `<button data-cs-lower="${v}" class="btn btn-secondary" style="padding:5px 11px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);cursor:pointer;font-size:12px">Lower to ${v}</button>`
+            `<button data-cs-lower="${v}" class="btn btn-secondary" style="padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);cursor:pointer;font-size:11px">Lower to ${v}</button>`
           ).join('')}
-        </div>
-      </div>
-      <div style="margin-top:8px">${lines}</div>
-    </div>`;
+        </span>
+      </summary>
+      <div style="padding:8px 14px 4px">${bandChips}</div>
+    </details>`;
 
   el.querySelectorAll('[data-cs-lower]').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
       document.getElementById('csMinImpressions').value = btn.dataset.csLower;
       runStrategyQuery();
     });
   });
 
   el.querySelectorAll('[data-cs-band-focus]').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
       const bandId = btn.dataset.csBandFocus;
-      // Lower threshold so the dropped queries become opportunities, and
-      // narrow the band filter to just this band. Re-run, then re-render
-      // so the table reflects only that band.
       document.getElementById('csMinImpressions').value = '1';
       for (const cb of document.querySelectorAll('.strategy-band')) {
         cb.checked = cb.dataset.band === bandId;
@@ -3719,10 +3714,13 @@ function renderStrategicOverview() {
   }).join('');
 
   el.innerHTML = `
-    <div style="margin-top:12px">
-      <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700;margin-bottom:8px">Strategic overview</div>
+    <div style="margin-top:16px">
+      <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700;margin-bottom:10px">Recommended actions</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">${cards}</div>
+      ${csState.recFilter ? `<div style="margin-top:10px;font-size:12px;color:var(--text-muted)">Showing only <b style="color:var(--text)">${escapeHtml(cats.find(c => c.id === csState.recFilter).label)}</b> opportunities · <a href="#" id="csClearRecFilter" style="color:var(--primary);text-decoration:none">clear filter</a></div>` : ''}
     </div>`;
+  const clearLink = document.getElementById('csClearRecFilter');
+  if (clearLink) clearLink.addEventListener('click', (e) => { e.preventDefault(); csState.recFilter = null; renderStrategicOverview(); renderStrategyTable(); });
 
   el.querySelectorAll('[data-cs-rec-filter]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -3746,15 +3744,10 @@ function renderCoverageHint() {
   if (remaining === 0) { el.innerHTML = ''; return; }
 
   el.innerHTML = `
-    <div style="background:linear-gradient(90deg,rgba(99,102,241,.10),rgba(99,102,241,.04));border:1px solid var(--primary);border-radius:10px;padding:14px 16px;margin-top:12px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-      <div style="flex:1;min-width:280px">
-        <div style="font-weight:700;color:var(--text);margin-bottom:4px">Next step — analyse keyword coverage</div>
-        <div style="font-size:13px;color:var(--text-muted);line-height:1.5">
-          Fetches each opportunity page's live HTML and checks whether the queries it ranks for actually appear in its title, meta description, H1 and body. Powers the "Quick wins" filter, the "Where" pills on each query, and the action items in the PPT export.
-          <br><b style="color:var(--text)">${remaining.toLocaleString()}</b> of ${total.toLocaleString()} pages still need analysis${analysed ? ` (${analysed.toLocaleString()} already analysed).` : '.'}
-        </div>
-      </div>
-      <button id="csCoverageHintRun" class="btn btn-primary" style="padding:10px 18px;border-radius:8px;background:var(--primary);color:#fff;border:none;cursor:pointer;font-weight:600;white-space:nowrap">Analyse keyword coverage</button>
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;margin-top:10px;border-radius:8px;background:rgba(99,102,241,.06);border:1px solid rgba(99,102,241,.25);font-size:13px;color:var(--text)">
+      <span style="font-size:14px">ℹ️</span>
+      <span><b>${remaining.toLocaleString()}</b> of ${total.toLocaleString()} pages still need keyword coverage analysis to populate Quick wins, the "Where" column, and action items.</span>
+      <button id="csCoverageHintRun" class="btn btn-secondary" style="margin-left:auto;padding:5px 12px;border-radius:6px;border:1px solid var(--primary);background:var(--primary);color:#fff;cursor:pointer;font-size:12px;font-weight:600;white-space:nowrap">Run analysis</button>
     </div>`;
   const btn = document.getElementById('csCoverageHintRun');
   if (btn) btn.addEventListener('click', analyseAllCoverage);
