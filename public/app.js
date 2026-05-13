@@ -2762,14 +2762,63 @@ function scoreGscMatch(siteUrl, host) {
   return 0;
 }
 
+// Permissions returned by GSC's /sites endpoint, ranked usable → unusable.
+// siteUnverifiedUser means the auth token holder isn't verified for the
+// property, so any /searchAnalytics/query against it will 403 — we'd
+// rather auto-select a sibling property they actually own.
+function permissionRank(level) {
+  switch (level) {
+    case 'siteOwner':           return 4;
+    case 'siteFullUser':        return 3;
+    case 'siteRestrictedUser':  return 2;
+    case 'siteUnverifiedUser':  return 0;
+    case 'siteUnverified':      return 0;
+    default:                    return 1;
+  }
+}
+
+// Depth of the URL path on a URL-prefix property (0 = root, 1 = /de/, ...).
+// sc-domain properties cover everything, so we treat them as depth 0.
+function gscPathDepth(siteUrl) {
+  const s = String(siteUrl);
+  if (s.startsWith('sc-domain:')) return 0;
+  try {
+    const u = new URL(s);
+    const path = (u.pathname || '/').replace(/^\/+|\/+$/g, '');
+    return path ? path.split('/').length : 0;
+  } catch { return 99; }
+}
+
 function findMatchingGscSite(sites, host) {
   if (!sites || !sites.length || !host) return null;
-  let best = null, bestScore = 0;
-  for (const s of sites) {
-    const score = scoreGscMatch(s.siteUrl, host);
-    if (score > bestScore) { best = s; bestScore = score; }
-  }
-  return bestScore > 0 ? best : null;
+
+  // Find all host-matching properties, then rank them by:
+  //   1. usable permission (siteUnverifiedUser can't query, drop unless
+  //      it's the only thing matching the host),
+  //   2. higher permission level (Owner > FullUser > RestrictedUser),
+  //   3. shorter path — pick "experis.ch/" over "experis.ch/de/" so a
+  //      multilingual site never auto-selects the wrong language,
+  //   4. sc-domain over URL-prefix (covers every subpath at once),
+  //   5. raw host-match score as the final tie-breaker.
+  const all = sites
+    .map(s => ({ s, hostScore: scoreGscMatch(s.siteUrl, host) }))
+    .filter(x => x.hostScore > 0);
+  if (!all.length) return null;
+
+  const usable = all.filter(x => permissionRank(x.s.permissionLevel) > 0);
+  const pool = usable.length ? usable : all;
+
+  pool.sort((a, b) => {
+    const pr = permissionRank(b.s.permissionLevel) - permissionRank(a.s.permissionLevel);
+    if (pr) return pr;
+    const pd = gscPathDepth(a.s.siteUrl) - gscPathDepth(b.s.siteUrl);
+    if (pd) return pd;
+    const sa = String(a.s.siteUrl).startsWith('sc-domain:') ? 1 : 0;
+    const sb = String(b.s.siteUrl).startsWith('sc-domain:') ? 1 : 0;
+    if (sa !== sb) return sb - sa;
+    return b.hostScore - a.hostScore;
+  });
+  return pool[0].s;
 }
 
 async function loadGscSites() {
