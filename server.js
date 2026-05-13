@@ -76,7 +76,9 @@ app.use((req, res, next) => {
   if (
     req.path === '/login' ||
     req.path === '/api/health' ||
-    req.path === '/api/gsc/oauth/callback'
+    req.path === '/api/gsc/oauth/callback' ||
+    req.path.startsWith('/share/') ||
+    req.path.startsWith('/api/share/')
   ) return next();
   const cookies = cookieParser(req);
   if (cookies.seo_auth === '1') return next();
@@ -299,6 +301,36 @@ app.get('/api/crawls/:id/analysis', (req, res) => {
   const pages = db.getCrawlPages(req.params.id);
   if (pages.length === 0) return res.status(404).json({ error: 'No pages found' });
 
+  const crawl = db.getCrawl(req.params.id);
+  const stats = JSON.parse(crawl?.stats || '{}');
+  const resultsForAnalysis = mapPagesForAnalysis(pages);
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
+  res.json(analyzer.analyze());
+});
+
+// ── Public share endpoints ──────────────────────────────────────────────
+// Crawl IDs are v4 UUIDs (122 bits of entropy) so the id itself is the
+// share token — anyone with the link can view the audit, no auth needed.
+// Mirrors the equivalent /api/crawls/:id endpoints exactly, just gated to
+// completed crawls so unfinished runs can't be exposed by accident.
+app.get('/share/:id', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+app.get('/api/share/:id', (req, res) => {
+  const crawl = db.getCrawl(req.params.id);
+  if (!crawl) return res.status(404).json({ error: 'Crawl not found' });
+  res.json({ ...crawl, stats: JSON.parse(crawl.stats || '{}'), config: JSON.parse(crawl.config || '{}') });
+});
+app.get('/api/share/:id/pages', (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 1000, 10000);
+  const offset = parseInt(req.query.offset) || 0;
+  const statusCode = req.query.status ? parseInt(req.query.status) : null;
+  const pages = db.getCrawlPages(req.params.id, { limit, offset, statusCode });
+  res.json(pages);
+});
+app.get('/api/share/:id/analysis', (req, res) => {
+  const pages = db.getCrawlPages(req.params.id);
+  if (pages.length === 0) return res.status(404).json({ error: 'No pages found' });
   const crawl = db.getCrawl(req.params.id);
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);

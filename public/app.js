@@ -23,6 +23,16 @@ let currentCrawlId = sessionStorage.getItem('currentCrawlId') || null;
 let analysisData = null;
 let pagesData = [];
 
+// Share-mode: if the page loaded at /share/<uuid>, render the audit
+// read-only from the public /api/share endpoints. The UUID itself is the
+// share token (~122 bits of entropy), so anyone with the link can view.
+const SHARE_MATCH = window.location.pathname.match(/^\/share\/([0-9a-f-]{8,})/i);
+const SHARE_MODE = !!SHARE_MATCH;
+const SHARE_ID = SHARE_MATCH ? SHARE_MATCH[1] : null;
+function crawlApi(id, suffix = '') {
+  return SHARE_MODE ? `/api/share/${id}${suffix}` : `/api/crawls/${id}${suffix}`;
+}
+
 function setCurrentCrawlId(id) {
   currentCrawlId = id;
   if (id) sessionStorage.setItem('currentCrawlId', id);
@@ -283,7 +293,16 @@ $$('.export-menu a').forEach(a => {
 // ── Render Dashboard ──
 function renderDashboard(stats, analysis) {
   const o = analysis.overview;
-  const html = `
+  // Share strip — hidden in share mode itself (already shared) and shown
+  // in the normal admin view once a crawl is loaded.
+  const shareStrip = SHARE_MODE ? '' : `
+    <div class="share-strip" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;margin-bottom:16px;font-size:13px">
+      <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--primary);flex-shrink:0"><circle cx="13" cy="5" r="2"/><circle cx="5" cy="9" r="2"/><circle cx="13" cy="13" r="2"/><path d="M6.5 8L11 6M6.5 10L11 12"/></svg>
+      <span style="color:var(--text-muted)">Share this audit with a unique read-only link.</span>
+      <code id="shareUrl" style="background:var(--bg-input);padding:4px 8px;border-radius:4px;font-size:12px;color:var(--text);user-select:all;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${window.location.origin}/share/${currentCrawlId}</code>
+      <button id="shareCopyBtn" class="btn btn-secondary" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer;font-size:12px;font-weight:600;flex-shrink:0">Copy link</button>
+    </div>`;
+  const html = `${shareStrip}
     <div class="stats-grid">
       ${statCard('Pages Crawled', o.totalUrlsCrawled, '')}
       ${statCard('HTML Pages', o.htmlPages, 'info')}
@@ -327,6 +346,27 @@ function renderDashboard(stats, analysis) {
     </div>
   `;
   $('#dashboardContent').innerHTML = html;
+
+  const copyBtn = document.getElementById('shareCopyBtn');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', async () => {
+      const url = `${window.location.origin}/share/${currentCrawlId}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        const orig = copyBtn.textContent;
+        copyBtn.textContent = 'Copied ✓';
+        copyBtn.style.background = 'rgba(22,163,74,0.12)';
+        copyBtn.style.color = 'var(--success)';
+        setTimeout(() => {
+          copyBtn.textContent = orig;
+          copyBtn.style.background = 'var(--bg-input)';
+          copyBtn.style.color = 'var(--text)';
+        }, 1800);
+      } catch {
+        prompt('Copy this URL:', url);
+      }
+    });
+  }
 }
 
 async function loadProjectHistory() {
@@ -601,7 +641,7 @@ function renderStatusBars(breakdown) {
 // ── Pages table ──
 async function loadPages() {
   if (!currentCrawlId) return;
-  const res = await fetch(`/api/crawls/${currentCrawlId}/pages?limit=5000`);
+  const res = await fetch(crawlApi(currentCrawlId, '/pages?limit=5000'));
   const allPages = await res.json();
   // Filter out non-HTML resources (images, CSS, JS, fonts, etc.)
   pagesData = allPages.filter(p => {
@@ -1432,12 +1472,12 @@ function renderLinks(analysis) {
 
 window.loadCrawl = async function(id) {
   setCurrentCrawlId(id);
-  const res = await fetch(`/api/crawls/${id}/analysis`);
+  const res = await fetch(crawlApi(id, '/analysis'));
   if (!res.ok) return alert('Could not load analysis');
   const analysis = await res.json();
   analysisData = analysis;
 
-  const crawlRes = await fetch(`/api/crawls/${id}`);
+  const crawlRes = await fetch(crawlApi(id));
   const crawl = await crawlRes.json();
 
   renderDashboard(crawl.stats, analysis);
@@ -3036,6 +3076,39 @@ if (location.hash === '#gsc' || new URLSearchParams(location.search).get('gsc'))
   document.addEventListener('DOMContentLoaded', () => {
     const link = document.querySelector('.nav-link[data-view="gsc"]');
     if (link) link.click();
+  });
+}
+
+// ── Share-mode bootstrap ──────────────────────────────────────────────
+// If we're at /share/<id>, render the audit read-only: hide the crawl
+// input bar, settings, GSC + Content Strategy + Saved Projects nav, then
+// auto-load the crawl via the public /api/share endpoints.
+if (SHARE_MODE) {
+  document.addEventListener('DOMContentLoaded', async () => {
+    document.getElementById('crawlBar')?.remove();
+    document.querySelector('.topbar-settings')?.remove();
+    document.getElementById('liveFeed')?.remove();
+    document.querySelector('[data-view="gsc"]')?.remove();
+    document.querySelector('[data-view="strategy"]')?.remove();
+    document.querySelector('[data-view="saved-projects"]')?.remove();
+    document.getElementById('progressContainer')?.remove();
+
+    const banner = document.createElement('div');
+    banner.style.cssText = 'background:linear-gradient(90deg,#6366F1,#4F46E5);color:#fff;padding:8px 16px;font-size:13px;display:flex;align-items:center;gap:10px;font-weight:500';
+    banner.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13" cy="5" r="2"/><circle cx="5" cy="9" r="2"/><circle cx="13" cy="13" r="2"/><path d="M6.5 8L11 6M6.5 10L11 12"/></svg>
+      <span>Shared report — read-only</span>
+      <a href="https://seo.converta.ro" style="margin-left:auto;color:#fff;opacity:.85;text-decoration:none;font-size:12px">Powered by Converta SEO →</a>`;
+    document.querySelector('.topbar')?.prepend(banner);
+
+    try {
+      await window.loadCrawl(SHARE_ID);
+    } catch (e) {
+      const c = document.getElementById('dashboardContent') || document.body;
+      c.innerHTML = `<div style="padding:40px;text-align:center;color:var(--danger)">This shared report is not available.<br><small style="color:var(--text-muted)">${e && e.message ? e.message : ''}</small></div>`;
+      c.classList.remove('hidden');
+      document.getElementById('emptyState')?.classList.add('hidden');
+    }
   });
 }
 
