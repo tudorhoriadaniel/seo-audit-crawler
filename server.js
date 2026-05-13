@@ -11,6 +11,14 @@ const Exporter = require('./lib/exporter');
 const gsc = require('./lib/gsc');
 const contentAnalyzer = require('./lib/content-analyzer');
 
+// Anthropic client for the in-app audit assistant chat. Optional — if
+// ANTHROPIC_API_KEY isn't set, /api/chat returns a friendly 503 and the
+// UI hides the button.
+const Anthropic = require('@anthropic-ai/sdk');
+const anthropicClient = process.env.ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  : null;
+
 const app = express();
 const server = http.createServer(app);
 const io = new SocketIO(server, { cors: { origin: '*' } });
@@ -350,6 +358,117 @@ app.get('/api/share/:id/analysis', (req, res) => {
   const resultsForAnalysis = mapPagesForAnalysis(pages);
   const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
   res.json(analyzer.analyze());
+});
+
+// ── AI audit assistant ────────────────────────────────────────────────
+// Streams a Claude response back over SSE, with the crawl's analysis
+// baked into the cached system prompt. Caching the analysis means the
+// expensive ~50K-token prefix is paid for once per audit and re-used at
+// ~10% cost on every follow-up turn.
+function summariseAnalysisForChat(analysis) {
+  // Walk the analysis tree and cap any large array at 50 items so a
+  // 5000-page crawl doesn't dump megabytes into the model's context.
+  // Caches better too — the JSON stays a similar size whether the crawl
+  // has 100 or 10,000 pages.
+  if (!analysis) return analysis;
+  const clone = JSON.parse(JSON.stringify(analysis));
+  const cap = 50;
+  const trim = (node) => {
+    if (Array.isArray(node)) {
+      if (node.length > cap) node.length = cap;
+      for (const item of node) trim(item);
+      return;
+    }
+    if (node && typeof node === 'object') {
+      for (const k of Object.keys(node)) trim(node[k]);
+    }
+  };
+  trim(clone);
+  return clone;
+}
+
+app.post('/api/chat/:crawlId', async (req, res) => {
+  if (!anthropicClient) {
+    return res.status(503).json({ error: 'AI assistant not configured. Set ANTHROPIC_API_KEY.' });
+  }
+  const crawlId = req.params.crawlId;
+  const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+  if (!messages.length) return res.status(400).json({ error: 'No messages.' });
+
+  const crawl = db.getCrawl(crawlId);
+  if (!crawl) return res.status(404).json({ error: 'Crawl not found' });
+  const pages = db.getCrawlPages(crawlId);
+  if (!pages.length) return res.status(404).json({ error: 'Crawl has no pages' });
+  const stats = JSON.parse(crawl?.stats || '{}');
+  const resultsForAnalysis = mapPagesForAnalysis(pages);
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
+  const analysis = summariseAnalysisForChat(analyzer.analyze());
+
+  const contextBlob = JSON.stringify({
+    site: crawl.url,
+    crawledAt: crawl.completed_at,
+    pageCount: pages.length,
+    analysis
+  });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  try {
+    const stream = anthropicClient.messages.stream({
+      model: 'claude-opus-4-7',
+      max_tokens: 8000,
+      system: [
+        {
+          // Volatile instruction text first; it's small and intentionally
+          // stable, so it stays in the cached prefix too.
+          type: 'text',
+          text: [
+            'You are an SEO expert helping the user understand the results of a website audit.',
+            'You have full read access to the audit data below — quote specific URLs, numbers, and findings when relevant.',
+            'Be direct and concise. When asked "what should I fix first", lead with the highest-impact issue.',
+            'If the user asks for something the data does not cover, say so plainly rather than guessing.',
+            'Format responses with short paragraphs and bullet lists. Use Markdown.'
+          ].join(' ')
+        },
+        {
+          // Audit data — same bytes for every turn in this crawl's
+          // conversation, so we mark it ephemeral to get the cache read
+          // on every follow-up. Prefix-match rule: anything before this
+          // breakpoint also caches.
+          type: 'text',
+          text: `# AUDIT DATA (JSON)\n\nThis is the authoritative data for this conversation.\n\n${contextBlob}`,
+          cache_control: { type: 'ephemeral' }
+        }
+      ],
+      messages: messages.map(m => ({
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: String(m.content || '')
+      }))
+    });
+
+    for await (const event of stream) {
+      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+        res.write(`data: ${JSON.stringify({ type: 'delta', text: event.delta.text })}\n\n`);
+      }
+    }
+    const finalMessage = await stream.finalMessage();
+    res.write(`data: ${JSON.stringify({ type: 'done', usage: finalMessage.usage })}\n\n`);
+    res.end();
+  } catch (e) {
+    console.error('Chat error:', e);
+    try {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: e.message || 'Chat failed' })}\n\n`);
+    } catch { /* connection already closed */ }
+    res.end();
+  }
+});
+
+// Quick status probe so the UI knows whether to show the chat button.
+app.get('/api/chat-status', (req, res) => {
+  res.json({ available: !!anthropicClient });
 });
 
 // Export
