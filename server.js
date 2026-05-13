@@ -34,8 +34,20 @@ const cookieParser = (req) => {
   return cookies;
 };
 
+// Only same-origin paths are allowed in ?next= to prevent the login
+// page being turned into an open redirector to evil.example.com.
+function safeNext(value) {
+  const v = String(value || '');
+  if (!v) return '/';
+  if (!v.startsWith('/') || v.startsWith('//')) return '/';
+  return v;
+}
+
 app.get('/login', (req, res) => {
   const error = req.query.error ? '<p style="color:#ef4444;margin-bottom:16px">Incorrect password</p>' : '';
+  const next = safeNext(req.query.next);
+  // Escape the next value for safe HTML attribute embedding.
+  const nextAttr = next.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   res.send(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Login - SEO Audit Crawler</title>
 <style>*{box-sizing:border-box;margin:0;padding:0}body{background:#0f1117;color:#e4e6ef;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
@@ -48,19 +60,20 @@ button:hover{background:#818cf8}</style></head><body>
 <div class="login-box">
 <h1>SEO Audit Crawler</h1><p class="sub">Enter password to access</p>
 ${error}
-<form method="POST" action="/login"><input type="password" name="password" placeholder="Password" autofocus required><button type="submit">Login</button></form>
+<form method="POST" action="/login"><input type="hidden" name="next" value="${nextAttr}"><input type="password" name="password" placeholder="Password" autofocus required><button type="submit">Login</button></form>
 </div></body></html>`);
 });
 
 app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
+  const next = safeNext(req.body.next);
   if (req.body.password === SITE_PASSWORD) {
     // Set auth cookie (24h). SameSite=Lax so the cookie survives the
     // OAuth round-trip back from accounts.google.com to our callback;
     // Strict would drop it on any cross-site-initiated navigation.
     res.setHeader('Set-Cookie', `seo_auth=1; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${req.secure ? '; Secure' : ''}`);
-    res.redirect('/');
+    res.redirect(next);
   } else {
-    res.redirect('/login?error=1');
+    res.redirect(`/login?error=1&next=${encodeURIComponent(next)}`);
   }
 });
 
@@ -76,15 +89,16 @@ app.use((req, res, next) => {
   if (
     req.path === '/login' ||
     req.path === '/api/health' ||
-    req.path === '/api/gsc/oauth/callback' ||
-    req.path.startsWith('/share/') ||
-    req.path.startsWith('/api/share/')
+    req.path === '/api/gsc/oauth/callback'
   ) return next();
   const cookies = cookieParser(req);
   if (cookies.seo_auth === '1') return next();
-  // For API calls return 401, for pages redirect to login
+  // For API calls return 401, for pages redirect to login. Preserve the
+  // original URL via ?next= so /share/<id> survives the login round-trip
+  // and the recipient lands back on the report after authenticating.
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
-  res.redirect('/login');
+  const target = encodeURIComponent(req.originalUrl || req.url || '/');
+  res.redirect(`/login?next=${target}`);
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
