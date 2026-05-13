@@ -23,15 +23,12 @@ let currentCrawlId = sessionStorage.getItem('currentCrawlId') || null;
 let analysisData = null;
 let pagesData = [];
 
-// Share-mode: if the page loaded at /share/<uuid>, render the audit
-// read-only from the public /api/share endpoints. The UUID itself is the
-// share token (~122 bits of entropy), so anyone with the link can view.
+// Share URL: /share/<crawl-id> just auto-loads the crawl. The viewer is
+// already authenticated (the auth middleware redirected them to /login?
+// next=/share/<id> first), so they get the same tabs and access as the
+// owner — no read-only mode.
 const SHARE_MATCH = window.location.pathname.match(/^\/share\/([0-9a-f-]{8,})/i);
-const SHARE_MODE = !!SHARE_MATCH;
 const SHARE_ID = SHARE_MATCH ? SHARE_MATCH[1] : null;
-function crawlApi(id, suffix = '') {
-  return SHARE_MODE ? `/api/share/${id}${suffix}` : `/api/crawls/${id}${suffix}`;
-}
 
 function setCurrentCrawlId(id) {
   currentCrawlId = id;
@@ -293,9 +290,10 @@ $$('.export-menu a').forEach(a => {
 // ── Render Dashboard ──
 function renderDashboard(stats, analysis) {
   const o = analysis.overview;
-  // Share strip — hidden in share mode itself (already shared) and shown
-  // in the normal admin view once a crawl is loaded.
-  const shareStrip = SHARE_MODE ? '' : `
+  // Share strip — shown on every dashboard. Anyone viewing the audit
+  // can copy the link and forward it; recipients log in once and land
+  // back on this exact URL.
+  const shareStrip = `
     <div class="share-strip" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;margin-bottom:16px;font-size:13px">
       <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--primary);flex-shrink:0"><circle cx="13" cy="5" r="2"/><circle cx="5" cy="9" r="2"/><circle cx="13" cy="13" r="2"/><path d="M6.5 8L11 6M6.5 10L11 12"/></svg>
       <span style="color:var(--text-muted)">Share this audit with a unique read-only link.</span>
@@ -641,7 +639,7 @@ function renderStatusBars(breakdown) {
 // ── Pages table ──
 async function loadPages() {
   if (!currentCrawlId) return;
-  const res = await fetch(crawlApi(currentCrawlId, '/pages?limit=5000'));
+  const res = await fetch(`/api/crawls/${currentCrawlId}/pages?limit=5000`);
   const allPages = await res.json();
   // Filter out non-HTML resources (images, CSS, JS, fonts, etc.)
   pagesData = allPages.filter(p => {
@@ -1472,12 +1470,12 @@ function renderLinks(analysis) {
 
 window.loadCrawl = async function(id) {
   setCurrentCrawlId(id);
-  const res = await fetch(crawlApi(id, '/analysis'));
+  const res = await fetch(`/api/crawls/${id}/analysis`);
   if (!res.ok) return alert('Could not load analysis');
   const analysis = await res.json();
   analysisData = analysis;
 
-  const crawlRes = await fetch(crawlApi(id));
+  const crawlRes = await fetch(`/api/crawls/${id}`);
   const crawl = await crawlRes.json();
 
   renderDashboard(crawl.stats, analysis);
@@ -3079,33 +3077,17 @@ if (location.hash === '#gsc' || new URLSearchParams(location.search).get('gsc'))
   });
 }
 
-// ── Share-mode bootstrap ──────────────────────────────────────────────
-// If we're at /share/<id>, render the audit read-only: hide the crawl
-// input bar, settings, GSC + Content Strategy + Saved Projects nav, then
-// auto-load the crawl via the public /api/share endpoints.
-if (SHARE_MODE) {
+// /share/<id>: auto-load that crawl on boot. The viewer has already
+// authenticated via the /login?next=/share/<id> round-trip, so we just
+// open the same dashboard the owner sees — no read-only banner, full
+// access to GSC / Content Strategy / Saved Projects.
+if (SHARE_ID) {
   document.addEventListener('DOMContentLoaded', async () => {
-    document.getElementById('crawlBar')?.remove();
-    document.querySelector('.topbar-settings')?.remove();
-    document.getElementById('liveFeed')?.remove();
-    document.querySelector('[data-view="gsc"]')?.remove();
-    document.querySelector('[data-view="strategy"]')?.remove();
-    document.querySelector('[data-view="saved-projects"]')?.remove();
-    document.getElementById('progressContainer')?.remove();
-
-    const banner = document.createElement('div');
-    banner.style.cssText = 'background:linear-gradient(90deg,#6366F1,#4F46E5);color:#fff;padding:8px 16px;font-size:13px;display:flex;align-items:center;gap:10px;font-weight:500';
-    banner.innerHTML = `
-      <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13" cy="5" r="2"/><circle cx="5" cy="9" r="2"/><circle cx="13" cy="13" r="2"/><path d="M6.5 8L11 6M6.5 10L11 12"/></svg>
-      <span>Shared report — read-only</span>
-      <a href="https://seo.converta.ro" style="margin-left:auto;color:#fff;opacity:.85;text-decoration:none;font-size:12px">Powered by Converta SEO →</a>`;
-    document.querySelector('.topbar')?.prepend(banner);
-
     try {
       await window.loadCrawl(SHARE_ID);
     } catch (e) {
       const c = document.getElementById('dashboardContent') || document.body;
-      c.innerHTML = `<div style="padding:40px;text-align:center;color:var(--danger)">This shared report is not available.<br><small style="color:var(--text-muted)">${e && e.message ? e.message : ''}</small></div>`;
+      c.innerHTML = `<div style="padding:40px;text-align:center;color:var(--danger)">This audit could not be loaded.<br><small style="color:var(--text-muted)">${e && e.message ? e.message : ''}</small></div>`;
       c.classList.remove('hidden');
       document.getElementById('emptyState')?.classList.add('hidden');
     }
