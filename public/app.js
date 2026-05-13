@@ -3422,7 +3422,15 @@ function renderStrategyShell() {
           <button id="csExportPpt" class="btn btn-secondary" title="One slide per opportunity, with action items based on the coverage gaps" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export PPT</button>
           <button id="csExportPdf" class="btn btn-secondary" title="Open a printable HTML report; use your browser's Print → Save as PDF" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export PDF</button>
         </div>
-        <div id="csAnalyseProgress" style="display:none;margin-top:8px;font-size:12px;color:var(--text-muted)"></div>
+        <div id="csAnalyseProgress" style="display:none;margin-top:10px"></div>
+        <style>
+          @keyframes csBarStripe { 0% { background-position: 0 0; } 100% { background-position: 40px 0; } }
+          @keyframes csBarPulse  { 0%, 100% { opacity: 1; } 50% { opacity: .85; } }
+          .cs-progress-bar { position: relative; height: 10px; border-radius: 999px; overflow: hidden; background: var(--bg-input); border: 1px solid var(--border); }
+          .cs-progress-fill { height: 100%; background: linear-gradient(135deg, #6366F1 0%, #8B5CF6 35%, #6366F1 70%, #4F46E5 100%); background-size: 40px 40px; animation: csBarStripe 1.4s linear infinite, csBarPulse 1.6s ease-in-out infinite; transition: width .35s ease-out; border-radius: 999px; }
+          .cs-progress-fill.done { animation: none; background: linear-gradient(135deg, #16A34A, #22C55E); }
+          .cs-progress-fill.stopped { animation: none; background: var(--warning); }
+        </style>
       </div>
 
       <div id="csSummary" style="display:none;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px"></div>
@@ -4112,9 +4120,24 @@ async function analyseAllCoverage() {
   let done = 0, errors = 0;
   const CONCURRENCY = 3;
   const queue = targets.slice();
-  const tick = () => {
-    progress.innerHTML = `Analysed <b>${done}</b> / ${total}${errors ? ` · <span style="color:var(--danger)">${errors} errors</span>` : ''}`;
+  const renderBar = (state) => {
+    const pct = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    const headline =
+      state === 'done'    ? 'All set — content opportunities are ready.' :
+      state === 'stopped' ? 'Analysis paused. Click Resume to keep going.' :
+                            'Hang tight — finding your content opportunities…';
+    const fillClass = state === 'done' ? 'cs-progress-fill done'
+                    : state === 'stopped' ? 'cs-progress-fill stopped'
+                    : 'cs-progress-fill';
+    const fillWidth = state === 'done' ? '100%' : pct + '%';
+    progress.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;font-size:12px;color:var(--text)">
+        <span style="font-weight:600">${escapeHtml(headline)}</span>
+        <span style="color:var(--text-muted)"><b style="color:var(--text)">${done.toLocaleString()}</b> / ${total.toLocaleString()} pages${errors ? ` · <span style="color:var(--danger)">${errors} errors</span>` : ''}</span>
+      </div>
+      <div class="cs-progress-bar"><div class="${fillClass}" style="width:${fillWidth}"></div></div>`;
   };
+  const tick = () => renderBar('running');
   tick();
 
   const worker = async () => {
@@ -4133,8 +4156,14 @@ async function analyseAllCoverage() {
 
   btn.dataset.running = '0';
   btn.textContent = csBulkAbort ? 'Resume analysis' : 'Re-analyse';
-  if (csBulkAbort) progress.innerHTML = `Stopped at ${done} / ${total}${errors ? ` · <span style="color:var(--danger)">${errors} errors</span>` : ''}.`;
-  else progress.innerHTML = `Done — analysed ${done} / ${total}${errors ? ` · <span style="color:var(--danger)">${errors} errors</span>` : ''}.`;
+  renderBar(csBulkAbort ? 'stopped' : 'done');
+  if (!csBulkAbort) {
+    // Quietly hide the bar a few seconds after success so it doesn't
+    // crowd the table once the user has the opportunities they want.
+    setTimeout(() => {
+      if (progress && btn.dataset.running !== '1') progress.style.display = 'none';
+    }, 4000);
+  }
 
   // Update quick-win flags for every row that has coverage but hasn't been
   // flagged yet (covers the case where coverage was loaded via expansion).
