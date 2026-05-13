@@ -4102,9 +4102,6 @@ async function analyseAllCoverage() {
     progress.textContent = 'All visible rows are already analysed.';
     return;
   }
-  if (targets.length > 200) {
-    if (!confirm(`This will analyse ${targets.length} pages and could take a few minutes (and hits Search Console + the live URLs). Continue?`)) return;
-  }
 
   csBulkAbort = false;
   btn.dataset.running = '1';
