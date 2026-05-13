@@ -6510,3 +6510,225 @@ function exportStrategyPdf() {
   w.document.write(html);
   w.document.close();
 }
+
+// ── AI audit assistant ──────────────────────────────────────────────
+// Floating launcher + resizable side panel. Talks to /api/chat/:crawlId
+// which streams Claude responses over SSE. The crawl's analysis is
+// prompt-cached server-side so follow-up turns are cheap.
+(function initAuditChatbot() {
+  let chatAvailable = false;
+  let chatHistory = [];      // [{role: 'user' | 'assistant', content: string}, ...]
+  let chatStreaming = false;
+  let chatHistoryCrawlId = null;
+
+  // Light Markdown → HTML for the assistant bubbles. Intentionally narrow:
+  // bold, italics, code, fenced code, simple lists, links, line breaks.
+  // Escapes HTML first so user-supplied text can't inject markup.
+  function mdToHtml(src) {
+    const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    let s = esc(src);
+    s = s.replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code.replace(/^\n/, '')}</code></pre>`);
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/(^|\W)\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    s = s.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/(^|\n)(\s*)([-*•])\s+(.+)/g, (_, lead, indent, _b, txt) => `${lead}${indent}<li>${txt}</li>`);
+    s = s.replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g, '<ul>$1</ul>');
+    s = s.replace(/<\/ul>\s*<ul>/g, '');
+    s = s.split(/\n{2,}/).map(p => /^<(ul|pre|h\d|li)/.test(p.trim()) ? p : `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
+    return s;
+  }
+
+  function renderMessages() {
+    const wrap = document.getElementById('chatMessages');
+    if (!wrap) return;
+    if (!chatHistory.length) {
+      wrap.innerHTML = `
+        <div class="chatbot-empty">
+          <h3>What do you want to know about this audit?</h3>
+          <p>Ask anything about the crawl results, issues, or what to fix first.</p>
+          <div class="chatbot-suggestions">
+            <button class="chatbot-suggestion" data-q="What are the top 5 issues I should fix first?">What are the top 5 issues I should fix first?</button>
+            <button class="chatbot-suggestion" data-q="Summarize the SEO health of this site in 3 sentences.">Summarize the SEO health in 3 sentences.</button>
+            <button class="chatbot-suggestion" data-q="Which pages have the most critical problems?">Which pages have the most critical problems?</button>
+            <button class="chatbot-suggestion" data-q="How is my hreflang implementation? Any conflicts with canonicals?">How is my hreflang implementation?</button>
+          </div>
+        </div>`;
+      wrap.querySelectorAll('.chatbot-suggestion').forEach(btn => {
+        btn.addEventListener('click', () => sendChat(btn.dataset.q));
+      });
+      return;
+    }
+    wrap.innerHTML = chatHistory.map(m => {
+      const body = m.role === 'assistant' && m.streaming && !m.content
+        ? '<div class="chatbot-bubble thinking">Thinking</div>'
+        : `<div class="chatbot-bubble">${m.role === 'assistant' ? mdToHtml(m.content || '') : (m.content || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')}</div>`;
+      return `<div class="chatbot-msg ${m.role}">${body}</div>`;
+    }).join('');
+    wrap.scrollTop = wrap.scrollHeight;
+  }
+
+  async function sendChat(text) {
+    const trimmed = (text || '').trim();
+    if (!trimmed || chatStreaming) return;
+    if (!currentCrawlId) {
+      alert('Load a crawl first — the assistant needs the audit data.');
+      return;
+    }
+    if (chatHistoryCrawlId && chatHistoryCrawlId !== currentCrawlId) {
+      chatHistory = [];
+      chatHistoryCrawlId = currentCrawlId;
+    } else if (!chatHistoryCrawlId) {
+      chatHistoryCrawlId = currentCrawlId;
+    }
+    chatHistory.push({ role: 'user', content: trimmed });
+    const assistantMsg = { role: 'assistant', content: '', streaming: true };
+    chatHistory.push(assistantMsg);
+    chatStreaming = true;
+    document.getElementById('chatSend').disabled = true;
+    document.getElementById('chatInput').value = '';
+    renderMessages();
+
+    try {
+      const res = await fetch(`/api/chat/${currentCrawlId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: chatHistory
+            .filter(m => !(m.role === 'assistant' && m.streaming && !m.content))
+            .map(m => ({ role: m.role, content: m.content }))
+        })
+      });
+      if (!res.ok || !res.body) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6);
+          if (!payload) continue;
+          try {
+            const evt = JSON.parse(payload);
+            if (evt.type === 'delta') {
+              assistantMsg.content += evt.text;
+              assistantMsg.streaming = true;
+              renderMessages();
+            } else if (evt.type === 'error') {
+              assistantMsg.content = (assistantMsg.content || '') + '\n\n*Error: ' + evt.message + '*';
+            }
+          } catch { /* ignore malformed sse frame */ }
+        }
+      }
+      assistantMsg.streaming = false;
+      if (!assistantMsg.content) assistantMsg.content = '*(no response)*';
+    } catch (e) {
+      console.error('Chat request failed:', e);
+      assistantMsg.content = '*Error: ' + (e.message || 'request failed') + '*';
+      assistantMsg.streaming = false;
+    } finally {
+      chatStreaming = false;
+      document.getElementById('chatSend').disabled = false;
+      renderMessages();
+      document.getElementById('chatInput').focus();
+    }
+  }
+
+  function openPanel() {
+    document.getElementById('chatPanel').classList.add('open');
+    document.getElementById('chatPanel').setAttribute('aria-hidden', 'false');
+    document.getElementById('chatFab').classList.add('hidden');
+    if (chatHistoryCrawlId && chatHistoryCrawlId !== currentCrawlId) {
+      chatHistory = [];
+      chatHistoryCrawlId = currentCrawlId;
+    }
+    renderMessages();
+    setTimeout(() => document.getElementById('chatInput').focus(), 250);
+  }
+  function closePanel() {
+    document.getElementById('chatPanel').classList.remove('open');
+    document.getElementById('chatPanel').setAttribute('aria-hidden', 'true');
+    if (currentCrawlId && chatAvailable) document.getElementById('chatFab').classList.remove('hidden');
+  }
+
+  // Bootstrap once the DOM is in place.
+  document.addEventListener('DOMContentLoaded', async () => {
+    try {
+      const r = await fetch('/api/chat-status');
+      const d = await r.json();
+      chatAvailable = !!d.available;
+    } catch { chatAvailable = false; }
+    if (!chatAvailable) return;
+
+    const fab = document.getElementById('chatFab');
+    if (currentCrawlId) fab.classList.remove('hidden');
+
+    // Watch loadCrawl so the FAB appears after the user opens an audit.
+    const originalLoadCrawl = window.loadCrawl;
+    if (typeof originalLoadCrawl === 'function') {
+      window.loadCrawl = async function(id) {
+        const result = await originalLoadCrawl.apply(this, arguments);
+        if (chatAvailable) fab.classList.remove('hidden');
+        return result;
+      };
+    }
+
+    fab.addEventListener('click', openPanel);
+    document.getElementById('chatClose').addEventListener('click', closePanel);
+    document.getElementById('chatClear').addEventListener('click', () => {
+      chatHistory = [];
+      renderMessages();
+    });
+
+    // Fullscreen toggle.
+    document.getElementById('chatFullscreen').addEventListener('click', () => {
+      document.getElementById('chatPanel').classList.toggle('fullscreen');
+    });
+
+    // Form: submit on enter, shift+enter for newline.
+    document.getElementById('chatForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      sendChat(document.getElementById('chatInput').value);
+    });
+    document.getElementById('chatInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChat(document.getElementById('chatInput').value);
+      }
+    });
+
+    // Drag the left edge to resize. Width persists via localStorage.
+    const panel = document.getElementById('chatPanel');
+    const savedWidth = parseInt(localStorage.getItem('chat-panel-width') || '0', 10);
+    if (savedWidth >= 320) panel.style.width = savedWidth + 'px';
+    const handle = document.getElementById('chatResize');
+    let dragging = false, startX = 0, startW = 0;
+    handle.addEventListener('mousedown', (e) => {
+      if (panel.classList.contains('fullscreen')) return;
+      dragging = true; startX = e.clientX; startW = panel.getBoundingClientRect().width;
+      handle.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const newW = Math.min(window.innerWidth - 40, Math.max(320, startW + (startX - e.clientX)));
+      panel.style.width = newW + 'px';
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.userSelect = '';
+      localStorage.setItem('chat-panel-width', String(panel.getBoundingClientRect().width));
+    });
+  });
+})();

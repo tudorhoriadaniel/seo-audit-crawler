@@ -464,6 +464,45 @@
     </div>
   </main>
 
+  <!-- AI assistant: floating launcher + resizable side panel -->
+  <button id="chatFab" class="chatbot-fab hidden" title="Ask the audit assistant" aria-label="Open audit assistant">
+    <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H8l-4 4V5z"/>
+      <circle cx="8" cy="9" r=".8" fill="currentColor"/>
+      <circle cx="11" cy="9" r=".8" fill="currentColor"/>
+      <circle cx="14" cy="9" r=".8" fill="currentColor"/>
+    </svg>
+    <span class="chatbot-fab-label">Ask AI</span>
+  </button>
+  <aside id="chatPanel" class="chatbot-panel" aria-hidden="true">
+    <div class="chatbot-resize-handle" id="chatResize" title="Drag to resize"></div>
+    <header class="chatbot-header">
+      <div class="chatbot-title">
+        <span class="chatbot-dot"></span>
+        Audit assistant
+        <span class="chatbot-model">Claude Opus</span>
+      </div>
+      <div class="chatbot-actions">
+        <button class="chatbot-iconbtn" id="chatFullscreen" title="Toggle fullscreen" aria-label="Toggle fullscreen">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"/></svg>
+        </button>
+        <button class="chatbot-iconbtn" id="chatClear" title="Clear conversation" aria-label="Clear conversation">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h10M6 5V3h4v2M5 5l1 8h4l1-8"/></svg>
+        </button>
+        <button class="chatbot-iconbtn" id="chatClose" title="Close" aria-label="Close">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+        </button>
+      </div>
+    </header>
+    <div class="chatbot-messages" id="chatMessages"></div>
+    <form class="chatbot-input" id="chatForm">
+      <textarea id="chatInput" placeholder="Ask anything about this audit — e.g. &quot;What should I fix first?&quot;" rows="2"></textarea>
+      <button type="submit" class="chatbot-send" id="chatSend" title="Send (Enter)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h12M9 4l5 4-5 4"/></svg>
+      </button>
+    </form>
+  </aside>
+
   <script src="/socket.io/socket.io.js"></script>
   <script src="/app.js"></script>
 </body>
