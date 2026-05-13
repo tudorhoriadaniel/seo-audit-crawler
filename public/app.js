@@ -4657,7 +4657,7 @@ const PPT_I18N = {
     queriesCoverageHint: (n, w) => `Of the ${n} queries this page ranks for in Google, how many appear on the page (${w.toLocaleString()} words live):`,
     keywordsToAddHint: 'Top missing keywords per section — direct fixes:',
     allOnPage: 'all already present ✓',
-    secLabel: { title: 'TITLE', meta: 'DESCRIPTION', h1: 'H1', h2: 'H2', h3: 'H3', body: 'BODY' },
+    secLabel: { title: 'META TITLE', meta: 'META DESC', h1: 'H1', h2: 'H2', h3: 'H3', body: 'BODY' },
     execSummaryTitle: 'Executive summary',
     execSummaryKicker: 'The headline number and the top 5 pages to start with.',
     execHeroSub: (n, site) => `extra clicks per month available across ${n.toLocaleString()} ranking pages on ${site}.`,
@@ -4845,7 +4845,7 @@ const PPT_I18N = {
     queriesCoverageHint: (n, w) => `Sur les ${n} requêtes pour lesquelles cette page se positionne dans Google, combien apparaissent réellement dans la page (${w.toLocaleString()} mots live) :`,
     keywordsToAddHint: 'Mots-clés manquants par section — corrections directes :',
     allOnPage: 'tous présents ✓',
-    secLabel: { title: 'TITLE', meta: 'DESCRIPTION', h1: 'H1', h2: 'H2', h3: 'H3', body: 'CORPS' },
+    secLabel: { title: 'META TITLE', meta: 'META DESC', h1: 'H1', h2: 'H2', h3: 'H3', body: 'CORPS' },
     execSummaryTitle: 'Résumé exécutif',
     execSummaryKicker: 'Le chiffre clé et les 5 pages prioritaires par lesquelles commencer.',
     execHeroSub: (n, site) => `clics supplémentaires par mois disponibles sur ${n.toLocaleString()} pages positionnées de ${site}.`,
@@ -5838,7 +5838,7 @@ async function exportStrategyPpt() {
       // inside the Page actuelle card without overflowing the footer.
       sections.forEach((sec, i) => {
         const sy = 5.88 + i * 0.20;
-        const list = sec.keys.length ? sec.keys.map(k => trunc(k, 22)).join(' · ') : T.allOnPage;
+        const list = sec.keys.length ? sec.keys.map(k => trunc(k, 18)).join(' · ') : T.allOnPage;
         s.addText([
           { text: sec.label + '  ',
             options: { color: sec.keys.length ? COLORS.danger : COLORS.success, bold: true, fontSize: 9 } },
@@ -6437,7 +6437,7 @@ function exportStrategyPdf() {
       .fieldRow .body { display: block; font-size: 11px; line-height: 1.45; margin-top: 4px; color: #1A1D2E; word-break: break-word; }
       .fieldRow .body.missing { color: #DC2626; font-style: italic; }
       .fieldRow .body.unknown { color: #6B7085; font-style: italic; }
-      .missList .sec { display: grid; grid-template-columns: 60px 1fr; gap: 8px; font-size: 11px; margin-bottom: 6px; line-height: 1.4; }
+      .missList .sec { display: grid; grid-template-columns: 88px 1fr; gap: 8px; font-size: 11px; margin-bottom: 6px; line-height: 1.4; }
       .missList .sec:last-child { margin-bottom: 0; }
       .missList .sec .lab { font-weight: 700; font-size: 10px; letter-spacing: 0.04em; }
       .missList .sec .lab.has { color: #DC2626; }
