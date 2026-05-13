@@ -4250,7 +4250,8 @@ function renderStrategyQueriesFor(page) {
         yesPill(c.phrase.inTitle, 'title'),
         yesPill(c.phrase.inMetaDescription, 'desc'),
         yesPill(c.phrase.inH1, 'H1'),
-        yesPill(c.phrase.inHeadings, 'Hn'),
+        yesPill(c.phrase.inH2, 'H2'),
+        yesPill(c.phrase.inH3, 'H3'),
         yesPill(c.phrase.bodyOccurrences > 0, `body${c.phrase.bodyOccurrences > 0 ? ' (' + c.phrase.bodyOccurrences + '×)' : ''}`)
       ].join(' ');
       bodyCount = c.phrase.bodyOccurrences > 0 ? c.phrase.bodyOccurrences + '×'
@@ -4294,6 +4295,8 @@ function renderStrategyQueriesFor(page) {
     const inTitle = cov.queries.filter(q => q.phrase.inTitle).length;
     const inMeta = cov.queries.filter(q => q.phrase.inMetaDescription).length;
     const inH1 = cov.queries.filter(q => q.phrase.inH1).length;
+    const inH2 = cov.queries.filter(q => q.phrase.inH2).length;
+    const inH3 = cov.queries.filter(q => q.phrase.inH3).length;
     const inBody = cov.queries.filter(q => q.phrase.bodyOccurrences > 0).length;
     const absent = cov.queries.filter(q => !q.presentSomewhere);
     const absentImpressions = absent.reduce((sum, q) => {
@@ -4312,6 +4315,8 @@ function renderStrategyQueriesFor(page) {
           <div><span style="color:${tone(inTitle, totalQ)};font-weight:700">${inTitle}</span><span style="color:var(--text-muted)"> / ${totalQ} queries in <b>title</b></span></div>
           <div><span style="color:${tone(inMeta, totalQ)};font-weight:700">${inMeta}</span><span style="color:var(--text-muted)"> / ${totalQ} in <b>meta description</b>${metaHint}</span></div>
           <div><span style="color:${tone(inH1, totalQ)};font-weight:700">${inH1}</span><span style="color:var(--text-muted)"> / ${totalQ} in <b>H1</b></span></div>
+          <div><span style="color:${tone(inH2, totalQ)};font-weight:700">${inH2}</span><span style="color:var(--text-muted)"> / ${totalQ} in <b>H2</b></span></div>
+          <div><span style="color:${tone(inH3, totalQ)};font-weight:700">${inH3}</span><span style="color:var(--text-muted)"> / ${totalQ} in <b>H3</b></span></div>
           <div><span style="color:${tone(inBody, totalQ)};font-weight:700">${inBody}</span><span style="color:var(--text-muted)"> / ${totalQ} in <b>body</b></span></div>
           ${absent.length ? `<div style="color:var(--danger)"><b>${absent.length}</b> queries not on page <span style="color:var(--text-muted)">(${absentImpressions.toLocaleString()} impressions)</span></div>` : ''}
         </div>
@@ -4652,7 +4657,7 @@ const PPT_I18N = {
     queriesCoverageHint: (n, w) => `Of the ${n} queries this page ranks for in Google, how many appear on the page (${w.toLocaleString()} words live):`,
     keywordsToAddHint: 'Top missing keywords per section — direct fixes:',
     allOnPage: 'all already present ✓',
-    secLabel: { title: 'TITLE', meta: 'DESCRIPTION', h1: 'H1', body: 'BODY' },
+    secLabel: { title: 'TITLE', meta: 'DESCRIPTION', h1: 'H1', h2: 'H2', h3: 'H3', body: 'BODY' },
     execSummaryTitle: 'Executive summary',
     execSummaryKicker: 'The headline number and the top 5 pages to start with.',
     execHeroSub: (n, site) => `extra clicks per month available across ${n.toLocaleString()} ranking pages on ${site}.`,
@@ -4671,6 +4676,8 @@ const PPT_I18N = {
     pdfTagTitle: 'title',
     pdfTagMeta: 'meta description',
     pdfTagH1: 'H1',
+    pdfTagH2: 'H2',
+    pdfTagH3: 'H3',
     pdfTagSubheadings: 'subheadings',
     pdfTagBody: 'body',
     pdfAbsent: 'absent',
@@ -4838,7 +4845,7 @@ const PPT_I18N = {
     queriesCoverageHint: (n, w) => `Sur les ${n} requêtes pour lesquelles cette page se positionne dans Google, combien apparaissent réellement dans la page (${w.toLocaleString()} mots live) :`,
     keywordsToAddHint: 'Mots-clés manquants par section — corrections directes :',
     allOnPage: 'tous présents ✓',
-    secLabel: { title: 'TITLE', meta: 'DESCRIPTION', h1: 'H1', body: 'CORPS' },
+    secLabel: { title: 'TITLE', meta: 'DESCRIPTION', h1: 'H1', h2: 'H2', h3: 'H3', body: 'CORPS' },
     execSummaryTitle: 'Résumé exécutif',
     execSummaryKicker: 'Le chiffre clé et les 5 pages prioritaires par lesquelles commencer.',
     execHeroSub: (n, site) => `clics supplémentaires par mois disponibles sur ${n.toLocaleString()} pages positionnées de ${site}.`,
@@ -4857,6 +4864,8 @@ const PPT_I18N = {
     pdfTagTitle: 'title',
     pdfTagMeta: 'meta description',
     pdfTagH1: 'H1',
+    pdfTagH2: 'H2',
+    pdfTagH3: 'H3',
     pdfTagSubheadings: 'sous-titres',
     pdfTagBody: 'corps',
     pdfAbsent: 'absent',
@@ -5714,7 +5723,7 @@ async function exportStrategyPpt() {
     });
 
     // ── Left column: CURRENT PAGE
-    s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 3.48, w: 6.1, h: 3.45, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
+    s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 3.48, w: 6.1, h: 3.60, fill: { color: COLORS.panelBg }, line: { color: COLORS.border, width: 0.5 }, rectRadius: 0.1 });
     s.addText(T.currentPage, { x: 0.78, y: 3.55, w: 5.9, h: 0.3, fontSize: 12, bold: true, color: COLORS.text });
 
     // TITLE — distinguish three cases: analysed-and-present (green/amber
@@ -5817,20 +5826,24 @@ async function exportStrategyPpt() {
         { label: T.secLabel.title, keys: missingForSection(q => !q.phrase.inTitle) },
         { label: T.secLabel.meta,  keys: missingForSection(q => !q.phrase.inMetaDescription) },
         { label: T.secLabel.h1,    keys: missingForSection(q => !q.phrase.inH1) },
+        { label: T.secLabel.h2,    keys: missingForSection(q => !q.phrase.inH2) },
+        { label: T.secLabel.h3,    keys: missingForSection(q => !q.phrase.inH3) },
         { label: T.secLabel.body,  keys: missingForSection(q => q.phrase.bodyOccurrences === 0) }
       ];
 
       s.addText(T.keywordsToAddHint,
-        { x: 0.78, y: 5.74, w: 5.9, h: 0.22, fontSize: 9, color: COLORS.muted, italic: true });
+        { x: 0.78, y: 5.66, w: 5.9, h: 0.20, fontSize: 9, color: COLORS.muted, italic: true });
 
+      // Compressed rows (rowH 0.20, fontSize 9) so all 6 sections fit
+      // inside the Page actuelle card without overflowing the footer.
       sections.forEach((sec, i) => {
-        const sy = 5.98 + i * 0.24;
-        const list = sec.keys.length ? sec.keys.map(k => trunc(k, 26)).join(' · ') : T.allOnPage;
+        const sy = 5.88 + i * 0.20;
+        const list = sec.keys.length ? sec.keys.map(k => trunc(k, 22)).join(' · ') : T.allOnPage;
         s.addText([
           { text: sec.label + '  ',
-            options: { color: sec.keys.length ? COLORS.danger : COLORS.success, bold: true, fontSize: 10 } },
-          { text: list, options: { color: COLORS.text, fontSize: 10 } }
-        ], { x: 0.78, y: sy, w: 5.9, h: 0.22 });
+            options: { color: sec.keys.length ? COLORS.danger : COLORS.success, bold: true, fontSize: 9 } },
+          { text: list, options: { color: COLORS.text, fontSize: 9 } }
+        ], { x: 0.78, y: sy, w: 5.9, h: 0.20 });
       });
     } else {
       s.addText(T.runAnalysisHint,
@@ -6193,6 +6206,8 @@ function exportStrategyPdf() {
         { label: T.secLabel.title, keys: pick(q => !q.phrase.inTitle) },
         { label: T.secLabel.meta,  keys: pick(q => !q.phrase.inMetaDescription) },
         { label: T.secLabel.h1,    keys: pick(q => !q.phrase.inH1) },
+        { label: T.secLabel.h2,    keys: pick(q => !q.phrase.inH2) },
+        { label: T.secLabel.h3,    keys: pick(q => !q.phrase.inH3) },
         { label: T.secLabel.body,  keys: pick(q => q.phrase.bodyOccurrences === 0) }
       ];
     }
@@ -6237,7 +6252,12 @@ function exportStrategyPdf() {
                 if (c.phrase.inTitle)            tags.push(`<span class="tag">${esc(T.pdfTagTitle || 'title')}</span>`);
                 if (c.phrase.inMetaDescription)  tags.push(`<span class="tag">${esc(T.pdfTagMeta || 'meta description')}</span>`);
                 if (c.phrase.inH1)               tags.push(`<span class="tag">${esc(T.pdfTagH1 || 'H1')}</span>`);
-                if (c.phrase.inHeadings)         tags.push(`<span class="tag">${esc(T.pdfTagSubheadings || 'subheadings')}</span>`);
+                if (c.phrase.inH2)               tags.push(`<span class="tag">${esc(T.pdfTagH2 || 'H2')}</span>`);
+                if (c.phrase.inH3)               tags.push(`<span class="tag">${esc(T.pdfTagH3 || 'H3')}</span>`);
+                // Lower-level subheadings (h4-h6) only — H2/H3 are surfaced
+                // above as their own pills.
+                if (c.phrase.inHeadings && !c.phrase.inH2 && !c.phrase.inH3)
+                  tags.push(`<span class="tag">${esc(T.pdfTagSubheadings || 'subheadings')}</span>`);
                 if (c.phrase.bodyOccurrences > 0) tags.push(`<span class="tag">${esc((T.pdfTagBody || 'body') + ' (' + c.phrase.bodyOccurrences + '×)')}</span>`);
                 if (tags.length) inSect = tags.join(' ');
                 else if (c.looseMatch.bodyAllWords) inSect = `<span class="warn">${esc(T.wordsOnly || 'words only')}</span>`;
