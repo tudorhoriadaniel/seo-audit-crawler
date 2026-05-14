@@ -3210,6 +3210,45 @@ function suggestNewLandingUrl(currentUrl, keyword) {
   } catch { return null; }
 }
 
+// Brand-name detection. The hostname's domain root (e.g. "groupemutuel"
+// from "www.groupemutuel.ch" or "sc-domain:groupemutuel.ch") is treated as
+// the brand stem. A "brand-only" query is one that, when stripped of
+// non-alphanumeric chars, equals the brand stem — meaning the user is
+// looking for the brand directly with no intent qualifier. These should
+// only target the homepage; inner pages ranking for the bare brand are
+// navigational noise (Google shows them because the site's name is in
+// the title, not because they target the brand).
+function getBrandStem(siteUrl) {
+  if (!siteUrl) return '';
+  try {
+    let raw = String(siteUrl).replace(/^sc-domain:/, '');
+    if (!/^https?:\/\//i.test(raw)) raw = 'https://' + raw;
+    const u = new URL(raw);
+    const h = u.hostname.replace(/^www\./, '').toLowerCase();
+    const parts = h.split('.');
+    return parts.length >= 2 ? parts[parts.length - 2] : h;
+  } catch { return ''; }
+}
+function flattenForBrandCompare(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+function isBrandOnlyQuery(query, brandStem) {
+  if (!brandStem) return false;
+  const q = flattenForBrandCompare(query);
+  if (!q) return false;
+  return q === brandStem.toLowerCase();
+}
+function isHomepagePage(pageUrl) {
+  try {
+    const u = new URL(pageUrl);
+    const path = (u.pathname || '/').replace(/\/+$/, '');
+    return path === '' || /^\/(index|home|default)(\.html?|\.php|\.aspx?)?$/i.test(path);
+  } catch { return false; }
+}
+
 // Decide what to do with a page-query opportunity. Returns one of:
 //   optimize           — page is on-topic; small edits (title, body, links)
 //   rewrite-expand     — page is partial; needs a meaningful rework
@@ -3593,9 +3632,11 @@ async function runStrategyQuery() {
     for (const b of STRATEGY_BANDS) excluded[b.id] = { queries: 0, impressions: 0 };
 
     const rows = [];
+    const brandStem = getBrandStem(csState.selectedSite);
     for (const p of pageMap.values()) {
       // For each query, compute the band + potential uplift; the page's
       // band is the band of the query with the highest potential clicks.
+      const pageIsHome = isHomepagePage(p.page);
       let bestQuery = null;
       let totalPotential = 0;
       const qualifying = [];
@@ -3614,9 +3655,14 @@ async function runStrategyQuery() {
         q._potential = potential;
         qualifying.push(q);
         totalPotential += potential;
+        // Brand-only queries can only become bestQuery on the homepage —
+        // inner pages still see them in topQueries but won't be flagged
+        // as "create a landing page for the brand". They still contribute
+        // to per-page totals so the stats stay honest.
+        if (!pageIsHome && brandStem && isBrandOnlyQuery(q.query, brandStem)) continue;
         if (!bestQuery || potential > bestQuery._potential) bestQuery = q;
       }
-      if (!bestQuery) continue;   // no qualifying query → not an opportunity
+      if (!bestQuery) continue;   // no qualifying non-brand query → not an opportunity
 
       // Per-band aggregates for this page: queryCount, impressions, potential,
       // and the best (highest-potential) query in that band. Lets a page count
@@ -3670,6 +3716,52 @@ async function runStrategyQuery() {
       newRow.recommendation = recommendStrategy(newRow);
       rows.push(newRow);
     }
+
+    // ── Dedup: each query may be the bestQuery of only ONE row ─────────
+    // Otherwise a single keyword like "auto insurance" gets flagged as
+    // "rewrite & expand" on 8 different pages, and the action list is
+    // useless. Walk rows ordered by their bestQuery's per-query potential
+    // (highest first) — that page "wins" the query. Losers re-pick from
+    // their next-best qualifying query, skipping anything already claimed
+    // and (on non-homepage pages) anything brand-only.
+    rows.sort((a, b) => {
+      const ap = (a._bestPotential = a.topQueries.find(q => q.query === a.bestQuery)?._potential || 0);
+      const bp = (b._bestPotential = b.topQueries.find(q => q.query === b.bestQuery)?._potential || 0);
+      return bp - ap;
+    });
+    const claimedQueries = new Set();
+    const survivors = [];
+    for (const r of rows) {
+      const pageIsHome2 = isHomepagePage(r.page);
+      let chosen = null;
+      // Walk this row's qualifying queries in potential-desc order
+      // (topQueries is already sorted that way at construction).
+      for (const q of r.topQueries) {
+        if (!q._band) continue;             // skipped or non-qualifying
+        if (claimedQueries.has(q.query)) continue;
+        if (!pageIsHome2 && brandStem && isBrandOnlyQuery(q.query, brandStem)) continue;
+        chosen = q;
+        break;
+      }
+      if (!chosen) {
+        // Every winnable query for this page is already taken. Skip the
+        // row entirely — surfacing it would be the duplicate the user
+        // complained about.
+        continue;
+      }
+      claimedQueries.add(chosen.query);
+      if (chosen.query !== r.bestQuery) {
+        r.bestQuery = chosen.query;
+        r.bestQueryPosition = chosen.position;
+        r.bestQueryImpressions = chosen.impressions;
+        r.band = chosen._band;
+        r.targetPos = chosen._band.target;
+        r.recommendation = recommendStrategy(r);
+      }
+      survivors.push(r);
+    }
+    rows.length = 0;
+    for (const r of survivors) rows.push(r);
 
     rows.sort((a, b) => b.potentialClicks - a.potentialClicks);
     csState.rows = rows;
@@ -6136,8 +6228,12 @@ function exportStrategyPdf() {
   const esc = (s) => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-  const detailRows = rows.slice(0, 15);
-  const appendixRows = rows.slice(15);
+  // Render every opportunity in full detail in the PDF — the user
+  // explicitly wants content strategy on every page, not a one-liner in
+  // an appendix table. The browser handles 935 cards comfortably; the
+  // resulting PDF will be long, which is the intent.
+  const detailRows = rows;
+  const appendixRows = [];
 
   const bandColorHex = (b) => ({ push: '#16A34A', striking: '#2563EB', page2: '#6366F1', deep: '#D97706', deeper: '#DC2626' }[b.id] || '#6366F1');
 
