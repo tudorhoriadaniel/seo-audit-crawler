@@ -5735,9 +5735,13 @@ async function exportStrategyPpt() {
   // rows go into a compact appendix table at the back — this keeps the
   // deck under ~25 slides instead of one-per-page (which produced 100+
   // slide decks that no client read past slide 10).
-  const MAX_DETAIL_SLIDES = 15;
-  const detailRows = rows.slice(0, MAX_DETAIL_SLIDES);
-  const appendixRows = rows.slice(MAX_DETAIL_SLIDES);
+  // Render every opportunity as its own slide. The user wants full
+  // content strategy on every URL, not a summary table for the long
+  // tail. PPT generation is slower than HTML (each slide is built
+  // explicitly) so very large decks may take a minute or two, but the
+  // progress strip on the button shows live counts.
+  const detailRows = rows;
+  const appendixRows = [];
 
   for (let idx = 0; idx < detailRows.length; idx++) {
     if (idx % 5 === 0) {
