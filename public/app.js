@@ -3270,9 +3270,20 @@ function isBrandOnlyQuery(query, brandStem) {
   if (!q) return false;
   const stem = brandStem.toLowerCase();
   if (q === stem) return true;
-  // Short stems risk false positives, so cap edit distance proportionally.
+  // Fuzzy: catches typo variants like "group mutuel" (missing letter),
+  // "groupe mutuelle" (extra trailing letter), "groupmutuel" etc.
   const maxDist = stem.length >= 8 ? 2 : 1;
-  return lev(q, stem, maxDist) <= maxDist;
+  if (lev(q, stem, maxDist) <= maxDist) return true;
+  // Partial: a single word from the brand counted as brand-only. The
+  // user search "groupe" or "mutuel" on a multi-word brand like
+  // "groupemutuel" is still brand-intent; don't suggest it for inner
+  // pages. Min length 4 keeps "ge" / "mut" from false-matching.
+  if (q.length >= 4 && stem.includes(q)) return true;
+  // Brand with a short trailing/leading bit, e.g. "groupemutuel.ch"
+  // (flatten → "groupemutuelch") or "lesgroupemutuel". The query
+  // contains the brand and adds <=3 extra chars.
+  if (q.includes(stem) && q.length - stem.length <= 3) return true;
+  return false;
 }
 function isHomepagePage(pageUrl) {
   try {
@@ -3808,6 +3819,21 @@ async function runStrategyQuery() {
         r.band = won._band;
         r.targetPos = won._band.target;
         r.recommendation = recommendStrategy(r);
+      }
+      // Brand-only queries this page ranks for but didn't win. They stay
+      // visible in the per-query coverage table (informational) but are
+      // filtered out of action items + "missing keywords per section" —
+      // we don't want to tell the user to rewrite an inner page's title
+      // around the brand when the brand belongs to a shallower URL.
+      r.offLimitsQueries = new Set();
+      if (brandStem) {
+        for (const q of r.topQueries) {
+          if (q._band
+              && isBrandOnlyQuery(q.query, brandStem)
+              && queryToWinner.get(q.query) !== r.page) {
+            r.offLimitsQueries.add(q.query);
+          }
+        }
       }
       survivors.push(r);
     }
@@ -5122,6 +5148,10 @@ function deriveActions(r, lang) {
   const crawl = r.crawl;
   const push = (priority, text) => actions.push({ priority, text });
   const rec = r.recommendation;
+  // Brand-only queries won by another (shallower) page must not appear
+  // as action items here — see the survivors loop in runStrategyQuery.
+  const offLimits = r.offLimitsQueries || new Set();
+  const allowed = (q) => !offLimits.has(q.query);
 
   if (rec) {
     if (rec.type === 'create-landing' && rec.suggestedUrl) {
@@ -5134,7 +5164,7 @@ function deriveActions(r, lang) {
   }
 
   if (cov) {
-    const missing = cov.queries.filter(q => !q.presentSomewhere);
+    const missing = cov.queries.filter(q => !q.presentSomewhere && allowed(q));
     if (missing.length) {
       const top = missing.slice(0, 5).map(q => q.query).join(', ');
       push('critical', T.actMissingTerms(top, missing.length > 5 ? T.plusMore(missing.length - 5) : null));
@@ -5142,7 +5172,7 @@ function deriveActions(r, lang) {
     if (cov.metaDescriptionLength === 0) {
       push('critical', T.actAddMetaDesc);
     } else {
-      const notInMeta = cov.queries.filter(q => !q.phrase.inMetaDescription && q.presentSomewhere);
+      const notInMeta = cov.queries.filter(q => !q.phrase.inMetaDescription && q.presentSomewhere && allowed(q));
       if (notInMeta.length) {
         const top = notInMeta.slice(0, 2).map(q => q.query).join(' / ');
         push('important', T.actRewriteMeta(top));
@@ -5150,12 +5180,12 @@ function deriveActions(r, lang) {
       if (cov.metaDescriptionLength > 160) push('important', T.actMetaTooLong(cov.metaDescriptionLength));
       else if (cov.metaDescriptionLength < 70) push('important', T.actMetaTooShort(cov.metaDescriptionLength));
     }
-    const notInTitle = cov.queries.filter(q => !q.phrase.inTitle && q.presentSomewhere);
+    const notInTitle = cov.queries.filter(q => !q.phrase.inTitle && q.presentSomewhere && allowed(q));
     if (notInTitle.length) {
       const top = notInTitle.slice(0, 2).map(q => q.query).join(' / ');
       push('important', T.actRewriteTitle(top));
     }
-    const notInH1 = cov.queries.filter(q => !q.phrase.inH1 && !q.phrase.inHeadings && q.phrase.bodyOccurrences > 0);
+    const notInH1 = cov.queries.filter(q => !q.phrase.inH1 && !q.phrase.inHeadings && q.phrase.bodyOccurrences > 0 && allowed(q));
     if (notInH1.length) {
       const top = notInH1.slice(0, 2).map(q => q.query).join(' / ');
       push('important', T.actSurfaceInH1(top));
@@ -5966,7 +5996,13 @@ async function exportStrategyPpt() {
         const t = (r.topQueries || []).find(x => x.query === q.query);
         return t ? t.impressions : 0;
       };
-      const sorted = cov.queries.slice().sort((a, b) => queriesByImpr(b) - queriesByImpr(a));
+      // Filter out brand-only queries this page didn't win so the per-
+      // section "direct fixes" don't recommend the brand on an inner
+      // page. See r.offLimitsQueries in runStrategyQuery's survivors loop.
+      const offLimits = r.offLimitsQueries || new Set();
+      const sorted = cov.queries
+        .filter(q => !offLimits.has(q.query))
+        .sort((a, b) => queriesByImpr(b) - queriesByImpr(a));
       const missingForSection = (predicate) => sorted.filter(predicate).slice(0, 3).map(q => q.query);
 
       const sections = [
@@ -6351,7 +6387,12 @@ function exportStrategyPdf() {
         const t = (r.topQueries || []).find(x => x.query === q.query);
         return t ? t.impressions : 0;
       };
-      const sorted = cov.queries.slice().sort((a, b) => queriesByImpr(b) - queriesByImpr(a));
+      // Drop brand-only queries this page didn't win — they belong to a
+      // shallower URL and shouldn't be recommended here.
+      const offLimits = r.offLimitsQueries || new Set();
+      const sorted = cov.queries
+        .filter(q => !offLimits.has(q.query))
+        .sort((a, b) => queriesByImpr(b) - queriesByImpr(a));
       const pick = (pred) => sorted.filter(pred).slice(0, 3).map(q => q.query);
       missingSections = [
         { label: T.secLabel.title, keys: pick(q => !q.phrase.inTitle) },
