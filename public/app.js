@@ -3235,11 +3235,44 @@ function flattenForBrandCompare(s) {
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/[^a-z0-9]/g, '');
 }
+// Bounded Levenshtein — catches typo variants of the brand (e.g.
+// "group mutuel" vs the stem "groupemutuel", "groupe mutuelle" with the
+// extra trailing -e). Bound the work at length-difference: if the
+// strings can't be within `max` edits even by free insert/delete on the
+// shorter one, return early.
+function lev(a, b, max) {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    let rowMin = dp[0];
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      dp[j] = a.charCodeAt(i - 1) === b.charCodeAt(j - 1)
+        ? prev
+        : 1 + Math.min(prev, dp[j], dp[j - 1]);
+      if (dp[j] < rowMin) rowMin = dp[j];
+      prev = tmp;
+    }
+    if (rowMin > max) return max + 1;
+  }
+  return dp[n];
+}
 function isBrandOnlyQuery(query, brandStem) {
   if (!brandStem) return false;
   const q = flattenForBrandCompare(query);
   if (!q) return false;
-  return q === brandStem.toLowerCase();
+  const stem = brandStem.toLowerCase();
+  if (q === stem) return true;
+  // Short stems risk false positives, so cap edit distance proportionally.
+  const maxDist = stem.length >= 8 ? 2 : 1;
+  return lev(q, stem, maxDist) <= maxDist;
 }
 function isHomepagePage(pageUrl) {
   try {
@@ -3247,6 +3280,14 @@ function isHomepagePage(pageUrl) {
     const path = (u.pathname || '/').replace(/\/+$/, '');
     return path === '' || /^\/(index|home|default)(\.html?|\.php|\.aspx?)?$/i.test(path);
   } catch { return false; }
+}
+// URL path depth — used to identify which page is closest to the
+// homepage. "/" → 0, "/fr/" → 1, "/fr/clients-prives.html" → 2, etc.
+function urlPathDepth(pageUrl) {
+  try {
+    const u = new URL(pageUrl);
+    return u.pathname.split('/').filter(Boolean).length;
+  } catch { return 99; }
 }
 
 // Decide what to do with a page-query opportunity. Returns one of:
@@ -3634,9 +3675,11 @@ async function runStrategyQuery() {
     const rows = [];
     const brandStem = getBrandStem(csState.selectedSite);
     for (const p of pageMap.values()) {
-      // For each query, compute the band + potential uplift; the page's
-      // band is the band of the query with the highest potential clicks.
-      const pageIsHome = isHomepagePage(p.page);
+      // For each query, compute the band + potential uplift. The page's
+      // initial bestQuery is just the highest-potential qualifying one;
+      // the real assignment happens after construction, where each query
+      // is awarded to a single "winner" page (brand → shortest URL,
+      // non-brand → highest per-query potential).
       let bestQuery = null;
       let totalPotential = 0;
       const qualifying = [];
@@ -3655,14 +3698,9 @@ async function runStrategyQuery() {
         q._potential = potential;
         qualifying.push(q);
         totalPotential += potential;
-        // Brand-only queries can only become bestQuery on the homepage —
-        // inner pages still see them in topQueries but won't be flagged
-        // as "create a landing page for the brand". They still contribute
-        // to per-page totals so the stats stay honest.
-        if (!pageIsHome && brandStem && isBrandOnlyQuery(q.query, brandStem)) continue;
         if (!bestQuery || potential > bestQuery._potential) bestQuery = q;
       }
-      if (!bestQuery) continue;   // no qualifying non-brand query → not an opportunity
+      if (!bestQuery) continue;   // no qualifying query → not an opportunity
 
       // Per-band aggregates for this page: queryCount, impressions, potential,
       // and the best (highest-potential) query in that band. Lets a page count
@@ -3717,45 +3755,58 @@ async function runStrategyQuery() {
       rows.push(newRow);
     }
 
-    // ── Dedup: each query may be the bestQuery of only ONE row ─────────
-    // Otherwise a single keyword like "auto insurance" gets flagged as
-    // "rewrite & expand" on 8 different pages, and the action list is
-    // useless. Walk rows ordered by their bestQuery's per-query potential
-    // (highest first) — that page "wins" the query. Losers re-pick from
-    // their next-best qualifying query, skipping anything already claimed
-    // and (on non-homepage pages) anything brand-only.
-    rows.sort((a, b) => {
-      const ap = (a._bestPotential = a.topQueries.find(q => q.query === a.bestQuery)?._potential || 0);
-      const bp = (b._bestPotential = b.topQueries.find(q => q.query === b.bestQuery)?._potential || 0);
-      return bp - ap;
-    });
-    const claimedQueries = new Set();
+    // ── Award each query to a single "winner" page ─────────────────────
+    // The previous dedup picked whichever page was *first* in the sort —
+    // that meant a typo brand variant ("group mutuel" without the e)
+    // sneaked past the brand-only guard and ended up flagged on a deep
+    // inner page like /clients-prives/nos-services/espace-client.html.
+    //
+    // New model: for every distinct query, decide a winner globally.
+    //   - Brand-only queries (incl. fuzzy variants) → page with the
+    //     shortest URL path wins. That maps "groupe mutuel" onto the
+    //     homepage if it ranks, else /fr/, else /fr/clients-prives.html
+    //     — never onto a deep services page just because it ranks too.
+    //   - Every other query → page with the highest per-query potential.
+    //
+    // Then each row picks the highest-potential query it actually wins.
+    // Rows with no winning query are dropped (the page is already covered
+    // by the action item on the winning row).
+    const queryClaimants = new Map();   // query → [{ page, q }]
+    for (const r of rows) {
+      for (const q of r.topQueries) {
+        if (!q._band) continue;
+        if (!queryClaimants.has(q.query)) queryClaimants.set(q.query, []);
+        queryClaimants.get(q.query).push({ page: r.page, q });
+      }
+    }
+    const queryToWinner = new Map();
+    for (const [qstr, claims] of queryClaimants) {
+      const isBrand = brandStem ? isBrandOnlyQuery(qstr, brandStem) : false;
+      claims.sort((a, b) => {
+        if (isBrand) {
+          // Shortest URL path wins. Tie-break on impressions desc so a
+          // /fr/ and a /fr/contact/ page resolve deterministically.
+          const dd = urlPathDepth(a.page) - urlPathDepth(b.page);
+          if (dd) return dd;
+          return (b.q.impressions || 0) - (a.q.impressions || 0);
+        }
+        return (b.q._potential || 0) - (a.q._potential || 0);
+      });
+      queryToWinner.set(qstr, claims[0].page);
+    }
+
     const survivors = [];
     for (const r of rows) {
-      const pageIsHome2 = isHomepagePage(r.page);
-      let chosen = null;
-      // Walk this row's qualifying queries in potential-desc order
-      // (topQueries is already sorted that way at construction).
-      for (const q of r.topQueries) {
-        if (!q._band) continue;             // skipped or non-qualifying
-        if (claimedQueries.has(q.query)) continue;
-        if (!pageIsHome2 && brandStem && isBrandOnlyQuery(q.query, brandStem)) continue;
-        chosen = q;
-        break;
-      }
-      if (!chosen) {
-        // Every winnable query for this page is already taken. Skip the
-        // row entirely — surfacing it would be the duplicate the user
-        // complained about.
-        continue;
-      }
-      claimedQueries.add(chosen.query);
-      if (chosen.query !== r.bestQuery) {
-        r.bestQuery = chosen.query;
-        r.bestQueryPosition = chosen.position;
-        r.bestQueryImpressions = chosen.impressions;
-        r.band = chosen._band;
-        r.targetPos = chosen._band.target;
+      // r.topQueries is sorted potential-desc, so the first match wins
+      // for this row automatically.
+      const won = r.topQueries.find(q => q._band && queryToWinner.get(q.query) === r.page);
+      if (!won) continue;   // every query this page ranks for is awarded elsewhere
+      if (won.query !== r.bestQuery) {
+        r.bestQuery = won.query;
+        r.bestQueryPosition = won.position;
+        r.bestQueryImpressions = won.impressions;
+        r.band = won._band;
+        r.targetPos = won._band.target;
         r.recommendation = recommendStrategy(r);
       }
       survivors.push(r);
