@@ -1118,12 +1118,19 @@ function renderHreflang(analysis) {
   if (list.length > 0) {
     const cap = 1000;
     const shown = list.slice(0, cap);
+    const selfChip = (ok) => ok
+      ? '<span class="badge badge-success" title="Page references itself in hreflang">self ✓</span>'
+      : '<span class="badge badge-danger" title="No self-referencing hreflang on this page">no self</span>';
+    const hrefStatus = (s) => s == null
+      ? '<span class="badge" style="background:var(--bg-hover);color:var(--text-muted)" title="Target not crawled (external or out of scope)">—</span>'
+      : statusBadge(s);
     html += `<div class="section-card"><h3>Pages with Hreflangs (${list.length}${list.length > cap ? ` — showing first ${cap}` : ''})</h3>
-      <table><thead><tr><th>Page URL</th><th>Languages</th><th>Hreflang Targets</th></tr></thead>
+      <table><thead><tr><th>Page URL</th><th>Self</th><th>Languages</th><th>Hreflang Targets</th></tr></thead>
       <tbody>${shown.map(p => `<tr>
         <td>${urlLink(p.url)}</td>
+        <td>${selfChip(p.hasSelf)}</td>
         <td style="white-space:nowrap">${p.hreflangs.map(h => `<span class="badge badge-info" style="margin:1px">${esc(h.lang)}</span>`).join('')}</td>
-        <td style="font-size:12px">${p.hreflangs.map(h => `<div><span style="color:var(--text-muted)">${esc(h.lang)}</span> → ${urlLink(h.href)}</div>`).join('')}</td>
+        <td style="font-size:12px">${p.hreflangs.map(h => `<div style="margin:2px 0">${hrefStatus(h.status)} <span style="color:var(--text-muted)">${esc(h.lang)}${h.isSelf ? ' · self' : ''}</span> → ${urlLink(h.href)}</div>`).join('')}</td>
       </tr>`).join('')}</tbody></table></div>`;
   }
 
