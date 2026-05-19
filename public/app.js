@@ -1114,6 +1114,19 @@ function renderHreflang(analysis) {
       </tr>`).join('')}</tbody></table></div>`;
   }
 
+  const list = r.pagesList || [];
+  if (list.length > 0) {
+    const cap = 1000;
+    const shown = list.slice(0, cap);
+    html += `<div class="section-card"><h3>Pages with Hreflangs (${list.length}${list.length > cap ? ` — showing first ${cap}` : ''})</h3>
+      <table><thead><tr><th>Page URL</th><th>Languages</th><th>Hreflang Targets</th></tr></thead>
+      <tbody>${shown.map(p => `<tr>
+        <td>${urlLink(p.url)}</td>
+        <td style="white-space:nowrap">${p.hreflangs.map(h => `<span class="badge badge-info" style="margin:1px">${esc(h.lang)}</span>`).join('')}</td>
+        <td style="font-size:12px">${p.hreflangs.map(h => `<div><span style="color:var(--text-muted)">${esc(h.lang)}</span> → ${urlLink(h.href)}</div>`).join('')}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
   $('#hreflangContent').innerHTML = exportBtn('hreflang') + html;
 }
 
