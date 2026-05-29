@@ -941,14 +941,25 @@ function inspectUrl(url) {
   if (!pagesData.length) return alert('No crawl data available');
   const p = pagesData.find(pg => pg.url === url);
 
-  // Find pages linking TO this URL (deduplicated by source URL)
+  // Find pages linking TO this URL (deduplicated by source URL).
+  // Scan both <a href> and <img src> so image-asset URLs surface their
+  // host pages — otherwise the modal claims "no internal pages link
+  // here" even when the image is embedded on dozens of pages.
   const inboundMap = new Map();
   for (const page of pagesData) {
     try {
       const links = JSON.parse(page.links || '[]');
       for (const link of links) {
         if (link.href === url && link.isInternal && !inboundMap.has(page.url)) {
-          inboundMap.set(page.url, { from: page.url, anchor: link.anchor || '(no text)', nofollow: link.isNofollow });
+          inboundMap.set(page.url, { from: page.url, anchor: link.anchor || '(no text)', nofollow: link.isNofollow, via: 'link' });
+        }
+      }
+    } catch {}
+    try {
+      const images = JSON.parse(page.images || '[]');
+      for (const img of images) {
+        if (img.src === url && !inboundMap.has(page.url)) {
+          inboundMap.set(page.url, { from: page.url, anchor: img.alt || '(no alt)', nofollow: false, via: 'image' });
         }
       }
     } catch {}
@@ -964,10 +975,10 @@ function inspectUrl(url) {
       <button class="modal-close">&times;</button>
       <h3 style="word-break:break-all">${esc(url)}</h3>
       <p style="color:var(--text-muted);font-size:13px">This URL was not directly crawled.</p>
-      ${inboundLinks.length > 0 ? `<div class="section-card" style="margin-top:16px"><h3>Pages Linking Here (${inboundLinks.length})</h3>
-        <table><thead><tr><th>Source Page</th><th>Anchor Text</th><th>Nofollow</th></tr></thead><tbody>
-        ${inboundLinks.slice(0, 100).map(l => `<tr><td>${urlLink(l.from)}</td><td>${esc(l.anchor)}</td><td>${l.nofollow ? '<span class="badge badge-warning">Yes</span>' : 'No'}</td></tr>`).join('')}
-        </tbody></table></div>` : '<p style="color:var(--text-muted)">No internal pages link to this URL.</p>'}
+      ${inboundLinks.length > 0 ? `<div class="section-card" style="margin-top:16px"><h3>Pages Referencing This URL (${inboundLinks.length})</h3>
+        <table><thead><tr><th>Source Page</th><th>Via</th><th>Anchor / Alt text</th><th>Nofollow</th></tr></thead><tbody>
+        ${inboundLinks.slice(0, 200).map(l => `<tr><td>${urlLink(l.from)}</td><td><span class="badge ${l.via === 'image' ? 'badge-info' : ''}" style="font-size:11px">${l.via === 'image' ? '&lt;img src&gt;' : '&lt;a href&gt;'}</span></td><td>${esc(l.anchor)}</td><td>${l.nofollow ? '<span class="badge badge-warning">Yes</span>' : 'No'}</td></tr>`).join('')}
+        </tbody></table></div>` : '<p style="color:var(--text-muted)">No internal pages reference this URL.</p>'}
     </div>`;
   } else {
     const hreflangs = JSON.parse(p.hreflangs || '[]');
@@ -1003,10 +1014,10 @@ function inspectUrl(url) {
       </div>
 
       <div class="section-card" style="margin-top:20px;border-left:4px solid var(--info)">
-        <h3>Pages Linking Here (${inboundLinks.length})</h3>
-        ${inboundLinks.length > 0 ? `<table><thead><tr><th>Source Page</th><th>Anchor Text</th><th>Nofollow</th></tr></thead><tbody>
-        ${inboundLinks.slice(0, 100).map(l => `<tr><td>${urlLink(l.from)}</td><td>${esc(l.anchor)}</td><td>${l.nofollow ? '<span class="badge badge-warning">Yes</span>' : 'No'}</td></tr>`).join('')}
-        </tbody></table>` : '<p style="color:var(--text-muted)">No internal pages link to this URL.</p>'}
+        <h3>Pages Referencing This URL (${inboundLinks.length})</h3>
+        ${inboundLinks.length > 0 ? `<table><thead><tr><th>Source Page</th><th>Via</th><th>Anchor / Alt text</th><th>Nofollow</th></tr></thead><tbody>
+        ${inboundLinks.slice(0, 200).map(l => `<tr><td>${urlLink(l.from)}</td><td><span class="badge ${l.via === 'image' ? 'badge-info' : ''}" style="font-size:11px">${l.via === 'image' ? '&lt;img src&gt;' : '&lt;a href&gt;'}</span></td><td>${esc(l.anchor)}</td><td>${l.nofollow ? '<span class="badge badge-warning">Yes</span>' : 'No'}</td></tr>`).join('')}
+        </tbody></table>` : '<p style="color:var(--text-muted)">No internal pages reference this URL.</p>'}
       </div>
 
       ${hreflangs.length > 0 ? `<div class="section-card" style="margin-top:16px"><h3>Hreflangs (${hreflangs.length})</h3>
