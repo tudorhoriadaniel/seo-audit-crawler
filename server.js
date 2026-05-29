@@ -540,12 +540,13 @@ function filterExternalItems(items, statusFilter, textFilter) {
       || (i.sources || []).some(s => (s.url || '').toLowerCase().includes(t)
                                   || (s.anchor || '').toLowerCase().includes(t)))) return false;
     switch (statusFilter) {
-      case 'checked':   return i.status != null;
+      case 'checked':   return i.status != null || !!i.error;
       case 'ok':        return i.status >= 200 && i.status < 300;
       case '3xx':       return i.status >= 300 && i.status < 400;
       case '4xx':       return i.status >= 400 && i.status < 500;
       case '5xx':       return i.status >= 500;
-      case 'broken':    return (i.status != null && i.status >= 400) || !!i.error;
+      case 'err':       return !!i.error && i.status == null;
+      case 'broken':    return (i.status != null && i.status >= 400) || !!i.error;  // back-compat
       case 'unchecked': return i.status == null && !i.error;
       default:          return true;
     }
