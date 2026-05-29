@@ -482,6 +482,29 @@ app.get('/api/crawls/:id/image-assets', (req, res) => {
   res.json({ total: items.length, items });
 });
 
+app.get('/api/crawls/:id/image-assets/export/xlsx', (req, res) => {
+  const items = collectImageAssets(req.params.id);
+  if (!items) return res.status(404).send('Crawl not found / no pages');
+  const XLSX = require('xlsx');
+  const crawl = db.getCrawl(req.params.id);
+  let host = 'site';
+  try { host = new URL(crawl?.url || 'https://x').hostname.replace(/^www\./, ''); } catch {}
+  const stamp = new Date().toISOString().slice(0, 10);
+  const statusOf = (i) => i.error ? `error: ${i.error}` : (i.status == null ? '—' : String(i.status));
+  const rows = [['Image URL', 'Status', 'Used on (count)', 'Top source page', 'All source pages']];
+  for (const i of items) {
+    rows.push([i.href, statusOf(i), i.sourceCount || (i.sources || []).length, (i.sources || [])[0]?.url || '', (i.sources || []).map(s => s.url).join('\n')]);
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{ wch: 70 }, { wch: 14 }, { wch: 14 }, { wch: 60 }, { wch: 80 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Image Status Codes');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="image-status_${host}_${stamp}.xlsx"`);
+  res.end(buf);
+});
+
 app.get('/api/crawls/:id/external-links', (req, res) => {
   const items = collectExternalLinks(req.params.id);
   if (!items) return res.status(404).json({ error: 'Crawl not found / no pages' });

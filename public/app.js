@@ -2099,7 +2099,164 @@ function _renderStatusCodesUI() {
       </tr>`).join('')}</tbody></table></div>`;
   }
 
-  $('#statuscodesContent').innerHTML = exportBtn('statuscodes') + html;
+  $('#statuscodesContent').innerHTML = exportBtn('statuscodes') + html
+    + '<div id="imageStatusSection" style="margin-top:18px"></div>';
+  loadImageStatusCodes();
+}
+
+// ── Image status codes (on the Status Codes tab) ──
+// Full status-code breakdown for every internal image URL, mirroring the
+// HTML status view above. Shares the image-assets background checker, so
+// statuses are cached and auto-scanned once.
+let _imgStatusData = null;
+let _imgStatusChecking = false;
+let _imgStatusFilter = '';
+
+async function loadImageStatusCodes() {
+  const wrap = document.getElementById('imageStatusSection');
+  if (!wrap || !currentCrawlId) return;
+  if (_imgStatusChecking && _imgStatusData) { renderImageStatusCodes(); return; }
+  wrap.innerHTML = '<div class="section-card"><h3>Image status codes</h3><p style="color:var(--text-muted)">Loading image URLs…</p></div>';
+  try {
+    const res = await fetch(`/api/crawls/${currentCrawlId}/image-assets`);
+    if (!res.ok) throw new Error((await res.json()).error || 'failed');
+    _imgStatusData = await res.json();
+    renderImageStatusCodes();
+    const unchecked = (_imgStatusData.items || []).filter(i => i.status == null && !i.error).length;
+    if (unchecked > 0 && !_imgStatusChecking) startImageStatusCheck();
+  } catch (e) {
+    wrap.innerHTML = `<div class="section-card"><h3>Image status codes</h3><p style="color:var(--danger)">Failed to load: ${esc(e.message)}</p></div>`;
+  }
+}
+
+function renderImageStatusCodes() {
+  const wrap = document.getElementById('imageStatusSection');
+  if (!wrap || !_imgStatusData) return;
+  const items = _imgStatusData.items || [];
+  const total = items.length;
+  const ok = items.filter(i => i.status >= 200 && i.status < 300).length;
+  const r3 = items.filter(i => i.status >= 300 && i.status < 400).length;
+  const c4 = items.filter(i => i.status >= 400 && i.status < 500).length;
+  const s5 = items.filter(i => i.status >= 500).length;
+  const errs = items.filter(i => i.error && i.status == null).length;
+
+  const card = (key, label, value, colorClass) => {
+    const active = _imgStatusFilter === key;
+    return `<div class="stat-card" data-img-filter="${key}" title="Click to filter"
+      style="cursor:pointer;${active ? 'outline:2px solid var(--primary);outline-offset:-2px;' : ''}">
+      <div class="value ${colorClass}">${value.toLocaleString()}</div><div class="label">${label}</div></div>`;
+  };
+
+  const f = _imgStatusFilter;
+  const tf = '';
+  const filtered = items.filter(i => {
+    if (f === 'ok') return i.status >= 200 && i.status < 300;
+    if (f === '3xx') return i.status >= 300 && i.status < 400;
+    if (f === '4xx') return i.status >= 400 && i.status < 500;
+    if (f === '5xx') return i.status >= 500;
+    if (f === 'err') return i.error && i.status == null;
+    return true;
+  });
+  const statusCell = (i) => {
+    if (i.error && i.status == null) return `<span class="badge badge-danger" title="${esc(i.error)}">${esc(i.error)}</span>`;
+    if (i.status == null) return '<span class="badge" style="background:var(--bg-hover);color:var(--text-muted)">—</span>';
+    return statusBadge(i.status);
+  };
+  const rows = filtered.slice(0, 2000).map(i => {
+    const sc = i.sourceCount || (i.sources || []).length;
+    const top = (i.sources || []).slice(0, 2).map(s => urlLink(s.url)).join('<br>');
+    return `<tr>
+      <td style="font-size:12px"><a href="${esc(i.href)}" target="_blank" rel="noopener" style="color:var(--primary);word-break:break-all">${esc(i.href)}</a></td>
+      <td style="text-align:center">${statusCell(i)}</td>
+      <td style="text-align:center;color:var(--text-muted)">${sc}</td>
+      <td style="font-size:11px">${top}</td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <div class="section-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <h3 style="margin:0">Image status codes (${total.toLocaleString()} image URLs${_imgStatusChecking ? ' — scanning…' : ''})</h3>
+        <button id="imgStatusExportBtn" class="btn btn-secondary" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer;font-size:13px">Export Excel</button>
+      </div>
+      <div class="stats-grid" style="margin-top:12px">
+        ${card('', 'Total images', total, 'info')}
+        ${card('ok', '2xx Success', ok, 'success')}
+        ${card('3xx', '3xx Redirect', r3, r3 > 0 ? 'warning' : 'success')}
+        ${card('4xx', '4xx Client Error', c4, c4 > 0 ? 'danger' : 'success')}
+        ${card('5xx', '5xx Server Error', s5, s5 > 0 ? 'danger' : 'success')}
+        ${card('err', 'Conn Errors', errs, errs > 0 ? 'danger' : 'success')}
+      </div>
+      <div id="imgStatusProgress" style="display:${_imgStatusChecking ? 'block' : 'none'};margin:12px 0"></div>
+      <table style="margin-top:12px">
+        <thead><tr><th>Image URL</th><th style="text-align:center">Status</th><th style="text-align:center">Used on</th><th>Top source pages</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" style="color:var(--text-muted);padding:10px">No image URLs match this filter.</td></tr>'}</tbody>
+      </table>
+    </div>`;
+
+  wrap.querySelectorAll('[data-img-filter]').forEach(el => {
+    el.addEventListener('click', () => {
+      const k = el.dataset.imgFilter;
+      _imgStatusFilter = (_imgStatusFilter === k) ? '' : k;
+      renderImageStatusCodes();
+    });
+  });
+  document.getElementById('imgStatusExportBtn')?.addEventListener('click', () => {
+    window.open(`/api/crawls/${currentCrawlId}/image-assets/export/xlsx`, '_blank');
+  });
+}
+
+async function startImageStatusCheck(force) {
+  if (_imgStatusChecking || !currentCrawlId) return;
+  _imgStatusChecking = true;
+  renderImageStatusCodes();
+  const drawBar = (done, total, finished) => {
+    const p = document.getElementById('imgStatusProgress');
+    if (!p) return;
+    p.style.display = 'block';
+    const pct = total ? Math.min(100, Math.round(done / total * 100)) : 0;
+    p.innerHTML = `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">${finished ? 'Done.' : 'Checking image URLs…'} ${done.toLocaleString()} / ${total.toLocaleString()}</div>
+      <div style="height:8px;background:var(--bg-input);border-radius:999px;overflow:hidden;border:1px solid var(--border)"><div style="height:100%;width:${pct}%;background:${finished ? 'linear-gradient(135deg,#16A34A,#22C55E)' : 'linear-gradient(135deg,#6366F1,#8B5CF6)'};transition:width .3s"></div></div>`;
+  };
+  let pending = false;
+  const refresh = () => { if (pending) return; pending = true; setTimeout(() => { pending = false; if (_imgStatusChecking) renderImageStatusCodes(); }, 1500); };
+  try {
+    const res = await fetch(`/api/crawls/${currentCrawlId}/image-assets/check`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: !!force })
+    });
+    if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const evt = JSON.parse(line.slice(6));
+          if (evt.type === 'start' || evt.type === 'progress') drawBar(evt.done || 0, evt.total, false);
+          else if (evt.type === 'result') {
+            const it = _imgStatusData.items.find(x => x.href === evt.url);
+            if (it) { it.status = evt.status; it.error = evt.error; it.checkedAt = evt.checkedAt; }
+            // keep the broken-images section (Images tab) in sync if loaded
+            if (_imgAssetsData) { const a = _imgAssetsData.items.find(x => x.href === evt.url); if (a) { a.status = evt.status; a.error = evt.error; } }
+            drawBar(evt.done, evt.total, false);
+            refresh();
+          } else if (evt.type === 'done') drawBar(evt.done, evt.total, true);
+        } catch { /* ignore */ }
+      }
+    }
+  } catch (e) {
+    const p = document.getElementById('imgStatusProgress');
+    if (p) p.innerHTML = `<div style="color:var(--danger);font-size:12px">Check failed: ${esc(e.message)}</div>`;
+  } finally {
+    _imgStatusChecking = false;
+    renderImageStatusCodes();
+  }
 }
 
 function filterStatusCodes(key) {
