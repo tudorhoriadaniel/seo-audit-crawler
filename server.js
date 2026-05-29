@@ -402,6 +402,86 @@ function collectExternalLinks(crawlId) {
   return items;
 }
 
+// Links the author wrote without a scheme (e.g. "www.foo.ch") that the
+// browser resolves as a broken internal path. Flagged at crawl time.
+function collectMalformedLinks(crawlId) {
+  const pages = db.getCrawlPages(crawlId);
+  if (!pages.length) return null;
+  const byKey = new Map();
+  for (const p of pages) {
+    let links = [];
+    try { links = JSON.parse(p.links || '[]'); } catch { /* malformed row */ }
+    for (const l of links) {
+      if (!l || !l.isMalformed) continue;
+      const key = l.rawHref || l.href;
+      let entry = byKey.get(key);
+      if (!entry) {
+        entry = { rawHref: l.rawHref || '', resolved: l.href, anchor: l.anchor || '', sources: [] };
+        byKey.set(key, entry);
+      }
+      entry.sources.push({ url: p.url, anchor: l.anchor || '' });
+    }
+  }
+  const items = Array.from(byKey.values()).map(e => ({
+    rawHref: e.rawHref,
+    resolved: e.resolved,
+    anchor: e.anchor,
+    sourceCount: e.sources.length,
+    sources: e.sources.slice(0, 50)
+  }));
+  items.sort((a, b) => b.sourceCount - a.sourceCount);
+  return items;
+}
+
+// Internal image/asset URLs (from <img src> and <a href="...jpg">) so we
+// can probe them for broken (404/410/5xx) references.
+function collectImageAssets(crawlId) {
+  const pages = db.getCrawlPages(crawlId);
+  if (!pages.length) return null;
+  const assetExt = /\.(jpe?g|png|gif|webp|avif|svg|ico|bmp|tiff?)(\?|#|$)/i;
+  const byHref = new Map();
+  const add = (href, source) => {
+    if (!href || !/^https?:\/\//i.test(href)) return;
+    if (!assetExt.test(href)) return;
+    let entry = byHref.get(href);
+    if (!entry) { entry = { href, sources: [] }; byHref.set(href, entry); }
+    entry.sources.push(source);
+  };
+  for (const p of pages) {
+    let images = [];
+    try { images = JSON.parse(p.images || '[]'); } catch { /* row */ }
+    for (const img of images) add(img.src, { url: p.url, anchor: img.alt || '[image]' });
+    let links = [];
+    try { links = JSON.parse(p.links || '[]'); } catch { /* row */ }
+    for (const l of links) if (l && !l.isMalformed) add(l.href, { url: p.url, anchor: l.anchor || '' });
+  }
+  const items = Array.from(byHref.values()).map(e => {
+    const cached = db.kvGet('asset-status:' + e.href);
+    return {
+      href: e.href,
+      sourceCount: e.sources.length,
+      sources: e.sources.slice(0, 50),
+      status: cached?.status ?? null,
+      checkedAt: cached?.checkedAt ?? null,
+      error: cached?.error ?? null
+    };
+  });
+  items.sort((a, b) => b.sourceCount - a.sourceCount || a.href.localeCompare(b.href));
+  return items;
+}
+
+app.get('/api/crawls/:id/malformed-links', (req, res) => {
+  const items = collectMalformedLinks(req.params.id);
+  if (!items) return res.status(404).json({ error: 'Crawl not found / no pages' });
+  res.json({ total: items.length, items });
+});
+
+app.get('/api/crawls/:id/image-assets', (req, res) => {
+  const items = collectImageAssets(req.params.id);
+  if (!items) return res.status(404).json({ error: 'Crawl not found / no pages' });
+  res.json({ total: items.length, items });
+});
+
 app.get('/api/crawls/:id/external-links', (req, res) => {
   const items = collectExternalLinks(req.params.id);
   if (!items) return res.status(404).json({ error: 'Crawl not found / no pages' });
@@ -452,26 +532,24 @@ async function probeExternalUrl(url) {
   }
 }
 
-// One detached checker per crawl. Workers run independent of any SSE
-// client; closing the browser tab no longer halts the scan, and every
-// connected tab gets the same live event stream.
-const externalCheckers = new Map();   // crawlId → state
+// One detached checker per (crawl, kind). Workers run independent of any
+// SSE client; closing the browser tab no longer halts the scan, and every
+// connected tab gets the same live event stream. `kind` lets external
+// links and image assets run as separate jobs with separate caches.
+const urlCheckers = new Map();   // `${crawlId}:${kind}` → state
 
-function startExternalChecker(crawlId, items, force) {
-  let state = externalCheckers.get(crawlId);
+function startUrlChecker(crawlId, kind, items, force) {
+  const key = `${crawlId}:${kind}`;
+  const cachePrefix = kind === 'assets' ? 'asset-status:' : 'external-status:';
+  let state = urlCheckers.get(key);
   if (state && state.running) return state;
 
   const targets = items
     .map(i => i.href)
-    .filter(h => force || db.kvGet('external-status:' + h) == null);
+    .filter(h => force || db.kvGet(cachePrefix + h) == null);
 
-  state = {
-    running: true,
-    total: targets.length,
-    done: 0,
-    listeners: new Set()
-  };
-  externalCheckers.set(crawlId, state);
+  state = { running: true, total: targets.length, done: 0, listeners: new Set() };
+  urlCheckers.set(key, state);
 
   if (targets.length === 0) {
     state.running = false;
@@ -498,7 +576,7 @@ function startExternalChecker(crawlId, items, force) {
       const url = queue.shift();
       const result = await probeExternalUrl(url);
       const checkedAt = new Date().toISOString();
-      try { db.kvSet('external-status:' + url, { ...result, checkedAt }); } catch (e) { /* db hiccup */ }
+      try { db.kvSet(cachePrefix + url, { ...result, checkedAt }); } catch (e) { /* db hiccup */ }
       state.done++;
       broadcast({ type: 'result', url, status: result.status, error: result.error || null, checkedAt, done: state.done, total: state.total });
     }
@@ -518,28 +596,33 @@ function startExternalChecker(crawlId, items, force) {
   return state;
 }
 
-app.post('/api/crawls/:id/external-links/check', (req, res) => {
-  const crawlId = req.params.id;
-  const items = collectExternalLinks(crawlId);
-  if (!items) return res.status(404).json({ error: 'Crawl not found / no pages' });
-
-  const force = !!req.body?.force;
-  const state = startExternalChecker(crawlId, items, force);
-
+function streamCheckerResponse(state, res) {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
   res.write(`data: ${JSON.stringify({ type: 'start', total: state.total, done: state.done })}\n\n`);
-
   if (!state.running && state.total === 0) {
     res.write(`data: ${JSON.stringify({ type: 'done', done: 0, total: 0 })}\n\n`);
     res.end();
     return;
   }
-
   state.listeners.add(res);
-  req.on('close', () => state.listeners.delete(res));
+  res.req.on('close', () => state.listeners.delete(res));
+}
+
+app.post('/api/crawls/:id/external-links/check', (req, res) => {
+  const items = collectExternalLinks(req.params.id);
+  if (!items) return res.status(404).json({ error: 'Crawl not found / no pages' });
+  const state = startUrlChecker(req.params.id, 'external', items, !!req.body?.force);
+  streamCheckerResponse(state, res);
+});
+
+app.post('/api/crawls/:id/image-assets/check', (req, res) => {
+  const items = collectImageAssets(req.params.id);
+  if (!items) return res.status(404).json({ error: 'Crawl not found / no pages' });
+  const state = startUrlChecker(req.params.id, 'assets', items, !!req.body?.force);
+  streamCheckerResponse(state, res);
 });
 
 // ── AI audit assistant ────────────────────────────────────────────────
