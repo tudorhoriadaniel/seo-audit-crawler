@@ -413,7 +413,7 @@ async function probeExternalUrl(url) {
   // 501, or a 200 from a server that lies). Short timeout so a slow
   // remote can't tie up the checker for a 5000-link batch.
   const common = {
-    timeout: 15000,
+    timeout: 10000,
     maxRedirects: 5,
     validateStatus: () => true,
     headers: {
@@ -442,46 +442,85 @@ async function probeExternalUrl(url) {
   }
 }
 
-app.post('/api/crawls/:id/external-links/check', async (req, res) => {
+// One detached checker per crawl. Workers run independent of any SSE
+// client; closing the browser tab no longer halts the scan, and every
+// connected tab gets the same live event stream.
+const externalCheckers = new Map();   // crawlId → state
+
+function startExternalChecker(crawlId, items, force) {
+  let state = externalCheckers.get(crawlId);
+  if (state && state.running) return state;
+
+  const targets = items
+    .map(i => i.href)
+    .filter(h => force || db.kvGet('external-status:' + h) == null);
+
+  state = {
+    running: true,
+    total: targets.length,
+    done: 0,
+    listeners: new Set()
+  };
+  externalCheckers.set(crawlId, state);
+
+  if (targets.length === 0) {
+    state.running = false;
+    return state;
+  }
+
+  const broadcast = (event) => {
+    for (const res of state.listeners) {
+      try { res.write(`data: ${JSON.stringify(event)}\n\n`); } catch { /* listener gone */ }
+    }
+  };
+
+  const CONCURRENCY = 12;
+  const queue = targets.slice();
+  const worker = async () => {
+    while (queue.length && state.running) {
+      const url = queue.shift();
+      const result = await probeExternalUrl(url);
+      const checkedAt = new Date().toISOString();
+      try { db.kvSet('external-status:' + url, { ...result, checkedAt }); } catch (e) { /* db hiccup */ }
+      state.done++;
+      broadcast({ type: 'result', url, status: result.status, error: result.error || null, checkedAt, done: state.done, total: state.total });
+    }
+  };
+  Promise.all(Array.from({ length: CONCURRENCY }, worker))
+    .then(() => {
+      state.running = false;
+      broadcast({ type: 'done', done: state.done, total: state.total });
+    })
+    .catch((e) => {
+      state.running = false;
+      broadcast({ type: 'error', message: e.message });
+    });
+
+  return state;
+}
+
+app.post('/api/crawls/:id/external-links/check', (req, res) => {
   const crawlId = req.params.id;
   const items = collectExternalLinks(crawlId);
   if (!items) return res.status(404).json({ error: 'Crawl not found / no pages' });
 
   const force = !!req.body?.force;
-  const targets = items
-    .map(i => i.href)
-    .filter(h => force || db.kvGet('external-status:' + h) == null);
-  const total = targets.length;
+  const state = startExternalChecker(crawlId, items, force);
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
-  res.write(`data: ${JSON.stringify({ type: 'start', total })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: 'start', total: state.total, done: state.done })}\n\n`);
 
-  const CONCURRENCY = 6;
-  let done = 0;
-  const queue = targets.slice();
-  let closed = false;
-  req.on('close', () => { closed = true; });
-
-  const worker = async () => {
-    while (queue.length && !closed) {
-      const url = queue.shift();
-      const result = await probeExternalUrl(url);
-      const checkedAt = new Date().toISOString();
-      db.kvSet('external-status:' + url, { ...result, checkedAt });
-      done++;
-      if (!closed) {
-        res.write(`data: ${JSON.stringify({ type: 'result', url, status: result.status, error: result.error || null, checkedAt, done, total })}\n\n`);
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-  if (!closed) {
-    res.write(`data: ${JSON.stringify({ type: 'done', done, total })}\n\n`);
+  if (!state.running && state.total === 0) {
+    res.write(`data: ${JSON.stringify({ type: 'done', done: 0, total: 0 })}\n\n`);
     res.end();
+    return;
   }
+
+  state.listeners.add(res);
+  req.on('close', () => state.listeners.delete(res));
 });
 
 // ── AI audit assistant ────────────────────────────────────────────────
