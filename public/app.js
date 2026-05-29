@@ -2046,34 +2046,104 @@ function renderStatusCodes(analysis) {
   if (!r) { $('#statuscodesContent').innerHTML = '<p style="color:var(--text-muted)">No data.</p>'; return; }
   _statusCodesData = r;
   _statusCodesActiveFilter = 'all';
+  _statusContentTypeFilter = 'all';
   _renderStatusCodesUI();
 }
+
+let _statusContentTypeFilter = 'all';
+
+// Classify a URL by its file extension so the Status Codes view can
+// segregate HTML pages from broken PDFs / images / Office docs. SF
+// keeps those in their own buckets; we previously mixed them all.
+function classifyUrlContentType(url) {
+  try {
+    const path = new URL(url).pathname.toLowerCase();
+    if (/\.(pdf)$/.test(path)) return 'pdf';
+    if (/\.(jpe?g|png|gif|webp|avif|svg|ico|bmp|tiff?)$/.test(path)) return 'image';
+    if (/\.(docx?|xlsx?|pptx?|odt|ods|odp|csv|rtf)$/.test(path)) return 'office';
+    if (/\.(zip|rar|7z|tar|gz|bz2)$/.test(path)) return 'archive';
+    if (/\.(mp4|mp3|avi|mov|wmv|mkv|webm|ogg|wav|flac)$/.test(path)) return 'media';
+    if (/\.(js|css|woff2?|ttf|eot|map|json|xml|txt)$/.test(path)) return 'asset';
+    // No extension, or .html/.htm/.php/.aspx/.jsp — treat as HTML page.
+    if (/\.(html?|php|aspx?|jsp|cfm|cgi)$/.test(path) || !/\.[a-z0-9]{1,5}$/.test(path)) return 'html';
+    return 'other';
+  } catch { return 'other'; }
+}
+
+window.filterStatusContentType = function(key) {
+  _statusContentTypeFilter = (_statusContentTypeFilter === key && key !== 'all') ? 'all' : key;
+  _renderStatusCodesUI();
+};
 
 function _renderStatusCodesUI() {
   const r = _statusCodesData;
   const f = _statusCodesActiveFilter;
+  const ct = _statusContentTypeFilter;
+
+  // Apply the content-type filter to every group before counting/listing.
+  const passes = (u) => ct === 'all' || classifyUrlContentType(u.url) === ct;
+  const groups = {};
+  for (const key of Object.keys(r.groups)) {
+    groups[key] = { ...r.groups[key], urls: r.groups[key].urls.filter(passes) };
+  }
+  const total = Object.values(groups).reduce((s, g) => s + g.urls.length, 0);
+
+  // Content-type pills. Counts reflect ALL crawled URLs (not the active
+  // status filter), so the user sees "how many image URLs do I have?"
+  // independent of which status bucket they're inspecting.
+  const ctCounts = { all: r.total, html: 0, image: 0, pdf: 0, office: 0, archive: 0, media: 0, asset: 0, other: 0 };
+  for (const key of Object.keys(r.groups)) {
+    for (const u of r.groups[key].urls) ctCounts[classifyUrlContentType(u.url)]++;
+  }
+  const ctPill = (key, label) => {
+    const count = ctCounts[key] || 0;
+    const active = ct === key;
+    return `<button onclick="filterStatusContentType('${key}')" style="padding:6px 12px;border-radius:999px;border:1px solid ${active ? 'var(--primary)' : 'var(--border)'};background:${active ? 'var(--primary)' : 'var(--bg-input)'};color:${active ? '#fff' : 'var(--text)'};cursor:pointer;font-size:12px;font-weight:${active ? 600 : 500}">${esc(label)} <span style="opacity:.8;margin-left:4px">${count.toLocaleString()}</span></button>`;
+  };
+  let html = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+    ${ctPill('all', 'All')}
+    ${ctPill('html', 'HTML pages')}
+    ${ctPill('image', 'Images')}
+    ${ctPill('pdf', 'PDF')}
+    ${ctPill('office', 'Office docs')}
+    ${ctPill('media', 'Media')}
+    ${ctPill('asset', 'JS/CSS/fonts')}
+    ${ctPill('archive', 'Archives')}
+    ${ctPill('other', 'Other')}
+  </div>`;
 
   const cardBtn = (key, label, count, color) => {
     const active = f === key ? 'border:2px solid #fff;' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
     return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterStatusCodes('${key}')">${statCardInner(label, count)}</div>`;
   };
 
-  let html = `<div class="stats-grid">
-    ${cardBtn('all', 'Total URLs', r.total, '')}
-    ${cardBtn('2xx', '2xx Success', r.groups['2xx'].urls.length, 'success')}
-    ${cardBtn('3xx', '3xx Redirect', r.groups['3xx'].urls.length, r.groups['3xx'].urls.length > 0 ? 'warning' : '')}
-    ${cardBtn('4xx', '4xx Client Error', r.groups['4xx'].urls.length, r.groups['4xx'].urls.length > 0 ? 'danger' : 'success')}
-    ${cardBtn('5xx', '5xx Server Error', r.groups['5xx'].urls.length, r.groups['5xx'].urls.length > 0 ? 'danger' : 'success')}
-    ${cardBtn('error', 'Conn Errors', r.groups['error'].urls.length, r.groups['error'].urls.length > 0 ? 'danger' : '')}
+  html += `<div class="stats-grid">
+    ${cardBtn('all', 'Total URLs', total, '')}
+    ${cardBtn('2xx', '2xx Success', groups['2xx'].urls.length, 'success')}
+    ${cardBtn('3xx', '3xx Redirect', groups['3xx'].urls.length, groups['3xx'].urls.length > 0 ? 'warning' : '')}
+    ${cardBtn('4xx', '4xx Client Error', groups['4xx'].urls.length, groups['4xx'].urls.length > 0 ? 'danger' : 'success')}
+    ${cardBtn('5xx', '5xx Server Error', groups['5xx'].urls.length, groups['5xx'].urls.length > 0 ? 'danger' : 'success')}
+    ${cardBtn('error', 'Conn Errors', groups['error'].urls.length, groups['error'].urls.length > 0 ? 'danger' : '')}
   </div>`;
 
-  // Pie chart
-  if (r.pieChart.length > 0) {
+  // Pie chart — re-computed from the filtered groups so it reflects the
+  // active content-type selection.
+  const pieEntries = [
+    { key: '2xx', label: '2xx (Success)', color: '#16A34A' },
+    { key: '3xx', label: '3xx (Redirect)', color: '#D97706' },
+    { key: '4xx', label: '4xx (Client Error)', color: '#DC2626' },
+    { key: '5xx', label: '5xx (Server Error)', color: '#7F1D1D' },
+    { key: 'error', label: 'Conn Errors', color: '#6B7085' }
+  ].map(e => ({ ...e, count: groups[e.key].urls.length })).filter(e => e.count > 0);
+  const pieTotal = pieEntries.reduce((s, e) => s + e.count, 0) || 1;
+  const pieData = pieEntries.map(e => ({ label: e.label, color: e.color, count: e.count, percentage: ((e.count / pieTotal) * 100).toFixed(1) }));
+
+  if (pieData.length > 0) {
     html += `<div class="section-card"><h3>Status Code Distribution</h3>
       <div class="pie-chart-container">
-        ${renderPieChart(r.pieChart, 200)}
+        ${renderPieChart(pieData, 200)}
         <div class="pie-legend">
-          ${r.pieChart.map(s => `<div class="pie-legend-item">
+          ${pieData.map(s => `<div class="pie-legend-item">
             <div class="pie-legend-dot" style="background:${s.color}"></div>
             <span class="pie-legend-label">${esc(s.label)}</span>
             <span class="pie-legend-count">${s.count} (${s.percentage}%)</span>
@@ -2083,10 +2153,9 @@ function _renderStatusCodesUI() {
     </div>`;
   }
 
-  // Tables for filtered groups
   const groupOrder = f === 'all' ? ['2xx', '3xx', '4xx', '5xx', 'error'] : [f];
   for (const key of groupOrder) {
-    const g = r.groups[key];
+    const g = groups[key];
     if (!g || g.urls.length === 0) continue;
     html += `<div class="section-card" style="border-left:4px solid ${g.color}">
       <h3>${esc(g.label)} (${g.urls.length})</h3>
