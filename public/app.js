@@ -53,6 +53,7 @@ $$('.nav-link').forEach(link => {
     if (view === 'saved-projects') loadSavedProjects();
     if (view === 'gsc') loadGscView();
     if (view === 'strategy') loadStrategyView();
+    if (view === 'externallinks') loadExternalLinks();
   });
 });
 
@@ -1419,6 +1420,197 @@ function renderSecurity(analysis) {
   ).join('') + '</div></div>';
 
   $('#securityContent').innerHTML = exportBtn('security') + html;
+}
+
+// ── External Links ──
+// Lazy-loaded when the user navigates to the tab. Server returns the
+// deduped list with cached statuses; the "Check status codes" button
+// streams live HEAD/GET probes via SSE.
+let _extLinksData = null;
+let _extLinksChecking = false;
+let _extLinksFilter = '';
+let _extLinksStatusFilter = '';
+
+async function loadExternalLinks() {
+  const wrap = document.getElementById('externalLinksContent');
+  if (!wrap) return;
+  if (!currentCrawlId) {
+    wrap.innerHTML = '<p style="color:var(--text-muted);padding:20px">Load a crawl first.</p>';
+    return;
+  }
+  wrap.innerHTML = '<p style="color:var(--text-muted);padding:20px">Loading external links…</p>';
+  try {
+    const res = await fetch(`/api/crawls/${currentCrawlId}/external-links`);
+    if (!res.ok) throw new Error((await res.json()).error || 'failed');
+    _extLinksData = await res.json();
+    renderExternalLinks();
+  } catch (e) {
+    wrap.innerHTML = `<p style="color:var(--danger);padding:20px">Failed to load: ${esc(e.message)}</p>`;
+  }
+}
+
+function renderExternalLinks() {
+  const wrap = document.getElementById('externalLinksContent');
+  if (!wrap || !_extLinksData) return;
+  const items = _extLinksData.items || [];
+  const total = items.length;
+  const checked = items.filter(i => i.status != null).length;
+  const broken = items.filter(i => i.status != null && (i.status >= 400 || i.error)).length;
+  const redirects = items.filter(i => i.status != null && i.status >= 300 && i.status < 400).length;
+  const ok = items.filter(i => i.status != null && i.status >= 200 && i.status < 300).length;
+
+  const tone = (s, err) => err ? 'danger' : (s == null ? 'muted' : s >= 200 && s < 300 ? 'success' : s >= 300 && s < 400 ? 'warning' : 'danger');
+  const statusCell = (i) => {
+    if (i.error && i.status == null) return `<span class="badge badge-danger" title="${esc(i.error)}">err</span>`;
+    if (i.status == null) return '<span class="badge" style="background:var(--bg-hover);color:var(--text-muted)">—</span>';
+    return statusBadge(i.status);
+  };
+
+  const filterText = (_extLinksFilter || '').toLowerCase();
+  const statusFilter = _extLinksStatusFilter;
+  const filtered = items.filter(i => {
+    if (filterText && !(i.href.toLowerCase().includes(filterText)
+        || (i.sources || []).some(s => (s.url || '').toLowerCase().includes(filterText)
+                                    || (s.anchor || '').toLowerCase().includes(filterText)))) return false;
+    if (statusFilter === 'ok' && !(i.status >= 200 && i.status < 300)) return false;
+    if (statusFilter === '3xx' && !(i.status >= 300 && i.status < 400)) return false;
+    if (statusFilter === '4xx' && !(i.status >= 400 && i.status < 500)) return false;
+    if (statusFilter === '5xx' && !(i.status >= 500)) return false;
+    if (statusFilter === 'broken' && !((i.status != null && i.status >= 400) || i.error)) return false;
+    if (statusFilter === 'unchecked' && i.status != null) return false;
+    return true;
+  });
+
+  const rowsHtml = filtered.slice(0, 2000).map(i => {
+    const srcCount = i.sourceCount || (i.sources || []).length;
+    const topSources = (i.sources || []).slice(0, 3).map(s => urlLink(s.url)).join('<br>');
+    const moreSrc = srcCount > 3 ? `<div style="color:var(--text-muted);font-size:11px;margin-top:2px">+${srcCount - 3} more</div>` : '';
+    return `<tr>
+      <td style="font-size:12px"><a href="${esc(i.href)}" target="_blank" rel="noopener nofollow" style="color:var(--primary);word-break:break-all">${esc(i.href)}</a></td>
+      <td style="text-align:center">${statusCell(i)}</td>
+      <td style="text-align:center;color:var(--text-muted)">${srcCount}</td>
+      <td style="font-size:11px">${topSources}${moreSrc}</td>
+    </tr>`;
+  }).join('');
+
+  const uncheckedCount = total - checked;
+  wrap.innerHTML = `
+    <div style="padding:20px">
+      <div class="stats-grid">
+        ${statCard('External Links', total.toLocaleString(), 'info')}
+        ${statCard('Checked', checked.toLocaleString(), checked === total ? 'success' : '')}
+        ${statCard('OK (2xx)', ok.toLocaleString(), 'success')}
+        ${statCard('Redirects (3xx)', redirects.toLocaleString(), redirects > 0 ? 'warning' : 'success')}
+        ${statCard('Broken (4xx/5xx)', broken.toLocaleString(), broken > 0 ? 'danger' : 'success')}
+      </div>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:14px 0">
+        <button id="extCheckBtn" class="btn btn-primary" style="padding:8px 14px;border-radius:6px;border:none;background:var(--primary);color:#fff;cursor:pointer;font-weight:600"${_extLinksChecking ? ' disabled' : ''}>
+          ${_extLinksChecking ? 'Checking…' : (uncheckedCount > 0 ? `Check ${uncheckedCount.toLocaleString()} unchecked` : 'Re-check all')}
+        </button>
+        ${checked > 0 ? `<button id="extRecheckBtn" class="btn btn-secondary" style="padding:8px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer"${_extLinksChecking ? ' disabled' : ''}>Force re-check all</button>` : ''}
+        <input type="text" id="extFilterInput" placeholder="Filter by URL, source, or anchor…" value="${esc(_extLinksFilter)}" style="flex:1;min-width:240px;padding:8px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+        <select id="extStatusFilter" style="padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          <option value=""${statusFilter === '' ? ' selected' : ''}>All statuses</option>
+          <option value="ok"${statusFilter === 'ok' ? ' selected' : ''}>2xx OK</option>
+          <option value="3xx"${statusFilter === '3xx' ? ' selected' : ''}>3xx Redirect</option>
+          <option value="4xx"${statusFilter === '4xx' ? ' selected' : ''}>4xx Client error</option>
+          <option value="5xx"${statusFilter === '5xx' ? ' selected' : ''}>5xx Server error</option>
+          <option value="broken"${statusFilter === 'broken' ? ' selected' : ''}>Broken (4xx/5xx/error)</option>
+          <option value="unchecked"${statusFilter === 'unchecked' ? ' selected' : ''}>Unchecked</option>
+        </select>
+      </div>
+
+      <div id="extLinksProgress" style="display:${_extLinksChecking ? 'block' : 'none'};margin-bottom:12px"></div>
+
+      <div class="section-card">
+        <h3>External Links (${filtered.length.toLocaleString()}${filtered.length > 2000 ? ' — showing first 2000' : ''})</h3>
+        ${filtered.length === 0 ? '<p style="color:var(--text-muted);padding:14px">No external links match the current filter.</p>' : `
+        <table>
+          <thead><tr><th>External URL</th><th style="text-align:center">Status</th><th style="text-align:center">Sources</th><th>Top source pages</th></tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>`}
+      </div>
+    </div>`;
+
+  document.getElementById('extCheckBtn')?.addEventListener('click', () => startExternalCheck(false));
+  document.getElementById('extRecheckBtn')?.addEventListener('click', () => startExternalCheck(true));
+  document.getElementById('extFilterInput')?.addEventListener('input', (e) => {
+    _extLinksFilter = e.target.value;
+    renderExternalLinks();
+    document.getElementById('extFilterInput')?.focus();
+  });
+  document.getElementById('extStatusFilter')?.addEventListener('change', (e) => {
+    _extLinksStatusFilter = e.target.value;
+    renderExternalLinks();
+  });
+}
+
+async function startExternalCheck(force) {
+  if (_extLinksChecking || !currentCrawlId) return;
+  _extLinksChecking = true;
+  renderExternalLinks();
+  const progress = document.getElementById('extLinksProgress');
+  const drawBar = (done, total, finished) => {
+    if (!progress) return;
+    const pct = total ? Math.min(100, Math.round(done / total * 100)) : 0;
+    progress.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;margin-bottom:6px">
+        <span style="font-weight:600">${finished ? 'Done.' : 'Probing external URLs…'}</span>
+        <span style="color:var(--text-muted)"><b style="color:var(--text)">${done.toLocaleString()}</b> / ${total.toLocaleString()}</span>
+      </div>
+      <div style="height:10px;background:var(--bg-input);border-radius:999px;overflow:hidden;border:1px solid var(--border)">
+        <div style="height:100%;width:${pct}%;background:${finished ? 'linear-gradient(135deg,#16A34A,#22C55E)' : 'linear-gradient(135deg,#6366F1,#8B5CF6,#6366F1)'};transition:width .3s ease"></div>
+      </div>`;
+  };
+  try {
+    const res = await fetch(`/api/crawls/${currentCrawlId}/external-links/check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: !!force })
+    });
+    if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const evt = JSON.parse(line.slice(6));
+          if (evt.type === 'start') {
+            drawBar(0, evt.total, false);
+          } else if (evt.type === 'result') {
+            // Patch the matching item in _extLinksData so re-renders show fresh data.
+            const it = _extLinksData.items.find(x => x.href === evt.url);
+            if (it) {
+              it.status = evt.status;
+              it.error = evt.error;
+              it.checkedAt = evt.checkedAt;
+            }
+            drawBar(evt.done, evt.total, false);
+          } else if (evt.type === 'done') {
+            drawBar(evt.done, evt.total, true);
+          }
+        } catch { /* ignore malformed sse frame */ }
+      }
+    }
+  } catch (e) {
+    if (progress) progress.innerHTML = `<div style="color:var(--danger);font-size:12px">Check failed: ${esc(e.message)}</div>`;
+  } finally {
+    _extLinksChecking = false;
+    renderExternalLinks();
+    // Keep "Done" bar visible briefly so the user sees the completion state.
+    setTimeout(() => {
+      const p = document.getElementById('extLinksProgress');
+      if (p && !_extLinksChecking) p.style.display = 'none';
+    }, 3000);
+  }
 }
 
 // ── Internal Links ──
