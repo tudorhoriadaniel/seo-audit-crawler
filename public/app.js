@@ -1374,7 +1374,120 @@ function _renderImagesUI() {
     </div>`;
   }
 
-  $('#imagesContent').innerHTML = exportBtn('images') + html;
+  $('#imagesContent').innerHTML = exportBtn('images') + html
+    + '<div id="brokenImagesSection" style="margin-top:18px"></div>';
+  loadBrokenImages();
+}
+
+// ── Broken image references ──
+// Probes every internal image URL (from <img src> + <a href="...jpg">)
+// for its status code and surfaces the 404/410/5xx ones. Auto-scans on
+// open; results cached server-side under asset-status:<url>.
+let _imgAssetsData = null;
+let _imgAssetsChecking = false;
+
+async function loadBrokenImages() {
+  const wrap = document.getElementById('brokenImagesSection');
+  if (!wrap || !currentCrawlId) return;
+  if (_imgAssetsChecking && _imgAssetsData) { renderBrokenImages(); return; }
+  wrap.innerHTML = '<div class="section-card"><p style="color:var(--text-muted)">Loading image references…</p></div>';
+  try {
+    const res = await fetch(`/api/crawls/${currentCrawlId}/image-assets`);
+    if (!res.ok) throw new Error((await res.json()).error || 'failed');
+    _imgAssetsData = await res.json();
+    renderBrokenImages();
+    const unchecked = (_imgAssetsData.items || []).filter(i => i.status == null && !i.error).length;
+    if (unchecked > 0 && !_imgAssetsChecking) startImageAssetCheck();
+  } catch (e) {
+    wrap.innerHTML = `<div class="section-card"><p style="color:var(--danger)">Failed to load image references: ${esc(e.message)}</p></div>`;
+  }
+}
+
+function renderBrokenImages() {
+  const wrap = document.getElementById('brokenImagesSection');
+  if (!wrap || !_imgAssetsData) return;
+  const items = _imgAssetsData.items || [];
+  const broken = items.filter(i => i.error || (i.status != null && i.status >= 400));
+  const statusCell = (i) => {
+    if (i.error && i.status == null) return `<span class="badge badge-danger" title="${esc(i.error)}">${esc(i.error)}</span>`;
+    if (i.status == null) return '<span class="badge" style="background:var(--bg-hover);color:var(--text-muted)">—</span>';
+    return statusBadge(i.status);
+  };
+  const rows = broken.slice(0, 1000).map(i => {
+    const top = (i.sources || []).slice(0, 3).map(s => urlLink(s.url)).join('<br>');
+    const more = (i.sourceCount || 0) > 3 ? `<div style="color:var(--text-muted);font-size:11px">+${i.sourceCount - 3} more</div>` : '';
+    return `<tr>
+      <td style="font-size:12px"><a href="${esc(i.href)}" target="_blank" rel="noopener" style="color:var(--primary);word-break:break-all">${esc(i.href)}</a></td>
+      <td style="text-align:center">${statusCell(i)}</td>
+      <td style="text-align:center;color:var(--text-muted)">${i.sourceCount || (i.sources||[]).length}</td>
+      <td style="font-size:11px">${top}${more}</td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <div class="section-card">
+      <h3>Broken image references (${broken.length.toLocaleString()} of ${items.length.toLocaleString()} checked${_imgAssetsChecking ? ' — scanning…' : ''})</h3>
+      <div id="imgAssetsProgress" style="display:${_imgAssetsChecking ? 'block' : 'none'};margin-bottom:10px"></div>
+      ${broken.length === 0
+        ? `<p style="color:var(--text-muted);padding:6px 0">${_imgAssetsChecking ? 'Checking image URLs…' : 'No broken image references found. 🎉'}</p>`
+        : `<table>
+            <thead><tr><th>Image URL</th><th style="text-align:center">Status</th><th style="text-align:center">Used on</th><th>Top source pages</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>`}
+      ${!_imgAssetsChecking ? `<button id="imgRecheckBtn" class="btn btn-secondary" style="margin-top:10px;padding:7px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Re-check images</button>` : ''}
+    </div>`;
+  document.getElementById('imgRecheckBtn')?.addEventListener('click', () => startImageAssetCheck(true));
+}
+
+async function startImageAssetCheck(force) {
+  if (_imgAssetsChecking || !currentCrawlId) return;
+  _imgAssetsChecking = true;
+  renderBrokenImages();
+  const drawBar = (done, total, finished) => {
+    const p = document.getElementById('imgAssetsProgress');
+    if (!p) return;
+    p.style.display = 'block';
+    const pct = total ? Math.min(100, Math.round(done / total * 100)) : 0;
+    p.innerHTML = `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">${finished ? 'Done.' : 'Checking image URLs…'} ${done.toLocaleString()} / ${total.toLocaleString()}</div>
+      <div style="height:8px;background:var(--bg-input);border-radius:999px;overflow:hidden;border:1px solid var(--border)"><div style="height:100%;width:${pct}%;background:${finished ? 'linear-gradient(135deg,#16A34A,#22C55E)' : 'linear-gradient(135deg,#6366F1,#8B5CF6)'};transition:width .3s"></div></div>`;
+  };
+  let pending = false;
+  const refresh = () => { if (pending) return; pending = true; setTimeout(() => { pending = false; if (_imgAssetsChecking) renderBrokenImages(); }, 1500); };
+  try {
+    const res = await fetch(`/api/crawls/${currentCrawlId}/image-assets/check`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: !!force })
+    });
+    if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const evt = JSON.parse(line.slice(6));
+          if (evt.type === 'start' || evt.type === 'progress') drawBar(evt.done || 0, evt.total, false);
+          else if (evt.type === 'result') {
+            const it = _imgAssetsData.items.find(x => x.href === evt.url);
+            if (it) { it.status = evt.status; it.error = evt.error; it.checkedAt = evt.checkedAt; }
+            drawBar(evt.done, evt.total, false);
+            refresh();
+          } else if (evt.type === 'done') drawBar(evt.done, evt.total, true);
+        } catch { /* ignore */ }
+      }
+    }
+  } catch (e) {
+    const p = document.getElementById('imgAssetsProgress');
+    if (p) p.innerHTML = `<div style="color:var(--danger);font-size:12px">Check failed: ${esc(e.message)}</div>`;
+  } finally {
+    _imgAssetsChecking = false;
+    renderBrokenImages();
+  }
 }
 
 // ── Structured Data ──
@@ -1753,7 +1866,45 @@ function renderLinks(analysis) {
       ).join('')}</tbody></table></div>`;
   }
 
-  $('#linksContent').innerHTML = exportBtn('links') + html;
+  $('#linksContent').innerHTML = exportBtn('links') + html
+    + '<div id="malformedLinksSection" style="margin-top:18px"></div>';
+  loadMalformedLinks();
+}
+
+// ── Malformed links ──
+// Links the author wrote without a scheme (e.g. href="www.foo.ch") that
+// the browser resolves as a broken internal path. Flagged at crawl time.
+async function loadMalformedLinks() {
+  const wrap = document.getElementById('malformedLinksSection');
+  if (!wrap || !currentCrawlId) return;
+  try {
+    const res = await fetch(`/api/crawls/${currentCrawlId}/malformed-links`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const items = data.items || [];
+    if (!items.length) { wrap.innerHTML = ''; return; }
+    const rows = items.slice(0, 1000).map(i => {
+      const top = (i.sources || []).slice(0, 3).map(s => urlLink(s.url)).join('<br>');
+      const more = i.sourceCount > 3 ? `<div style="color:var(--text-muted);font-size:11px">+${i.sourceCount - 3} more</div>` : '';
+      return `<tr>
+        <td style="font-size:12px;color:var(--danger);word-break:break-all">${esc(i.rawHref || i.resolved)}</td>
+        <td style="font-size:12px;color:var(--text-muted);word-break:break-all">${esc(i.resolved)}</td>
+        <td style="text-align:center;color:var(--text-muted)">${i.sourceCount}</td>
+        <td style="font-size:11px">${top}${more}</td>
+      </tr>`;
+    }).join('');
+    wrap.innerHTML = `
+      <div class="section-card" style="border-left:4px solid var(--warning)">
+        <h3>Malformed links (${items.length.toLocaleString()})</h3>
+        <p style="color:var(--text-muted);font-size:12px;margin:0 0 10px">
+          These links were written without <code>https://</code> (e.g. <code>www.example.ch</code>), so the browser treats them as a path under the current page — producing a broken internal URL. Fix by adding the scheme.
+        </p>
+        <table>
+          <thead><tr><th>Written as</th><th>Resolves to (broken)</th><th style="text-align:center">Count</th><th>Top source pages</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  } catch { /* non-fatal */ }
 }
 
 window.loadCrawl = async function(id) {
