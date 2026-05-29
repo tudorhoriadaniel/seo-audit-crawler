@@ -3,6 +3,7 @@ const http = require('http');
 const { Server: SocketIO } = require('socket.io');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const axios = require('axios');
 
 const CrawlerEngine = require('./lib/crawler-engine');
 const Analyzer = require('./lib/analyzer');
@@ -358,6 +359,129 @@ app.get('/api/share/:id/analysis', (req, res) => {
   const resultsForAnalysis = mapPagesForAnalysis(pages);
   const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
   res.json(analyzer.analyze());
+});
+
+// ── External links + status-code checker ──────────────────────────────
+// Collects every off-domain link found across the crawl, returns it
+// with the list of source pages that point at it. A second endpoint
+// streams HEAD/GET probes back as Server-Sent Events so the UI can
+// fill statuses live. Results are cached in kv_store under
+// "external-status:<url>" so a re-open doesn't re-probe everything.
+
+function collectExternalLinks(crawlId) {
+  const pages = db.getCrawlPages(crawlId);
+  if (!pages.length) return null;
+  const byHref = new Map();   // href → { href, anchors: Set, sources: [{url, anchor, isNofollow}] }
+  for (const p of pages) {
+    let links = [];
+    try { links = JSON.parse(p.links || '[]'); } catch { /* malformed row */ }
+    for (const l of links) {
+      if (!l || l.isInternal !== false || !l.href) continue;
+      if (!/^https?:\/\//i.test(l.href)) continue;
+      let entry = byHref.get(l.href);
+      if (!entry) {
+        entry = { href: l.href, sources: [] };
+        byHref.set(l.href, entry);
+      }
+      entry.sources.push({ url: p.url, anchor: l.anchor || '', isNofollow: !!l.isNofollow });
+    }
+  }
+  // Hydrate any cached statuses so the UI shows them on first load.
+  const items = Array.from(byHref.values()).map(e => {
+    const cached = db.kvGet('external-status:' + e.href);
+    return {
+      href: e.href,
+      sourceCount: e.sources.length,
+      sources: e.sources.slice(0, 50),
+      status: cached?.status ?? null,
+      checkedAt: cached?.checkedAt ?? null,
+      error: cached?.error ?? null
+    };
+  });
+  items.sort((a, b) => b.sourceCount - a.sourceCount || a.href.localeCompare(b.href));
+  return items;
+}
+
+app.get('/api/crawls/:id/external-links', (req, res) => {
+  const items = collectExternalLinks(req.params.id);
+  if (!items) return res.status(404).json({ error: 'Crawl not found / no pages' });
+  res.json({ total: items.length, items });
+});
+
+async function probeExternalUrl(url) {
+  // Try HEAD first; fall back to a tiny GET if HEAD is blocked (405,
+  // 501, or a 200 from a server that lies). Short timeout so a slow
+  // remote can't tie up the checker for a 5000-link batch.
+  const common = {
+    timeout: 15000,
+    maxRedirects: 5,
+    validateStatus: () => true,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (compatible; ConvertaSEO-LinkChecker/1.0; +https://seo.converta.ro)',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.5'
+    }
+  };
+  try {
+    const head = await axios.head(url, common);
+    if (head.status === 405 || head.status === 501 || head.status >= 500) {
+      const get = await axios.get(url, { ...common, responseType: 'stream' });
+      get.data?.destroy?.();
+      return { status: get.status };
+    }
+    return { status: head.status };
+  } catch (e) {
+    // Some servers refuse HEAD outright; try GET once.
+    try {
+      const get = await axios.get(url, { ...common, responseType: 'stream' });
+      get.data?.destroy?.();
+      return { status: get.status };
+    } catch (e2) {
+      return { status: null, error: (e2 && e2.code) || (e2 && e2.message) || 'request failed' };
+    }
+  }
+}
+
+app.post('/api/crawls/:id/external-links/check', async (req, res) => {
+  const crawlId = req.params.id;
+  const items = collectExternalLinks(crawlId);
+  if (!items) return res.status(404).json({ error: 'Crawl not found / no pages' });
+
+  const force = !!req.body?.force;
+  const targets = items
+    .map(i => i.href)
+    .filter(h => force || db.kvGet('external-status:' + h) == null);
+  const total = targets.length;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+  res.write(`data: ${JSON.stringify({ type: 'start', total })}\n\n`);
+
+  const CONCURRENCY = 6;
+  let done = 0;
+  const queue = targets.slice();
+  let closed = false;
+  req.on('close', () => { closed = true; });
+
+  const worker = async () => {
+    while (queue.length && !closed) {
+      const url = queue.shift();
+      const result = await probeExternalUrl(url);
+      const checkedAt = new Date().toISOString();
+      db.kvSet('external-status:' + url, { ...result, checkedAt });
+      done++;
+      if (!closed) {
+        res.write(`data: ${JSON.stringify({ type: 'result', url, status: result.status, error: result.error || null, checkedAt, done, total })}\n\n`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  if (!closed) {
+    res.write(`data: ${JSON.stringify({ type: 'done', done, total })}\n\n`);
+    res.end();
+  }
 });
 
 // ── AI audit assistant ────────────────────────────────────────────────
