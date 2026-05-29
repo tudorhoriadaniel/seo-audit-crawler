@@ -1575,9 +1575,11 @@ async function startExternalCheck(force) {
   if (_extLinksChecking || !currentCrawlId) return;
   _extLinksChecking = true;
   renderExternalLinks();
-  const progress = document.getElementById('extLinksProgress');
+
   const drawBar = (done, total, finished) => {
+    const progress = document.getElementById('extLinksProgress');
     if (!progress) return;
+    progress.style.display = 'block';
     const pct = total ? Math.min(100, Math.round(done / total * 100)) : 0;
     progress.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;margin-bottom:6px">
@@ -1588,6 +1590,48 @@ async function startExternalCheck(force) {
         <div style="height:100%;width:${pct}%;background:${finished ? 'linear-gradient(135deg,#16A34A,#22C55E)' : 'linear-gradient(135deg,#6366F1,#8B5CF6,#6366F1)'};transition:width .3s ease"></div>
       </div>`;
   };
+
+  // Live count updates on the scorecards without re-rendering the whole
+  // tab (which would steal focus from the filter input).
+  const updateCards = () => {
+    const items = _extLinksData?.items || [];
+    const counts = { total: items.length, checked: 0, ok: 0, redirects: 0, broken: 0 };
+    for (const i of items) {
+      if (i.status == null && !i.error) continue;
+      counts.checked++;
+      if (i.error) counts.broken++;
+      else if (i.status >= 200 && i.status < 300) counts.ok++;
+      else if (i.status >= 300 && i.status < 400) counts.redirects++;
+      else if (i.status >= 400) counts.broken++;
+    }
+    const set = (selector, val) => { const el = document.querySelector(selector); if (el) el.textContent = val.toLocaleString(); };
+    set('[data-ext-filter=""] .value', counts.total);
+    set('[data-ext-filter="checked"] .value', counts.checked);
+    set('[data-ext-filter="ok"] .value', counts.ok);
+    set('[data-ext-filter="3xx"] .value', counts.redirects);
+    set('[data-ext-filter="broken"] .value', counts.broken);
+  };
+
+  // Throttled full re-render so the table picks up new statuses without
+  // re-rendering on every single SSE event (2000+ rows).
+  let pending = false;
+  const scheduleTableRefresh = () => {
+    if (pending) return;
+    pending = true;
+    setTimeout(() => {
+      pending = false;
+      if (!_extLinksChecking) return;
+      // Re-render but restore focus + caret position on the filter input.
+      const inp = document.getElementById('extFilterInput');
+      const sel = inp ? { start: inp.selectionStart, end: inp.selectionEnd } : null;
+      renderExternalLinks();
+      if (sel) {
+        const after = document.getElementById('extFilterInput');
+        if (after) { after.focus(); after.setSelectionRange(sel.start, sel.end); }
+      }
+    }, 1500);
+  };
+
   try {
     const res = await fetch(`/api/crawls/${currentCrawlId}/external-links/check`, {
       method: 'POST',
@@ -1609,9 +1653,8 @@ async function startExternalCheck(force) {
         try {
           const evt = JSON.parse(line.slice(6));
           if (evt.type === 'start') {
-            drawBar(0, evt.total, false);
+            drawBar(evt.done || 0, evt.total, false);
           } else if (evt.type === 'result') {
-            // Patch the matching item in _extLinksData so re-renders show fresh data.
             const it = _extLinksData.items.find(x => x.href === evt.url);
             if (it) {
               it.status = evt.status;
@@ -1619,18 +1662,24 @@ async function startExternalCheck(force) {
               it.checkedAt = evt.checkedAt;
             }
             drawBar(evt.done, evt.total, false);
+            updateCards();
+            scheduleTableRefresh();
           } else if (evt.type === 'done') {
             drawBar(evt.done, evt.total, true);
+          } else if (evt.type === 'error') {
+            drawBar(0, 0, false);
+            const p = document.getElementById('extLinksProgress');
+            if (p) p.innerHTML = `<div style="color:var(--danger);font-size:12px">${esc(evt.message || 'Check error')}</div>`;
           }
         } catch { /* ignore malformed sse frame */ }
       }
     }
   } catch (e) {
-    if (progress) progress.innerHTML = `<div style="color:var(--danger);font-size:12px">Check failed: ${esc(e.message)}</div>`;
+    const p = document.getElementById('extLinksProgress');
+    if (p) p.innerHTML = `<div style="color:var(--danger);font-size:12px">Check failed: ${esc(e.message)}</div>`;
   } finally {
     _extLinksChecking = false;
     renderExternalLinks();
-    // Keep "Done" bar visible briefly so the user sees the completion state.
     setTimeout(() => {
       const p = document.getElementById('extLinksProgress');
       if (p && !_extLinksChecking) p.style.display = 'none';
