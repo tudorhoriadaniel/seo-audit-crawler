@@ -1654,6 +1654,8 @@ async function startExternalCheck(force) {
           const evt = JSON.parse(line.slice(6));
           if (evt.type === 'start') {
             drawBar(evt.done || 0, evt.total, false);
+          } else if (evt.type === 'progress') {
+            drawBar(evt.done, evt.total, false);
           } else if (evt.type === 'result') {
             const it = _extLinksData.items.find(x => x.href === evt.url);
             if (it) {

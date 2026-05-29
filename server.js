@@ -409,35 +409,45 @@ app.get('/api/crawls/:id/external-links', (req, res) => {
 });
 
 async function probeExternalUrl(url) {
-  // Try HEAD first; fall back to a tiny GET if HEAD is blocked (405,
-  // 501, or a 200 from a server that lies). Short timeout so a slow
-  // remote can't tie up the checker for a 5000-link batch.
-  const common = {
-    timeout: 10000,
-    maxRedirects: 5,
-    validateStatus: () => true,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; ConvertaSEO-LinkChecker/1.0; +https://seo.converta.ro)',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.5'
-    }
+  // HEAD first (cheap). Fall back to GET only when HEAD is explicitly
+  // disallowed (405/501) or the HEAD failed for a NON-timeout reason —
+  // a HEAD timeout almost always means a slow server where GET would
+  // time out too, so retrying just doubles the wall-clock for no gain.
+  const TIMEOUT = 8000;
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (compatible; ConvertaSEO-LinkChecker/1.0; +https://seo.converta.ro)',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5'
   };
+  // AbortController gives a hard wall-clock deadline even if the socket
+  // hangs mid-connect (axios `timeout` only covers inactivity between
+  // bytes on some transports).
+  const reqWithDeadline = (fn) => {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), TIMEOUT + 1500);
+    return fn(ac.signal).finally(() => clearTimeout(t));
+  };
+  const common = (signal) => ({ timeout: TIMEOUT, maxRedirects: 5, validateStatus: () => true, signal, headers });
+  const isTimeout = (e) => e && (e.code === 'ECONNABORTED' || e.code === 'ERR_CANCELED' || /timeout/i.test(e.message || ''));
+
   try {
-    const head = await axios.head(url, common);
-    if (head.status === 405 || head.status === 501 || head.status >= 500) {
-      const get = await axios.get(url, { ...common, responseType: 'stream' });
+    const head = await reqWithDeadline((signal) => axios.head(url, common(signal)));
+    if (head.status === 405 || head.status === 501) {
+      const get = await reqWithDeadline((signal) => axios.get(url, { ...common(signal), responseType: 'stream' }));
       get.data?.destroy?.();
       return { status: get.status };
     }
     return { status: head.status };
   } catch (e) {
-    // Some servers refuse HEAD outright; try GET once.
+    if (isTimeout(e)) return { status: null, error: 'timeout' };
+    // Non-timeout HEAD failure (server refuses HEAD, connection reset):
+    // one GET attempt.
     try {
-      const get = await axios.get(url, { ...common, responseType: 'stream' });
+      const get = await reqWithDeadline((signal) => axios.get(url, { ...common(signal), responseType: 'stream' }));
       get.data?.destroy?.();
       return { status: get.status };
     } catch (e2) {
-      return { status: null, error: (e2 && e2.code) || (e2 && e2.message) || 'request failed' };
+      return { status: null, error: isTimeout(e2) ? 'timeout' : ((e2 && e2.code) || (e2 && e2.message) || 'request failed') };
     }
   }
 }
@@ -474,7 +484,14 @@ function startExternalChecker(crawlId, items, force) {
     }
   };
 
-  const CONCURRENCY = 12;
+  // Heartbeat so slow batches still show "alive" + a moving counter even
+  // when individual probes are each taking their full timeout.
+  const heartbeat = setInterval(() => {
+    if (!state.running) { clearInterval(heartbeat); return; }
+    broadcast({ type: 'progress', done: state.done, total: state.total });
+  }, 2000);
+
+  const CONCURRENCY = 30;
   const queue = targets.slice();
   const worker = async () => {
     while (queue.length && state.running) {
@@ -489,10 +506,12 @@ function startExternalChecker(crawlId, items, force) {
   Promise.all(Array.from({ length: CONCURRENCY }, worker))
     .then(() => {
       state.running = false;
+      clearInterval(heartbeat);
       broadcast({ type: 'done', done: state.done, total: state.total });
     })
     .catch((e) => {
       state.running = false;
+      clearInterval(heartbeat);
       broadcast({ type: 'error', message: e.message });
     });
 
