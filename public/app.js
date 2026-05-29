@@ -2048,6 +2048,7 @@ function renderStatusCodes(analysis) {
   _statusCodesActiveFilter = 'all';
   _statusContentTypeFilter = 'all';
   _renderStatusCodesUI();
+  ensureImageAssetsForStatus();
 }
 
 let _statusContentTypeFilter = 'all';
@@ -2075,30 +2076,63 @@ window.filterStatusContentType = function(key) {
   _renderStatusCodesUI();
 };
 
+function statusTierOf(statusCode, error) {
+  if (statusCode == null) return 'error';
+  if (statusCode >= 200 && statusCode < 300) return '2xx';
+  if (statusCode >= 300 && statusCode < 400) return '3xx';
+  if (statusCode >= 400 && statusCode < 500) return '4xx';
+  if (statusCode >= 500) return '5xx';
+  return 'error';
+}
+
 function _renderStatusCodesUI() {
   const r = _statusCodesData;
   const f = _statusCodesActiveFilter;
   const ct = _statusContentTypeFilter;
+  // Images are referenced via <img src> and aren't crawled as pages, so
+  // their statuses live in the separate image-assets dataset. When the
+  // user selects "Images" we render the FULL image set (probed statuses),
+  // not the handful of image URLs that happened to be crawled as pages.
+  const imageView = ct === 'image';
+  const GROUP_META = {
+    '2xx':   { label: '2xx (Success)',      color: '#16A34A' },
+    '3xx':   { label: '3xx (Redirect)',     color: '#D97706' },
+    '4xx':   { label: '4xx (Client Error)', color: '#DC2626' },
+    '5xx':   { label: '5xx (Server Error)', color: '#7F1D1D' },
+    'error': { label: 'Conn Errors',        color: '#6B7085' }
+  };
 
-  // Apply the content-type filter to every group before counting/listing.
-  const passes = (u) => ct === 'all' || classifyUrlContentType(u.url) === ct;
-  const groups = {};
-  for (const key of Object.keys(r.groups)) {
-    groups[key] = { ...r.groups[key], urls: r.groups[key].urls.filter(passes) };
+  // Build the status groups for whichever dataset is active.
+  let groups;
+  if (imageView) {
+    groups = {};
+    for (const k of Object.keys(GROUP_META)) groups[k] = { ...GROUP_META[k], urls: [] };
+    for (const it of (_imgStatusData?.items || [])) {
+      const tier = statusTierOf(it.status, it.error);
+      groups[tier].urls.push({ url: it.href, statusCode: it.status, error: it.error, sources: it.sources, sourceCount: it.sourceCount });
+    }
+  } else {
+    const passes = (u) => ct === 'all' || classifyUrlContentType(u.url) === ct;
+    groups = {};
+    for (const key of Object.keys(r.groups)) groups[key] = { ...r.groups[key], urls: r.groups[key].urls.filter(passes) };
   }
   const total = Object.values(groups).reduce((s, g) => s + g.urls.length, 0);
 
-  // Content-type pills. Counts reflect ALL crawled URLs (not the active
-  // status filter), so the user sees "how many image URLs do I have?"
-  // independent of which status bucket they're inspecting.
+  // Content-type pills. Image count comes from the full image-assets set;
+  // every other type from the crawled-pages classification.
   const ctCounts = { all: r.total, html: 0, image: 0, pdf: 0, office: 0, archive: 0, media: 0, asset: 0, other: 0 };
   for (const key of Object.keys(r.groups)) {
-    for (const u of r.groups[key].urls) ctCounts[classifyUrlContentType(u.url)]++;
+    for (const u of r.groups[key].urls) {
+      const c = classifyUrlContentType(u.url);
+      if (c !== 'image') ctCounts[c]++;   // images counted from the asset set below
+    }
   }
+  ctCounts.image = _imgStatusData ? (_imgStatusData.items || []).length : null;
   const ctPill = (key, label) => {
-    const count = ctCounts[key] || 0;
+    const count = ctCounts[key];
+    const shown = count == null ? '…' : count.toLocaleString();
     const active = ct === key;
-    return `<button onclick="filterStatusContentType('${key}')" style="padding:6px 12px;border-radius:999px;border:1px solid ${active ? 'var(--primary)' : 'var(--border)'};background:${active ? 'var(--primary)' : 'var(--bg-input)'};color:${active ? '#fff' : 'var(--text)'};cursor:pointer;font-size:12px;font-weight:${active ? 600 : 500}">${esc(label)} <span style="opacity:.8;margin-left:4px">${count.toLocaleString()}</span></button>`;
+    return `<button onclick="filterStatusContentType('${key}')" style="padding:6px 12px;border-radius:999px;border:1px solid ${active ? 'var(--primary)' : 'var(--border)'};background:${active ? 'var(--primary)' : 'var(--bg-input)'};color:${active ? '#fff' : 'var(--text)'};cursor:pointer;font-size:12px;font-weight:${active ? 600 : 500}">${esc(label)} <span style="opacity:.8;margin-left:4px">${shown}</span></button>`;
   };
   let html = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
     ${ctPill('all', 'All')}
@@ -2112,13 +2146,22 @@ function _renderStatusCodesUI() {
     ${ctPill('other', 'Other')}
   </div>`;
 
+  // In image view, show an export button + live-scan progress.
+  if (imageView) {
+    html += `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:6px">
+      <div style="font-size:13px;color:var(--text-muted)">${(_imgStatusData ? (_imgStatusData.items || []).length : 0).toLocaleString()} image URLs${_imgStatusChecking ? ' — scanning…' : ''}</div>
+      <button id="imgStatusExportBtn" class="btn btn-secondary" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer;font-size:13px">Export Excel</button>
+    </div>
+    <div id="imgStatusProgress" style="display:${_imgStatusChecking ? 'block' : 'none'};margin-bottom:10px"></div>`;
+  }
+
   const cardBtn = (key, label, count, color) => {
     const active = f === key ? 'border:2px solid #fff;' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
     return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterStatusCodes('${key}')">${statCardInner(label, count)}</div>`;
   };
 
   html += `<div class="stats-grid">
-    ${cardBtn('all', 'Total URLs', total, '')}
+    ${cardBtn('all', imageView ? 'Total Images' : 'Total URLs', total, '')}
     ${cardBtn('2xx', '2xx Success', groups['2xx'].urls.length, 'success')}
     ${cardBtn('3xx', '3xx Redirect', groups['3xx'].urls.length, groups['3xx'].urls.length > 0 ? 'warning' : '')}
     ${cardBtn('4xx', '4xx Client Error', groups['4xx'].urls.length, groups['4xx'].urls.length > 0 ? 'danger' : 'success')}
@@ -2126,18 +2169,12 @@ function _renderStatusCodesUI() {
     ${cardBtn('error', 'Conn Errors', groups['error'].urls.length, groups['error'].urls.length > 0 ? 'danger' : '')}
   </div>`;
 
-  // Pie chart — re-computed from the filtered groups so it reflects the
-  // active content-type selection.
-  const pieEntries = [
-    { key: '2xx', label: '2xx (Success)', color: '#16A34A' },
-    { key: '3xx', label: '3xx (Redirect)', color: '#D97706' },
-    { key: '4xx', label: '4xx (Client Error)', color: '#DC2626' },
-    { key: '5xx', label: '5xx (Server Error)', color: '#7F1D1D' },
-    { key: 'error', label: 'Conn Errors', color: '#6B7085' }
-  ].map(e => ({ ...e, count: groups[e.key].urls.length })).filter(e => e.count > 0);
+  // Pie chart from the active groups.
+  const pieEntries = Object.keys(GROUP_META)
+    .map(k => ({ key: k, label: GROUP_META[k].label, color: GROUP_META[k].color, count: groups[k].urls.length }))
+    .filter(e => e.count > 0);
   const pieTotal = pieEntries.reduce((s, e) => s + e.count, 0) || 1;
   const pieData = pieEntries.map(e => ({ label: e.label, color: e.color, count: e.count, percentage: ((e.count / pieTotal) * 100).toFixed(1) }));
-
   if (pieData.length > 0) {
     html += `<div class="section-card"><h3>Status Code Distribution</h3>
       <div class="pie-chart-container">
@@ -2157,140 +2194,62 @@ function _renderStatusCodesUI() {
   for (const key of groupOrder) {
     const g = groups[key];
     if (!g || g.urls.length === 0) continue;
+    const showSources = imageView;
     html += `<div class="section-card" style="border-left:4px solid ${g.color}">
       <h3>${esc(g.label)} (${g.urls.length})</h3>
-      <table><thead><tr><th>URL</th><th>Status</th>${key === '3xx' ? '<th>Redirects To</th>' : ''}${key === 'error' ? '<th>Error</th>' : ''}</tr></thead>
+      <table><thead><tr><th>URL</th><th>Status</th>${key === '3xx' && !imageView ? '<th>Redirects To</th>' : ''}${key === 'error' ? '<th>Error</th>' : ''}${showSources ? '<th>Used on</th>' : ''}</tr></thead>
       <tbody>${g.urls.slice(0, 500).map(u => `<tr>
         <td>${urlLink(u.url)}</td>
         <td>${u.statusCode ? statusBadge(u.statusCode) : '<span class="badge badge-danger">Error</span>'}</td>
-        ${key === '3xx' ? `<td>${u.finalUrl ? urlLink(u.finalUrl) : '-'}</td>` : ''}
+        ${key === '3xx' && !imageView ? `<td>${u.finalUrl ? urlLink(u.finalUrl) : '-'}</td>` : ''}
         ${key === 'error' ? `<td style="font-size:12px;color:var(--text-muted)">${esc(u.error || '')}</td>` : ''}
+        ${showSources ? `<td style="font-size:11px">${(u.sources || []).slice(0, 2).map(s => urlLink(s.url)).join('<br>')}${(u.sourceCount || 0) > 2 ? `<div style="color:var(--text-muted);font-size:11px">+${u.sourceCount - 2} more</div>` : ''}</td>` : ''}
       </tr>`).join('')}</tbody></table></div>`;
   }
 
-  $('#statuscodesContent').innerHTML = exportBtn('statuscodes') + html
-    + '<div id="imageStatusSection" style="margin-top:18px"></div>';
-  loadImageStatusCodes();
-}
-
-// ── Image status codes (on the Status Codes tab) ──
-// Full status-code breakdown for every internal image URL, mirroring the
-// HTML status view above. Shares the image-assets background checker, so
-// statuses are cached and auto-scanned once.
-let _imgStatusData = null;
-let _imgStatusChecking = false;
-let _imgStatusFilter = '';
-
-async function loadImageStatusCodes() {
-  const wrap = document.getElementById('imageStatusSection');
-  if (!wrap || !currentCrawlId) return;
-  if (_imgStatusChecking && _imgStatusData) { renderImageStatusCodes(); return; }
-  wrap.innerHTML = '<div class="section-card"><h3>Image status codes</h3><p style="color:var(--text-muted)">Loading image URLs…</p></div>';
-  try {
-    const res = await fetch(`/api/crawls/${currentCrawlId}/image-assets`);
-    if (!res.ok) throw new Error((await res.json()).error || 'failed');
-    _imgStatusData = await res.json();
-    renderImageStatusCodes();
-    const unchecked = (_imgStatusData.items || []).filter(i => i.status == null && !i.error).length;
-    if (unchecked > 0 && !_imgStatusChecking) startImageStatusCheck();
-  } catch (e) {
-    wrap.innerHTML = `<div class="section-card"><h3>Image status codes</h3><p style="color:var(--danger)">Failed to load: ${esc(e.message)}</p></div>`;
-  }
-}
-
-function renderImageStatusCodes() {
-  const wrap = document.getElementById('imageStatusSection');
-  if (!wrap || !_imgStatusData) return;
-  const items = _imgStatusData.items || [];
-  const total = items.length;
-  const ok = items.filter(i => i.status >= 200 && i.status < 300).length;
-  const r3 = items.filter(i => i.status >= 300 && i.status < 400).length;
-  const c4 = items.filter(i => i.status >= 400 && i.status < 500).length;
-  const s5 = items.filter(i => i.status >= 500).length;
-  const errs = items.filter(i => i.error && i.status == null).length;
-
-  const card = (key, label, value, colorClass) => {
-    const active = _imgStatusFilter === key;
-    return `<div class="stat-card" data-img-filter="${key}" title="Click to filter"
-      style="cursor:pointer;${active ? 'outline:2px solid var(--primary);outline-offset:-2px;' : ''}">
-      <div class="value ${colorClass}">${value.toLocaleString()}</div><div class="label">${label}</div></div>`;
-  };
-
-  const f = _imgStatusFilter;
-  const tf = '';
-  const filtered = items.filter(i => {
-    if (f === 'ok') return i.status >= 200 && i.status < 300;
-    if (f === '3xx') return i.status >= 300 && i.status < 400;
-    if (f === '4xx') return i.status >= 400 && i.status < 500;
-    if (f === '5xx') return i.status >= 500;
-    if (f === 'err') return i.error && i.status == null;
-    return true;
-  });
-  const statusCell = (i) => {
-    if (i.error && i.status == null) return `<span class="badge badge-danger" title="${esc(i.error)}">${esc(i.error)}</span>`;
-    if (i.status == null) return '<span class="badge" style="background:var(--bg-hover);color:var(--text-muted)">—</span>';
-    return statusBadge(i.status);
-  };
-  const rows = filtered.slice(0, 2000).map(i => {
-    const sc = i.sourceCount || (i.sources || []).length;
-    const top = (i.sources || []).slice(0, 2).map(s => urlLink(s.url)).join('<br>');
-    return `<tr>
-      <td style="font-size:12px"><a href="${esc(i.href)}" target="_blank" rel="noopener" style="color:var(--primary);word-break:break-all">${esc(i.href)}</a></td>
-      <td style="text-align:center">${statusCell(i)}</td>
-      <td style="text-align:center;color:var(--text-muted)">${sc}</td>
-      <td style="font-size:11px">${top}</td>
-    </tr>`;
-  }).join('');
-
-  wrap.innerHTML = `
-    <div class="section-card">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-        <h3 style="margin:0">Image status codes (${total.toLocaleString()} image URLs${_imgStatusChecking ? ' — scanning…' : ''})</h3>
-        <button id="imgStatusExportBtn" class="btn btn-secondary" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer;font-size:13px">Export Excel</button>
-      </div>
-      <div class="stats-grid" style="margin-top:12px">
-        ${card('', 'Total images', total, 'info')}
-        ${card('ok', '2xx Success', ok, 'success')}
-        ${card('3xx', '3xx Redirect', r3, r3 > 0 ? 'warning' : 'success')}
-        ${card('4xx', '4xx Client Error', c4, c4 > 0 ? 'danger' : 'success')}
-        ${card('5xx', '5xx Server Error', s5, s5 > 0 ? 'danger' : 'success')}
-        ${card('err', 'Conn Errors', errs, errs > 0 ? 'danger' : 'success')}
-      </div>
-      <div id="imgStatusProgress" style="display:${_imgStatusChecking ? 'block' : 'none'};margin:12px 0"></div>
-      <table style="margin-top:12px">
-        <thead><tr><th>Image URL</th><th style="text-align:center">Status</th><th style="text-align:center">Used on</th><th>Top source pages</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="4" style="color:var(--text-muted);padding:10px">No image URLs match this filter.</td></tr>'}</tbody>
-      </table>
-    </div>`;
-
-  wrap.querySelectorAll('[data-img-filter]').forEach(el => {
-    el.addEventListener('click', () => {
-      const k = el.dataset.imgFilter;
-      _imgStatusFilter = (_imgStatusFilter === k) ? '' : k;
-      renderImageStatusCodes();
-    });
-  });
+  $('#statuscodesContent').innerHTML = exportBtn('statuscodes') + html;
   document.getElementById('imgStatusExportBtn')?.addEventListener('click', () => {
     window.open(`/api/crawls/${currentCrawlId}/image-assets/export/xlsx`, '_blank');
   });
 }
 
+// ── Image-asset status (feeds the "Images" content-type filter on the
+// Status Codes tab) ──────────────────────────────────────────────────
+// Images come from <img src> + asset <a href>, which aren't crawled as
+// pages, so their statuses are probed on demand by the shared background
+// checker and cached server-side.
+let _imgStatusData = null;
+let _imgStatusChecking = false;
+
+async function ensureImageAssetsForStatus() {
+  if (!currentCrawlId) return;
+  if (_imgStatusData) { _renderStatusCodesUI(); return; }
+  try {
+    const res = await fetch('/api/crawls/' + currentCrawlId + '/image-assets');
+    if (!res.ok) return;
+    _imgStatusData = await res.json();
+    _renderStatusCodesUI();
+    const unchecked = (_imgStatusData.items || []).filter(i => i.status == null && !i.error).length;
+    if (unchecked > 0 && !_imgStatusChecking) startImageStatusCheck();
+  } catch { /* non-fatal */ }
+}
+
 async function startImageStatusCheck(force) {
   if (_imgStatusChecking || !currentCrawlId) return;
   _imgStatusChecking = true;
-  renderImageStatusCodes();
+  _renderStatusCodesUI();
   const drawBar = (done, total, finished) => {
     const p = document.getElementById('imgStatusProgress');
     if (!p) return;
     p.style.display = 'block';
     const pct = total ? Math.min(100, Math.round(done / total * 100)) : 0;
-    p.innerHTML = `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">${finished ? 'Done.' : 'Checking image URLs…'} ${done.toLocaleString()} / ${total.toLocaleString()}</div>
-      <div style="height:8px;background:var(--bg-input);border-radius:999px;overflow:hidden;border:1px solid var(--border)"><div style="height:100%;width:${pct}%;background:${finished ? 'linear-gradient(135deg,#16A34A,#22C55E)' : 'linear-gradient(135deg,#6366F1,#8B5CF6)'};transition:width .3s"></div></div>`;
+    p.innerHTML = '<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">' + (finished ? 'Done.' : 'Checking image URLs…') + ' ' + done.toLocaleString() + ' / ' + total.toLocaleString() + '</div>' +
+      '<div style="height:8px;background:var(--bg-input);border-radius:999px;overflow:hidden;border:1px solid var(--border)"><div style="height:100%;width:' + pct + '%;background:' + (finished ? 'linear-gradient(135deg,#16A34A,#22C55E)' : 'linear-gradient(135deg,#6366F1,#8B5CF6)') + ';transition:width .3s"></div></div>';
   };
   let pending = false;
-  const refresh = () => { if (pending) return; pending = true; setTimeout(() => { pending = false; if (_imgStatusChecking) renderImageStatusCodes(); }, 1500); };
+  const refresh = () => { if (pending) return; pending = true; setTimeout(() => { pending = false; if (_imgStatusChecking) _renderStatusCodesUI(); }, 1500); };
   try {
-    const res = await fetch(`/api/crawls/${currentCrawlId}/image-assets/check`, {
+    const res = await fetch('/api/crawls/' + currentCrawlId + '/image-assets/check', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: !!force })
     });
     if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
@@ -2301,9 +2260,9 @@ async function startImageStatusCheck(force) {
       const { done, value } = await reader.read();
       if (done) break;
       buf += dec.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() || '';
-      for (const line of lines) {
+      const linesArr = buf.split('\n');
+      buf = linesArr.pop() || '';
+      for (const line of linesArr) {
         if (!line.startsWith('data: ')) continue;
         try {
           const evt = JSON.parse(line.slice(6));
@@ -2311,7 +2270,6 @@ async function startImageStatusCheck(force) {
           else if (evt.type === 'result') {
             const it = _imgStatusData.items.find(x => x.href === evt.url);
             if (it) { it.status = evt.status; it.error = evt.error; it.checkedAt = evt.checkedAt; }
-            // keep the broken-images section (Images tab) in sync if loaded
             if (_imgAssetsData) { const a = _imgAssetsData.items.find(x => x.href === evt.url); if (a) { a.status = evt.status; a.error = evt.error; } }
             drawBar(evt.done, evt.total, false);
             refresh();
@@ -2321,12 +2279,13 @@ async function startImageStatusCheck(force) {
     }
   } catch (e) {
     const p = document.getElementById('imgStatusProgress');
-    if (p) p.innerHTML = `<div style="color:var(--danger);font-size:12px">Check failed: ${esc(e.message)}</div>`;
+    if (p) p.innerHTML = '<div style="color:var(--danger);font-size:12px">Check failed: ' + esc(e.message) + '</div>';
   } finally {
     _imgStatusChecking = false;
-    renderImageStatusCodes();
+    _renderStatusCodesUI();
   }
 }
+
 
 function filterStatusCodes(key) {
   _statusCodesActiveFilter = (_statusCodesActiveFilter === key) ? 'all' : key;
