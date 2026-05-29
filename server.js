@@ -488,6 +488,112 @@ app.get('/api/crawls/:id/external-links', (req, res) => {
   res.json({ total: items.length, items });
 });
 
+// All source pages (uncapped) that link to a specific external href —
+// powers the "where is this linked from?" modal on the External Links tab.
+app.get('/api/crawls/:id/external-links/sources', (req, res) => {
+  const target = String(req.query.url || '');
+  if (!target) return res.status(400).json({ error: 'url query param required' });
+  const pages = db.getCrawlPages(req.params.id);
+  if (!pages.length) return res.status(404).json({ error: 'Crawl not found / no pages' });
+  const sources = [];
+  for (const p of pages) {
+    let links = [];
+    try { links = JSON.parse(p.links || '[]'); } catch { /* row */ }
+    for (const l of links) {
+      if (l && l.isInternal === false && l.href === target) {
+        sources.push({ url: p.url, anchor: l.anchor || '', isNofollow: !!l.isNofollow });
+      }
+    }
+  }
+  res.json({ url: target, total: sources.length, sources });
+});
+
+// Apply the same filter the UI uses, so an export with "Broken (4xx/5xx)"
+// selected only contains those rows.
+function filterExternalItems(items, statusFilter, textFilter) {
+  const t = (textFilter || '').toLowerCase();
+  return items.filter(i => {
+    if (t && !(i.href.toLowerCase().includes(t)
+      || (i.sources || []).some(s => (s.url || '').toLowerCase().includes(t)
+                                  || (s.anchor || '').toLowerCase().includes(t)))) return false;
+    switch (statusFilter) {
+      case 'checked':   return i.status != null;
+      case 'ok':        return i.status >= 200 && i.status < 300;
+      case '3xx':       return i.status >= 300 && i.status < 400;
+      case '4xx':       return i.status >= 400 && i.status < 500;
+      case '5xx':       return i.status >= 500;
+      case 'broken':    return (i.status != null && i.status >= 400) || !!i.error;
+      case 'unchecked': return i.status == null && !i.error;
+      default:          return true;
+    }
+  });
+}
+
+app.get('/api/crawls/:id/external-links/export/:format', (req, res) => {
+  const items = collectExternalLinks(req.params.id);
+  if (!items) return res.status(404).send('Crawl not found / no pages');
+  const filtered = filterExternalItems(items, req.query.status, req.query.q);
+
+  const crawl = db.getCrawl(req.params.id);
+  let host = 'site';
+  try { host = new URL(crawl?.url || 'https://x').hostname.replace(/^www\./, ''); } catch {}
+  const stamp = new Date().toISOString().slice(0, 10);
+  const baseName = `external-links_${host}_${stamp}`;
+  const statusOf = (i) => i.error ? `error: ${i.error}` : (i.status == null ? '—' : String(i.status));
+
+  if (req.params.format === 'xlsx') {
+    const XLSX = require('xlsx');
+    const summary = [
+      ['External URL', 'Status', 'Source count', 'Top source page', 'All source pages']
+    ];
+    for (const i of filtered) {
+      const all = (i.sources || []).map(s => s.url).join('\n');
+      summary.push([i.href, statusOf(i), i.sourceCount || (i.sources || []).length, (i.sources || [])[0]?.url || '', all]);
+    }
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(summary);
+    ws['!cols'] = [{ wch: 70 }, { wch: 14 }, { wch: 12 }, { wch: 60 }, { wch: 80 }];
+    XLSX.utils.book_append_sheet(wb, ws, 'External Links');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${baseName}.xlsx"`);
+    return res.end(buf);
+  }
+
+  if (req.params.format === 'pdf') {
+    const PDFDocument = require('pdfkit');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${baseName}.pdf"`);
+    const doc = new PDFDocument({ size: 'A4', margin: 36 });
+    doc.pipe(res);
+    doc.fontSize(18).fillColor('#1A1D2E').text('External Links', { continued: false });
+    doc.moveDown(0.2);
+    doc.fontSize(10).fillColor('#6B7085')
+       .text(`${crawl?.url || ''}  ·  ${stamp}  ·  ${filtered.length} link${filtered.length === 1 ? '' : 's'}`);
+    doc.moveDown(0.8);
+    const statusColor = (i) => i.error || (i.status != null && i.status >= 400) ? '#DC2626'
+                           : (i.status != null && i.status >= 300) ? '#D97706'
+                           : (i.status != null) ? '#16A34A' : '#6B7085';
+    for (const i of filtered) {
+      // page break room
+      if (doc.y > 760) doc.addPage();
+      const sources = i.sources || [];
+      doc.fontSize(10).fillColor(statusColor(i)).text(statusOf(i), { continued: true });
+      doc.fillColor('#1A1D2E').text(`  ${i.href}`, { link: i.href, underline: false });
+      doc.fontSize(8).fillColor('#6B7085')
+         .text(`Used on ${i.sourceCount || sources.length} page${(i.sourceCount || sources.length) === 1 ? '' : 's'}`);
+      const top = sources.slice(0, 5);
+      for (const s of top) doc.fontSize(8).fillColor('#4F46E5').text(`    ${s.url}`, { link: s.url, underline: false });
+      if (sources.length > 5) doc.fontSize(8).fillColor('#6B7085').text(`    +${sources.length - 5} more`);
+      doc.moveDown(0.5);
+    }
+    doc.end();
+    return;
+  }
+
+  res.status(400).send('Unsupported format');
+});
+
 async function probeExternalUrl(url) {
   // HEAD first (cheap). Fall back to GET only when HEAD is explicitly
   // disallowed (405/501) or the HEAD failed for a NON-timeout reason —

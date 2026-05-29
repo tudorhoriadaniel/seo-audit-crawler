@@ -1609,11 +1609,13 @@ function renderExternalLinks() {
   const rowsHtml = filtered.slice(0, 2000).map(i => {
     const srcCount = i.sourceCount || (i.sources || []).length;
     const topSources = (i.sources || []).slice(0, 3).map(s => urlLink(s.url)).join('<br>');
-    const moreSrc = srcCount > 3 ? `<div style="color:var(--text-muted);font-size:11px;margin-top:2px">+${srcCount - 3} more</div>` : '';
-    return `<tr>
-      <td style="font-size:12px"><a href="${esc(i.href)}" target="_blank" rel="noopener nofollow" style="color:var(--primary);word-break:break-all">${esc(i.href)}</a></td>
+    const moreSrc = srcCount > 3
+      ? `<a href="#" class="ext-show-sources" data-url="${esc(i.href)}" style="color:var(--primary);font-size:11px;margin-top:2px;display:inline-block">Show all ${srcCount}…</a>`
+      : '';
+    return `<tr data-ext-row="${esc(i.href)}">
+      <td style="font-size:12px"><a href="${esc(i.href)}" target="_blank" rel="noopener nofollow" style="color:var(--primary);word-break:break-all" title="Right-click to see all source pages">${esc(i.href)}</a></td>
       <td style="text-align:center">${statusCell(i)}</td>
-      <td style="text-align:center;color:var(--text-muted)">${srcCount}</td>
+      <td style="text-align:center"><a href="#" class="ext-show-sources" data-url="${esc(i.href)}" style="color:var(--text-muted);text-decoration:none" title="Show all source pages">${srcCount}</a></td>
       <td style="font-size:11px">${topSources}${moreSrc}</td>
     </tr>`;
   }).join('');
@@ -1651,6 +1653,8 @@ function renderExternalLinks() {
           <option value="unchecked"${statusFilter === 'unchecked' ? ' selected' : ''}>Unchecked</option>
         </select>
         ${checked > 0 && !_extLinksChecking ? `<button id="extRecheckBtn" class="btn btn-secondary" style="padding:8px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Re-check all</button>` : ''}
+        <button id="extExportXlsxBtn" class="btn btn-secondary" title="Export the current filtered view to Excel" style="padding:8px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export Excel</button>
+        <button id="extExportPdfBtn" class="btn btn-secondary" title="Export the current filtered view to PDF" style="padding:8px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export PDF</button>
       </div>
 
       <div id="extLinksProgress" style="display:${_extLinksChecking ? 'block' : 'none'};margin-bottom:12px"></div>
@@ -1682,6 +1686,76 @@ function renderExternalLinks() {
     _extLinksStatusFilter = e.target.value;
     renderExternalLinks();
   });
+  document.getElementById('extExportXlsxBtn')?.addEventListener('click', () => exportExternalLinks('xlsx'));
+  document.getElementById('extExportPdfBtn')?.addEventListener('click', () => exportExternalLinks('pdf'));
+
+  // "Sources" cell + "Show all N…" link → open the modal listing every
+  // page that links to this external URL. Right-clicking the URL itself
+  // opens the same modal (suppressing the browser context menu) so the
+  // user can drill in without having to scroll to the sources column.
+  wrap.querySelectorAll('.ext-show-sources').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      showExternalSources(el.dataset.url);
+    });
+  });
+  wrap.querySelectorAll('tr[data-ext-row]').forEach(tr => {
+    tr.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showExternalSources(tr.dataset.extRow);
+    });
+  });
+}
+
+function exportExternalLinks(format) {
+  if (!currentCrawlId) return;
+  const params = new URLSearchParams();
+  if (_extLinksStatusFilter) params.set('status', _extLinksStatusFilter);
+  if (_extLinksFilter) params.set('q', _extLinksFilter);
+  const qs = params.toString();
+  const url = `/api/crawls/${currentCrawlId}/external-links/export/${format}${qs ? '?' + qs : ''}`;
+  window.open(url, '_blank');
+}
+
+async function showExternalSources(targetUrl) {
+  // Reuse the existing .modal-overlay pattern from the page-detail modal.
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `<div class="modal" style="max-width:880px">
+    <button class="modal-close">&times;</button>
+    <h2 style="margin-top:0;word-break:break-all;font-size:16px">${esc(targetUrl)}</h2>
+    <p style="color:var(--text-muted);font-size:13px;margin:4px 0 14px">Pages on your site that link to this URL</p>
+    <div id="extSourcesBody"><p style="color:var(--text-muted)">Loading…</p></div>
+  </div>`;
+  document.body.appendChild(modal);
+  modal.querySelector('.modal-close').addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+  const onEsc = (e) => { if (e.key === 'Escape') { modal.remove(); document.removeEventListener('keydown', onEsc); } };
+  document.addEventListener('keydown', onEsc);
+  try {
+    const res = await fetch(`/api/crawls/${currentCrawlId}/external-links/sources?url=${encodeURIComponent(targetUrl)}`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const sources = data.sources || [];
+    const body = modal.querySelector('#extSourcesBody');
+    if (!sources.length) { body.innerHTML = '<p style="color:var(--text-muted)">No source pages found.</p>'; return; }
+    body.innerHTML = `
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">${sources.length.toLocaleString()} source page${sources.length === 1 ? '' : 's'}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="text-align:left;background:var(--bg-hover)">
+          <th style="padding:6px 8px;border-bottom:1px solid var(--border)">Source page</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--border)">Anchor</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:center">Nofollow</th>
+        </tr></thead>
+        <tbody>${sources.map(s => `<tr>
+          <td style="padding:6px 8px;border-bottom:1px solid var(--border)"><a href="${esc(s.url)}" target="_blank" rel="noopener" style="color:var(--primary);word-break:break-all">${esc(s.url)}</a></td>
+          <td style="padding:6px 8px;border-bottom:1px solid var(--border);color:var(--text-muted)">${esc(s.anchor || '')}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:center">${s.isNofollow ? '✓' : ''}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+  } catch (e) {
+    modal.querySelector('#extSourcesBody').innerHTML = `<p style="color:var(--danger)">Failed to load: ${esc(e.message)}</p>`;
+  }
 }
 
 async function startExternalCheck(force) {
