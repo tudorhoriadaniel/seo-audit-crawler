@@ -1438,12 +1438,23 @@ async function loadExternalLinks() {
     wrap.innerHTML = '<p style="color:var(--text-muted);padding:20px">Load a crawl first.</p>';
     return;
   }
+  // A check already running for this tab — just re-render what we have.
+  if (_extLinksChecking && _extLinksData) {
+    renderExternalLinks();
+    return;
+  }
   wrap.innerHTML = '<p style="color:var(--text-muted);padding:20px">Loading external links…</p>';
   try {
     const res = await fetch(`/api/crawls/${currentCrawlId}/external-links`);
     if (!res.ok) throw new Error((await res.json()).error || 'failed');
     _extLinksData = await res.json();
     renderExternalLinks();
+    // Auto-probe any links we don't yet have a status for. Cached
+    // statuses persist server-side, so this only fires real work the
+    // first time (or after new pages are crawled).
+    const items = _extLinksData.items || [];
+    const unchecked = items.filter(i => i.status == null).length;
+    if (unchecked > 0 && !_extLinksChecking) startExternalCheck(false);
   } catch (e) {
     wrap.innerHTML = `<p style="color:var(--danger);padding:20px">Failed to load: ${esc(e.message)}</p>`;
   }
@@ -1472,6 +1483,7 @@ function renderExternalLinks() {
     if (filterText && !(i.href.toLowerCase().includes(filterText)
         || (i.sources || []).some(s => (s.url || '').toLowerCase().includes(filterText)
                                     || (s.anchor || '').toLowerCase().includes(filterText)))) return false;
+    if (statusFilter === 'checked' && i.status == null) return false;
     if (statusFilter === 'ok' && !(i.status >= 200 && i.status < 300)) return false;
     if (statusFilter === '3xx' && !(i.status >= 300 && i.status < 400)) return false;
     if (statusFilter === '4xx' && !(i.status >= 400 && i.status < 500)) return false;
@@ -1493,25 +1505,31 @@ function renderExternalLinks() {
     </tr>`;
   }).join('');
 
-  const uncheckedCount = total - checked;
+  // Clickable scorecard → sets the status filter. Clicking the active
+  // one again clears it. `key` matches the values used in the filter
+  // predicate above.
+  const card = (key, label, value, colorClass) => {
+    const active = statusFilter === key;
+    return `<div class="stat-card" data-ext-filter="${key}" title="Click to filter"
+      style="cursor:pointer;${active ? 'outline:2px solid var(--primary);outline-offset:-2px;' : ''}">
+      <div class="label">${label}</div><div class="value ${colorClass}">${value}</div></div>`;
+  };
+
   wrap.innerHTML = `
     <div style="padding:20px">
       <div class="stats-grid">
-        ${statCard('External Links', total.toLocaleString(), 'info')}
-        ${statCard('Checked', checked.toLocaleString(), checked === total ? 'success' : '')}
-        ${statCard('OK (2xx)', ok.toLocaleString(), 'success')}
-        ${statCard('Redirects (3xx)', redirects.toLocaleString(), redirects > 0 ? 'warning' : 'success')}
-        ${statCard('Broken (4xx/5xx)', broken.toLocaleString(), broken > 0 ? 'danger' : 'success')}
+        ${card('', 'External Links', total.toLocaleString(), 'info')}
+        ${card('checked', 'Checked', checked.toLocaleString(), checked === total ? 'success' : '')}
+        ${card('ok', 'OK (2xx)', ok.toLocaleString(), 'success')}
+        ${card('3xx', 'Redirects (3xx)', redirects.toLocaleString(), redirects > 0 ? 'warning' : 'success')}
+        ${card('broken', 'Broken (4xx/5xx)', broken.toLocaleString(), broken > 0 ? 'danger' : 'success')}
       </div>
 
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:14px 0">
-        <button id="extCheckBtn" class="btn btn-primary" style="padding:8px 14px;border-radius:6px;border:none;background:var(--primary);color:#fff;cursor:pointer;font-weight:600"${_extLinksChecking ? ' disabled' : ''}>
-          ${_extLinksChecking ? 'Checking…' : (uncheckedCount > 0 ? `Check ${uncheckedCount.toLocaleString()} unchecked` : 'Re-check all')}
-        </button>
-        ${checked > 0 ? `<button id="extRecheckBtn" class="btn btn-secondary" style="padding:8px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer"${_extLinksChecking ? ' disabled' : ''}>Force re-check all</button>` : ''}
         <input type="text" id="extFilterInput" placeholder="Filter by URL, source, or anchor…" value="${esc(_extLinksFilter)}" style="flex:1;min-width:240px;padding:8px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
         <select id="extStatusFilter" style="padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)">
           <option value=""${statusFilter === '' ? ' selected' : ''}>All statuses</option>
+          <option value="checked"${statusFilter === 'checked' ? ' selected' : ''}>Checked</option>
           <option value="ok"${statusFilter === 'ok' ? ' selected' : ''}>2xx OK</option>
           <option value="3xx"${statusFilter === '3xx' ? ' selected' : ''}>3xx Redirect</option>
           <option value="4xx"${statusFilter === '4xx' ? ' selected' : ''}>4xx Client error</option>
@@ -1519,6 +1537,7 @@ function renderExternalLinks() {
           <option value="broken"${statusFilter === 'broken' ? ' selected' : ''}>Broken (4xx/5xx/error)</option>
           <option value="unchecked"${statusFilter === 'unchecked' ? ' selected' : ''}>Unchecked</option>
         </select>
+        ${checked > 0 && !_extLinksChecking ? `<button id="extRecheckBtn" class="btn btn-secondary" style="padding:8px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Re-check all</button>` : ''}
       </div>
 
       <div id="extLinksProgress" style="display:${_extLinksChecking ? 'block' : 'none'};margin-bottom:12px"></div>
@@ -1533,7 +1552,13 @@ function renderExternalLinks() {
       </div>
     </div>`;
 
-  document.getElementById('extCheckBtn')?.addEventListener('click', () => startExternalCheck(false));
+  wrap.querySelectorAll('[data-ext-filter]').forEach(el => {
+    el.addEventListener('click', () => {
+      const key = el.dataset.extFilter;
+      _extLinksStatusFilter = (_extLinksStatusFilter === key) ? '' : key;
+      renderExternalLinks();
+    });
+  });
   document.getElementById('extRecheckBtn')?.addEventListener('click', () => startExternalCheck(true));
   document.getElementById('extFilterInput')?.addEventListener('input', (e) => {
     _extLinksFilter = e.target.value;
