@@ -1590,7 +1590,9 @@ function renderExternalLinks() {
   const items = _extLinksData.items || [];
   const total = items.length;
   const checked = items.filter(i => i.status != null).length;
-  const broken = items.filter(i => i.status != null && (i.status >= 400 || i.error)).length;
+  const c4 = items.filter(i => i.status != null && i.status >= 400 && i.status < 500).length;
+  const s5 = items.filter(i => i.status != null && i.status >= 500).length;
+  const errs = items.filter(i => i.error && i.status == null).length;
   const redirects = items.filter(i => i.status != null && i.status >= 300 && i.status < 400).length;
   const ok = items.filter(i => i.status != null && i.status >= 200 && i.status < 300).length;
 
@@ -1607,13 +1609,13 @@ function renderExternalLinks() {
     if (filterText && !(i.href.toLowerCase().includes(filterText)
         || (i.sources || []).some(s => (s.url || '').toLowerCase().includes(filterText)
                                     || (s.anchor || '').toLowerCase().includes(filterText)))) return false;
-    if (statusFilter === 'checked' && i.status == null) return false;
+    if (statusFilter === 'checked' && i.status == null && !i.error) return false;
     if (statusFilter === 'ok' && !(i.status >= 200 && i.status < 300)) return false;
     if (statusFilter === '3xx' && !(i.status >= 300 && i.status < 400)) return false;
     if (statusFilter === '4xx' && !(i.status >= 400 && i.status < 500)) return false;
     if (statusFilter === '5xx' && !(i.status >= 500)) return false;
-    if (statusFilter === 'broken' && !((i.status != null && i.status >= 400) || i.error)) return false;
-    if (statusFilter === 'unchecked' && i.status != null) return false;
+    if (statusFilter === 'err' && !(i.error && i.status == null)) return false;
+    if (statusFilter === 'unchecked' && (i.status != null || i.error)) return false;
     return true;
   });
 
@@ -1645,10 +1647,11 @@ function renderExternalLinks() {
     <div style="padding:20px">
       <div class="stats-grid">
         ${card('', 'External Links', total.toLocaleString(), 'info')}
-        ${card('checked', 'Checked', checked.toLocaleString(), checked === total ? 'success' : '')}
         ${card('ok', 'OK (2xx)', ok.toLocaleString(), 'success')}
         ${card('3xx', 'Redirects (3xx)', redirects.toLocaleString(), redirects > 0 ? 'warning' : 'success')}
-        ${card('broken', 'Broken (4xx/5xx)', broken.toLocaleString(), broken > 0 ? 'danger' : 'success')}
+        ${card('4xx', '4xx Client Error', c4.toLocaleString(), c4 > 0 ? 'danger' : 'success')}
+        ${card('5xx', '5xx Server Error', s5.toLocaleString(), s5 > 0 ? 'danger' : 'success')}
+        ${card('err', 'Conn Errors', errs.toLocaleString(), errs > 0 ? 'danger' : 'success')}
       </div>
 
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:14px 0">
@@ -1660,7 +1663,7 @@ function renderExternalLinks() {
           <option value="3xx"${statusFilter === '3xx' ? ' selected' : ''}>3xx Redirect</option>
           <option value="4xx"${statusFilter === '4xx' ? ' selected' : ''}>4xx Client error</option>
           <option value="5xx"${statusFilter === '5xx' ? ' selected' : ''}>5xx Server error</option>
-          <option value="broken"${statusFilter === 'broken' ? ' selected' : ''}>Broken (4xx/5xx/error)</option>
+          <option value="err"${statusFilter === 'err' ? ' selected' : ''}>Connection errors</option>
           <option value="unchecked"${statusFilter === 'unchecked' ? ' selected' : ''}>Unchecked</option>
         </select>
         ${checked > 0 && !_extLinksChecking ? `<button id="extRecheckBtn" class="btn btn-secondary" style="padding:8px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Re-check all</button>` : ''}
