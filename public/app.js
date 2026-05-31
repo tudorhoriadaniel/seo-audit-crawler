@@ -3274,6 +3274,26 @@ function gscCountryFilterGroup(code) {
   return [{ filters: [{ dimension: 'country', operator: 'equals', expression: code }] }];
 }
 
+// When the server says the GSC refresh token is dead (revoked, expired,
+// or the OAuth app was flipped back to Testing mode and the 7-day grace
+// ran out), show a friendly inline reconnect prompt instead of just
+// dumping the error text. Falls back to a plain error message for any
+// other failure so the user still sees something useful.
+function renderGscErrorOrReconnect(err) {
+  if (err && err.reconnect) {
+    const url = err.reconnectUrl || '/api/gsc/auth/start';
+    return `<div style="padding:18px;border:1px solid var(--warning);background:rgba(217,119,6,.08);border-radius:8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#D97706" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+      <div style="flex:1;min-width:240px">
+        <div style="font-weight:600;color:var(--text)">Google Search Console session expired</div>
+        <div style="color:var(--text-muted);font-size:13px;margin-top:2px">${escapeHtml(err.message || '')}</div>
+      </div>
+      <a href="${url}" style="padding:9px 18px;border-radius:6px;background:var(--primary);color:#fff;text-decoration:none;font-weight:600">Reconnect to Google</a>
+    </div>`;
+  }
+  return `<div style="padding:20px;color:var(--danger)">${escapeHtml((err && err.message) || 'Request failed')}</div>`;
+}
+
 async function loadGscView() {
   const container = document.getElementById('gscContent');
   container.innerHTML = '<p style="color:var(--text-muted);padding:20px">Loading…</p>';
@@ -3682,12 +3702,17 @@ async function runGscQuery() {
       body: JSON.stringify(body)
     });
     const data = await r.json();
-    if (!r.ok) throw new Error(data.error || 'Query failed');
+    if (!r.ok) {
+      const err = new Error(data.error || 'Query failed');
+      err.reconnect = !!data.reconnect;
+      err.reconnectUrl = data.reconnectUrl || '/api/gsc/auth/start';
+      throw err;
+    }
     gscState.lastResult = { rows: data.rows || [], dimensions, siteUrl, startDate, endDate };
     renderGscTotals();
     renderGscResults();
   } catch (e) {
-    results.innerHTML = `<div style="padding:20px;color:var(--danger)">${escapeHtml(e.message)}</div>`;
+    results.innerHTML = renderGscErrorOrReconnect(e);
     gscState.lastResult = null;
     document.getElementById('gscTotals').style.display = 'none';
   } finally {
@@ -4363,7 +4388,12 @@ async function runStrategyQuery() {
       body: JSON.stringify(body)
     });
     const data = await r.json();
-    if (!r.ok) throw new Error(data.error || 'Query failed');
+    if (!r.ok) {
+      const err = new Error(data.error || 'Query failed');
+      err.reconnect = !!data.reconnect;
+      err.reconnectUrl = data.reconnectUrl || '/api/gsc/auth/start';
+      throw err;
+    }
 
     // Group page+query pairs by page.
     const pageMap = new Map();
@@ -4576,7 +4606,7 @@ async function runStrategyQuery() {
       setTimeout(() => { analyseAllCoverage().catch(() => {}); }, 50);
     }
   } catch (e) {
-    document.getElementById('csTable').innerHTML = `<div style="padding:20px;color:var(--danger)">${escapeHtml(e.message)}</div>`;
+    document.getElementById('csTable').innerHTML = renderGscErrorOrReconnect(e);
     csState.rows = [];
   } finally {
     btn.disabled = false; btn.textContent = 'Find opportunities';
