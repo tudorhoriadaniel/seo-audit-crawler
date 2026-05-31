@@ -1387,13 +1387,32 @@ const GSC_STATE_KEY = 'gsc:oauth_state';
 async function getGscTokensOrError(res) {
   const tokens = db.kvGet(GSC_TOKEN_KEY);
   if (!tokens || !tokens.refresh_token) {
-    res.status(401).json({ error: 'Not connected to Google Search Console' });
+    res.status(401).json({
+      error: 'Not connected to Google Search Console',
+      reconnect: true,
+      reconnectUrl: '/api/gsc/auth/start'
+    });
     return null;
   }
   try {
     return await gsc.getValidAccessToken(tokens, (updated) => db.kvSet(GSC_TOKEN_KEY, updated));
   } catch (e) {
-    res.status(401).json({ error: 'GSC token refresh failed: ' + e.message });
+    // If Google rejected the refresh token (revoked, expired, or app in
+    // Testing mode past 7 days), the stored creds are dead — clear them
+    // so the UI can show a clean "reconnect" prompt instead of looping
+    // on a broken token. Network errors leave the tokens in place so a
+    // transient outage doesn't force re-auth.
+    if (e && e.oauthInvalid) {
+      try { db.kvDelete(GSC_TOKEN_KEY); } catch { /* ignore */ }
+      res.status(401).json({
+        error: 'Your Google Search Console session expired. Please reconnect.',
+        reconnect: true,
+        reconnectUrl: '/api/gsc/auth/start',
+        reason: 'invalid_grant'
+      });
+      return null;
+    }
+    res.status(401).json({ error: 'GSC token refresh failed: ' + e.message, reconnect: false });
     return null;
   }
 }
