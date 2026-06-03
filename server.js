@@ -368,6 +368,49 @@ app.get('/api/share/:id/analysis', (req, res) => {
 // fill statuses live. Results are cached in kv_store under
 // "external-status:<url>" so a re-open doesn't re-probe everything.
 
+// Origin-URL index for status-code exports. Scans every crawled page's <a href>
+// list and returns Map<normalised target URL, [{source, anchor, isNofollow}]>
+// so 4xx/3xx/5xx exports can include the pages that link TO each broken URL.
+// Normalisation mirrors the crawler's _dedupeKey (drop hash, strip trailing
+// slash unless root, lowercase) so trailing-slash variants still match.
+function buildOriginsIndex(pages) {
+  const norm = (u) => {
+    if (!u) return '';
+    try {
+      const x = new URL(u);
+      x.hash = '';
+      let k = x.href;
+      if (x.pathname !== '/' && k.endsWith('/')) k = k.slice(0, -1);
+      return k.toLowerCase();
+    } catch { return String(u).toLowerCase(); }
+  };
+  const idx = new Map();
+  for (const p of pages) {
+    let links = [];
+    try { links = JSON.parse(p.links || '[]'); } catch { /* malformed row */ }
+    for (const l of links) {
+      if (!l || !l.href) continue;
+      const k = norm(l.href);
+      let arr = idx.get(k);
+      if (!arr) { arr = []; idx.set(k, arr); }
+      arr.push({ source: p.url, anchor: l.anchor || '', isNofollow: !!l.isNofollow });
+    }
+  }
+  return { idx, norm };
+}
+
+function originColumnsFor(targetUrl, originsIndex, maxSources = 50) {
+  const { idx, norm } = originsIndex;
+  const sources = idx.get(norm(targetUrl)) || [];
+  const capped = sources.slice(0, maxSources);
+  return {
+    'Source Count': sources.length,
+    'Top Source Page': sources[0]?.source || '',
+    'Top Anchor': sources[0]?.anchor || '',
+    'All Source Pages': capped.map(s => s.source).join('\n') + (sources.length > maxSources ? `\n…and ${sources.length - maxSources} more` : '')
+  };
+}
+
 function collectExternalLinks(crawlId) {
   const pages = db.getCrawlPages(crawlId);
   if (!pages.length) return null;
@@ -1017,7 +1060,14 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       break;
     }
     case 'redirects':
-      data = (analysis.redirectChains?.chains || []).map(r => ({ 'Original URL': r.originalUrl, 'Final URL': r.finalUrl, Hops: r.hops, Chain: (r.chain || []).map(c => `${c.statusCode}: ${c.url}`).join(' → ') }));
+      const _redOriginsIdx = buildOriginsIndex(pages);
+      data = (analysis.redirectChains?.chains || []).map(r => ({
+        'Original URL': r.originalUrl,
+        'Final URL': r.finalUrl,
+        Hops: r.hops,
+        Chain: (r.chain || []).map(c => `${c.statusCode}: ${c.url}`).join(' → '),
+        ...originColumnsFor(r.originalUrl, _redOriginsIdx)
+      }));
       sheetName = 'Redirects';
       break;
     case 'statuscodes': {
@@ -1028,7 +1078,17 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       else if (scFilter === '4xx') scPages = mapped.filter(p => p.statusCode >= 400 && p.statusCode < 500);
       else if (scFilter === '5xx') scPages = mapped.filter(p => p.statusCode >= 500);
       else if (scFilter === 'error') scPages = mapped.filter(p => p.error);
-      data = scPages.map(p => ({ URL: p.url, Status: p.statusCode, 'Final URL': p.finalUrl || '' }));
+      // For non-2xx exports, attach the pages that link TO each broken URL so
+      // the user can see WHERE each 3xx/4xx/5xx was discovered, not just that
+      // it exists. Skipping for 2xx keeps the success export light.
+      const wantOrigins = scFilter === '3xx' || scFilter === '4xx' || scFilter === '5xx' || scFilter === 'error';
+      const originsIdx = wantOrigins ? buildOriginsIndex(pages) : null;
+      data = scPages.map(p => ({
+        URL: p.url,
+        Status: p.statusCode,
+        'Final URL': p.finalUrl || '',
+        ...(originsIdx ? originColumnsFor(p.url, originsIdx) : {})
+      }));
       sheetName = scFilter === 'all' ? 'Status Codes' : scFilter.toUpperCase() + ' Status Codes';
       break;
     }
@@ -1186,10 +1246,11 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
         { Category: 'Warnings', Value: (analysis.issues || []).filter(i => i.severity === 'warning').length },
       ], 'Summary');
 
-      // 4xx Errors
-      if (sc.groups?.['4xx']?.urls?.length > 0) addSheet(wb2, sc.groups['4xx'].urls.map(u => ({ URL: u.url, Status: u.statusCode })), '4xx Errors');
-      // 3xx Redirects
-      if (sc.groups?.['3xx']?.urls?.length > 0) addSheet(wb2, sc.groups['3xx'].urls.map(u => ({ URL: u.url, Status: u.statusCode, 'Redirects To': u.finalUrl || '' })), '3xx Redirects');
+      // 4xx Errors — with origin pages (which crawled pages link to each 4xx)
+      const _summOrigins = buildOriginsIndex(pages);
+      if (sc.groups?.['4xx']?.urls?.length > 0) addSheet(wb2, sc.groups['4xx'].urls.map(u => ({ URL: u.url, Status: u.statusCode, ...originColumnsFor(u.url, _summOrigins) })), '4xx Errors');
+      // 3xx Redirects — with origin pages
+      if (sc.groups?.['3xx']?.urls?.length > 0) addSheet(wb2, sc.groups['3xx'].urls.map(u => ({ URL: u.url, Status: u.statusCode, 'Redirects To': u.finalUrl || '', ...originColumnsFor(u.url, _summOrigins) })), '3xx Redirects');
       // Missing Titles
       if (mt.missing?.length > 0) addSheet(wb2, mt.missing.map(p => ({ URL: p.url })), 'Missing Titles');
       // Too Short Titles
@@ -1232,7 +1293,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       const rdc = analysis.redirectChains?.chains || [];
       if (rdc.length > 0) addSheet(wb2, rdc.map(r => ({ 'Original URL': r.originalUrl, 'Final URL': r.finalUrl, Hops: r.hops })), 'Redirect Chains');
       // 5xx Errors
-      if (sc.groups?.['5xx']?.urls?.length > 0) addSheet(wb2, sc.groups['5xx'].urls.map(u => ({ URL: u.url, Status: u.statusCode })), '5xx Errors');
+      if (sc.groups?.['5xx']?.urls?.length > 0) addSheet(wb2, sc.groups['5xx'].urls.map(u => ({ URL: u.url, Status: u.statusCode, ...originColumnsFor(u.url, _summOrigins) })), '5xx Errors');
       // Orphan Pages
       if (_lnk.orphanPages?.length > 0) addSheet(wb2, _lnk.orphanPages.map(u => ({ URL: u })), 'Orphan Pages');
       // Empty Anchor Links
