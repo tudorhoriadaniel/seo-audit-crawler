@@ -399,15 +399,12 @@ function buildOriginsIndex(pages) {
   return { idx, norm };
 }
 
-function originColumnsFor(targetUrl, originsIndex, maxSources = 50) {
+function originColumnsFor(targetUrl, originsIndex, maxSources = 200) {
   const { idx, norm } = originsIndex;
   const sources = idx.get(norm(targetUrl)) || [];
   const capped = sources.slice(0, maxSources);
   return {
-    'Source Count': sources.length,
-    'Top Source Page': sources[0]?.source || '',
-    'Top Anchor': sources[0]?.anchor || '',
-    'All Source Pages': capped.map(s => s.source).join('\n') + (sources.length > maxSources ? `\n…and ${sources.length - maxSources} more` : '')
+    'Source URLs': capped.map(s => s.source).join('\n') + (sources.length > maxSources ? `\n…and ${sources.length - maxSources} more` : '')
   };
 }
 
@@ -1062,10 +1059,8 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
     case 'redirects':
       const _redOriginsIdx = buildOriginsIndex(pages);
       data = (analysis.redirectChains?.chains || []).map(r => ({
-        'Original URL': r.originalUrl,
-        'Final URL': r.finalUrl,
-        Hops: r.hops,
-        Chain: (r.chain || []).map(c => `${c.statusCode}: ${c.url}`).join(' → '),
+        URL: r.originalUrl,
+        Status: r.chain?.[0]?.statusCode || '',
         ...originColumnsFor(r.originalUrl, _redOriginsIdx)
       }));
       sheetName = 'Redirects';
@@ -1083,12 +1078,10 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       // it exists. Skipping for 2xx keeps the success export light.
       const wantOrigins = scFilter === '3xx' || scFilter === '4xx' || scFilter === '5xx' || scFilter === 'error';
       const originsIdx = wantOrigins ? buildOriginsIndex(pages) : null;
-      data = scPages.map(p => ({
-        URL: p.url,
-        Status: p.statusCode,
-        'Final URL': p.finalUrl || '',
-        ...(originsIdx ? originColumnsFor(p.url, originsIdx) : {})
-      }));
+      data = scPages.map(p => (originsIdx
+        ? { URL: p.url, Status: p.statusCode, ...originColumnsFor(p.url, originsIdx) }
+        : { URL: p.url, Status: p.statusCode, 'Final URL': p.finalUrl || '' }
+      ));
       sheetName = scFilter === 'all' ? 'Status Codes' : scFilter.toUpperCase() + ' Status Codes';
       break;
     }
@@ -1250,7 +1243,8 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       const _summOrigins = buildOriginsIndex(pages);
       if (sc.groups?.['4xx']?.urls?.length > 0) addSheet(wb2, sc.groups['4xx'].urls.map(u => ({ URL: u.url, Status: u.statusCode, ...originColumnsFor(u.url, _summOrigins) })), '4xx Errors');
       // 3xx Redirects — with origin pages
-      if (sc.groups?.['3xx']?.urls?.length > 0) addSheet(wb2, sc.groups['3xx'].urls.map(u => ({ URL: u.url, Status: u.statusCode, 'Redirects To': u.finalUrl || '', ...originColumnsFor(u.url, _summOrigins) })), '3xx Redirects');
+      // 3xx Redirects — URL, Status, Source URLs (3 columns)
+      if (sc.groups?.['3xx']?.urls?.length > 0) addSheet(wb2, sc.groups['3xx'].urls.map(u => ({ URL: u.url, Status: u.statusCode, ...originColumnsFor(u.url, _summOrigins) })), '3xx Redirects');
       // Missing Titles
       if (mt.missing?.length > 0) addSheet(wb2, mt.missing.map(p => ({ URL: p.url })), 'Missing Titles');
       // Too Short Titles
