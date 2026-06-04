@@ -159,6 +159,66 @@ function mapPagesForAnalysis(pages) {
   }));
 }
 
+// Build the analysis for a crawl's stored pages and return { analysis,
+// issueMetrics, statsWithExtra }. Shared by natural completion and the Stop
+// (abort) path so a stopped crawl produces exactly the same report as a
+// finished one. Pure compute — caller decides what to persist / emit.
+function buildCrawlAnalysis(crawlId, summary) {
+  const pages = db.getCrawlPages(crawlId);
+  const resultsForAnalysis = mapPagesForAnalysis(pages);
+  const analyzer = new Analyzer(resultsForAnalysis, {
+    robotsTxt: summary.robotsTxt,
+    sitemapData: summary.sitemapData
+  });
+  const analysis = analyzer.analyze();
+
+  const mt = analysis.metaTitlesReport || {};
+  const md = analysis.metaDescriptionsReport || {};
+  const hr = analysis.hreflangReport || {};
+  const cr = analysis.canonicalReport || {};
+  const ia = analysis.imageAnalysis || {};
+  const issues = analysis.issues || [];
+  const issueMetrics = {
+    missingTitles: mt.missing?.length || 0,
+    duplicateTitles: mt.duplicates?.length || 0,
+    missingDescriptions: md.missing?.length || 0,
+    duplicateDescriptions: md.duplicates?.length || 0,
+    hreflangIssues: hr.totalReturnLinkIssues || 0,
+    missingCanonicals: cr.missing || 0,
+    imagesWithAltIssues: ia.uniqueIssueImages || 0,
+    criticalIssues: issues.filter(i => i.severity === 'critical').length,
+    warnings: issues.filter(i => i.severity === 'warning').length
+  };
+  const statsWithExtra = {
+    ...summary.stats,
+    ...issueMetrics,
+    robotsTxt: summary.robotsTxt || null,
+    sitemapData: summary.sitemapData || null
+  };
+  return { analysis, issueMetrics, statsWithExtra };
+}
+
+// Finalize a crawl: compute the analysis once, persist it + the stats so we
+// never recompute on reload (the recompute was timing out for 10k+ page
+// crawls), then emit `complete` so any connected client renders immediately.
+// `status` is 'completed' for a natural finish or 'aborted' when stopped.
+// Runs heavy work on the next tick so an HTTP handler that triggered it (the
+// abort route) can return immediately instead of blocking on the analyzer.
+function finalizeCrawl(crawlId, summary, status) {
+  activeCrawls.delete(crawlId);
+  setImmediate(() => {
+    try {
+      const { analysis, issueMetrics, statsWithExtra } = buildCrawlAnalysis(crawlId, summary);
+      db.updateCrawlStatus(crawlId, status === 'aborted' ? 'completed' : status, statsWithExtra);
+      db.saveAnalysis(crawlId, analysis);
+      io.to(crawlId).emit('complete', { stats: { ...summary.stats, ...issueMetrics }, analysis, stopped: status === 'aborted' });
+    } catch (e) {
+      console.error('finalizeCrawl failed:', e);
+      io.to(crawlId).emit('error', { message: 'Failed to build report: ' + e.message });
+    }
+  });
+}
+
 // ── API Routes ──
 
 // List crawls
@@ -247,47 +307,7 @@ app.post('/api/crawls', (req, res) => {
   };
 
   crawler.onComplete = (summary) => {
-    activeCrawls.delete(crawlId);
-
-    // Run analysis
-    const pages = db.getCrawlPages(crawlId);
-    const resultsForAnalysis = mapPagesForAnalysis(pages);
-
-    const analyzer = new Analyzer(resultsForAnalysis, {
-      robotsTxt: summary.robotsTxt,
-      sitemapData: summary.sitemapData
-    });
-    const analysis = analyzer.analyze();
-
-    // Extract issue metrics from analysis to store alongside crawler stats
-    const mt = analysis.metaTitlesReport || {};
-    const md = analysis.metaDescriptionsReport || {};
-    const hr = analysis.hreflangReport || {};
-    const cr = analysis.canonicalReport || {};
-    const ia = analysis.imageAnalysis || {};
-    const issues = analysis.issues || [];
-    const issueMetrics = {
-      missingTitles: mt.missing?.length || 0,
-      duplicateTitles: mt.duplicates?.length || 0,
-      missingDescriptions: md.missing?.length || 0,
-      duplicateDescriptions: md.duplicates?.length || 0,
-      hreflangIssues: hr.totalReturnLinkIssues || 0,
-      missingCanonicals: cr.missing || 0,
-      imagesWithAltIssues: ia.uniqueIssueImages || 0,
-      criticalIssues: issues.filter(i => i.severity === 'critical').length,
-      warnings: issues.filter(i => i.severity === 'warning').length
-    };
-
-    // Store robotsTxt, sitemapData, and issue metrics in stats for history comparison
-    const statsWithExtra = {
-      ...summary.stats,
-      ...issueMetrics,
-      robotsTxt: summary.robotsTxt || null,
-      sitemapData: summary.sitemapData || null
-    };
-    db.updateCrawlStatus(crawlId, 'completed', statsWithExtra);
-
-    io.to(crawlId).emit('complete', { stats: { ...summary.stats, ...issueMetrics }, analysis });
+    finalizeCrawl(crawlId, summary, 'completed');
   };
 
   activeCrawls.set(crawlId, crawler);
@@ -319,8 +339,15 @@ app.get('/api/crawls/:id/pages', (req, res) => {
   res.json(pages);
 });
 
-// Get crawl analysis
+// Get crawl analysis. Served from the cached blob written by finalizeCrawl
+// when available (instant — no recompute), so reloading a 10k+ page report no
+// longer re-runs the whole analyzer on every request and times out. Falls back
+// to computing on demand for older crawls that predate the cache (and back-
+// fills the cache so the next load is instant too).
 app.get('/api/crawls/:id/analysis', (req, res) => {
+  const cached = db.getAnalysis(req.params.id);
+  if (cached) return res.json(cached);
+
   const pages = db.getCrawlPages(req.params.id);
   if (pages.length === 0) return res.status(404).json({ error: 'No pages found' });
 
@@ -328,7 +355,9 @@ app.get('/api/crawls/:id/analysis', (req, res) => {
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
   const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
-  res.json(analyzer.analyze());
+  const analysis = analyzer.analyze();
+  try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal back-fill */ }
+  res.json(analysis);
 });
 
 // ── Public share endpoints ──────────────────────────────────────────────
@@ -352,13 +381,17 @@ app.get('/api/share/:id/pages', (req, res) => {
   res.json(pages);
 });
 app.get('/api/share/:id/analysis', (req, res) => {
+  const cached = db.getAnalysis(req.params.id);
+  if (cached) return res.json(cached);
   const pages = db.getCrawlPages(req.params.id);
   if (pages.length === 0) return res.status(404).json({ error: 'No pages found' });
   const crawl = db.getCrawl(req.params.id);
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
   const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
-  res.json(analyzer.analyze());
+  const analysis = analyzer.analyze();
+  try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal */ }
+  res.json(analysis);
 });
 
 // ── External links + status-code checker ──────────────────────────────
@@ -1393,10 +1426,15 @@ app.post('/api/crawls/:id/resume', (req, res) => {
 app.post('/api/crawls/:id/abort', (req, res) => {
   const crawler = activeCrawls.get(req.params.id);
   if (!crawler) return res.status(404).json({ error: 'Crawl not active' });
+  // Signal abort and return immediately. The crawler's _processQueue loop
+  // exits on the aborted flag, then start() fires onComplete → finalizeCrawl,
+  // which builds the report from everything crawled so far, persists it, and
+  // emits `complete` to the client. We don't block this HTTP response on that
+  // work (it can take a while for big crawls) — the client waits for the
+  // socket event. Mark the row as finishing so a reload mid-drain is sane.
   crawler.abort();
-  db.updateCrawlStatus(req.params.id, 'aborted', crawler.stats);
-  activeCrawls.delete(req.params.id);
-  res.json({ status: 'aborted' });
+  try { db.updateCrawlStatus(req.params.id, 'finishing', crawler.stats); } catch { /* non-fatal */ }
+  res.status(202).json({ status: 'finishing', message: 'Building report from crawled pages…' });
 });
 
 // Delete crawl
