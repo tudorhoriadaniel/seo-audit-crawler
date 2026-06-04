@@ -206,6 +206,11 @@ function buildCrawlAnalysis(crawlId, summary) {
 // abort route) can return immediately instead of blocking on the analyzer.
 function finalizeCrawl(crawlId, summary, status) {
   activeCrawls.delete(crawlId);
+  // Tell any connected client the crawl phase is over and we're now building
+  // the report — covers BOTH the Stop button and a natural finish (e.g.
+  // hitting maxPages), so the UI stops saying "Crawling…" the moment the last
+  // page lands instead of looking frozen while the analyzer runs.
+  io.to(crawlId).emit('building', { stats: summary.stats });
   setImmediate(() => {
     try {
       const { analysis, issueMetrics, statsWithExtra } = buildCrawlAnalysis(crawlId, summary);
