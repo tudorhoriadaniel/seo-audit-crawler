@@ -260,6 +260,22 @@ socket.on('page', (page) => {
   }
 });
 
+// Crawl phase finished (Stop, or naturally hitting maxPages) — server is now
+// building the report. Switch the UI out of "Crawling…" so it doesn't look
+// frozen while the analyzer runs; `complete` follows when it's ready.
+socket.on('building', () => {
+  $('#stopCrawl').disabled = true;
+  $('#pauseCrawl').classList.add('hidden');
+  $('#resumeCrawl').classList.add('hidden');
+  $('#progressText').textContent = 'Building report from crawled pages…';
+  const fill = $('#progressFill');
+  if (fill) fill.classList.add('indeterminate');
+  const body = $('#dashboardContent');
+  if (body && /Crawling in progress/i.test(body.innerHTML)) {
+    body.innerHTML = '<p style="color:var(--text-muted)">Building report from crawled pages… this can take a moment for large crawls.</p>';
+  }
+});
+
 socket.on('complete', (data) => {
   resetCrawlUI();
   analysisData = data.analysis;
