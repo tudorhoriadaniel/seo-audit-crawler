@@ -276,33 +276,23 @@ socket.on('building', () => {
   }
 });
 
-socket.on('complete', (data) => {
+socket.on('complete', async (data) => {
   resetCrawlUI();
-  analysisData = data.analysis;
-  renderDashboard(data.stats, data.analysis);
-  loadPages();
-  renderHreflang(data.analysis);
-  renderCanonicals(data.analysis);
-  renderConflicts(data.analysis);
-  renderRedirects(data.analysis);
-  renderContent(data.analysis);
-  renderImages(data.analysis);
-  renderStructuredData(data.analysis);
-  renderSecurity(data.analysis);
-  renderLinks(data.analysis);
-  renderAiBots(data.analysis);
-  renderSearchEngines(data.analysis);
-  renderSitemaps(data.analysis);
-  renderStatusCodes(data.analysis);
-  renderAnchors(data.analysis);
-  renderMetaTitles(data.analysis);
-  renderMetaDescriptions(data.analysis);
-  renderHeadings(data.analysis);
-  renderDirectives(data.analysis);
-  renderSummary(data.analysis);
-
+  // The analysis is no longer sent over the socket (it can be tens of MB and
+  // socket.io drops messages >1 MB). Fetch the persisted report over HTTP —
+  // it's served instantly from the server-side cache and gzipped. Reuse
+  // loadCrawl() so the render sequence stays in one place.
+  const id = currentCrawlId;
+  if (!id) return;
+  try {
+    await window.loadCrawl(id);
+  } catch (e) {
+    const body = $('#dashboardContent');
+    if (body) body.innerHTML = '<p style="color:var(--danger)">Report built but failed to load: ' + esc(e.message) + '. Try reloading the page.</p>';
+    return;
+  }
   // Load project history if save is enabled
-  if ($('#optSaveProject').checked) {
+  if ($('#optSaveProject') && $('#optSaveProject').checked) {
     loadProjectHistory();
   }
 });

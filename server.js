@@ -22,7 +22,11 @@ const anthropicClient = process.env.ANTHROPIC_API_KEY
 
 const app = express();
 const server = http.createServer(app);
-const io = new SocketIO(server, { cors: { origin: '*' } });
+// maxHttpBufferSize: socket.io silently drops any single message larger than
+// this (default 1 MB). We no longer send the (multi-MB) analysis over the
+// socket — it goes via HTTP — but bump the cap to 10 MB so live page/progress
+// events always have generous headroom and never get dropped silently.
+const io = new SocketIO(server, { cors: { origin: '*' }, maxHttpBufferSize: 1e7 });
 
 const db = new CrawlDatabase();
 
@@ -216,7 +220,13 @@ function finalizeCrawl(crawlId, summary, status) {
       const { analysis, issueMetrics, statsWithExtra } = buildCrawlAnalysis(crawlId, summary);
       db.updateCrawlStatus(crawlId, status === 'aborted' ? 'completed' : status, statsWithExtra);
       db.saveAnalysis(crawlId, analysis);
-      io.to(crawlId).emit('complete', { stats: { ...summary.stats, ...issueMetrics }, analysis, stopped: status === 'aborted' });
+      // Emit only a small signal — NOT the analysis itself. The analysis can be
+      // tens of MB on large crawls, and socket.io silently drops any single
+      // message over its 1 MB maxHttpBufferSize default (which is why
+      // `complete` appeared to "do nothing" on big sites). The client fetches
+      // the full report over HTTP (/analysis), which is gzipped, uncapped, and
+      // served instantly from the cache we just persisted.
+      io.to(crawlId).emit('complete', { stats: { ...summary.stats, ...issueMetrics }, stopped: status === 'aborted' });
     } catch (e) {
       console.error('finalizeCrawl failed:', e);
       io.to(crawlId).emit('error', { message: 'Failed to build report: ' + e.message });
