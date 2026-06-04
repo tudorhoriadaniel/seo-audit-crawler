@@ -1,6 +1,14 @@
 /* global io */
 const socket = io();
 
+// Re-join the active crawl's room after any (re)connect. A large crawl's
+// post-Stop report build can take longer than a transient socket drop, and
+// without rejoining we'd miss the `complete` event and the report would never
+// render. currentCrawlId is read lazily so this stays correct across crawls.
+socket.on('connect', () => {
+  if (currentCrawlId) socket.emit('join', currentCrawlId);
+});
+
 // ── Theme ──
 (function initTheme() {
   const saved = localStorage.getItem('seo-theme') || 'light';
@@ -179,8 +187,20 @@ async function startCrawl() {
 // Stop / Pause / Resume
 $('#stopCrawl').addEventListener('click', async () => {
   if (!currentCrawlId) return;
-  await fetch(`/api/crawls/${currentCrawlId}/abort`, { method: 'POST' });
-  resetCrawlUI();
+  // Don't tear the UI down — the server finishes the in-flight pages, builds
+  // the report from everything crawled so far, and emits `complete` (handled
+  // below) which renders the full dashboard. Show a building state meanwhile
+  // so large crawls don't look frozen.
+  $('#stopCrawl').disabled = true;
+  $('#pauseCrawl').classList.add('hidden');
+  $('#progressText').textContent = 'Building report from crawled pages…';
+  const fill = $('#progressFill');
+  if (fill) fill.classList.add('indeterminate');
+  try {
+    await fetch(`/api/crawls/${currentCrawlId}/abort`, { method: 'POST' });
+  } catch {
+    $('#stopCrawl').disabled = false;
+  }
 });
 
 $('#pauseCrawl').addEventListener('click', async () => {
@@ -202,10 +222,13 @@ $('#resumeCrawl').addEventListener('click', async () => {
 function resetCrawlUI() {
   $('#startCrawl').classList.remove('hidden');
   $('#stopCrawl').classList.add('hidden');
+  $('#stopCrawl').disabled = false;
   $('#pauseCrawl').classList.add('hidden');
   $('#resumeCrawl').classList.add('hidden');
   $('#progressContainer').classList.add('hidden');
   $('#liveFeed').classList.add('hidden');
+  const fill = $('#progressFill');
+  if (fill) fill.classList.remove('indeterminate');
 }
 
 // ── Socket events ──

@@ -255,6 +255,19 @@ body {
   transition: width .3s;
   width: 0%;
 }
+/* Shown while the server is building the report after Stop — the page count
+   is final but analysis is still running, so animate instead of sitting at a
+   fixed width. */
+.progress-fill.indeterminate {
+  width: 100% !important;
+  background: linear-gradient(90deg, var(--primary) 0%, var(--primary-hover) 50%, var(--primary) 100%);
+  background-size: 200% 100%;
+  animation: progress-indeterminate 1.2s linear infinite;
+}
+@keyframes progress-indeterminate {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 
 /* Views */
 .views-container { flex: 1; padding: 24px; overflow-y: auto; }
