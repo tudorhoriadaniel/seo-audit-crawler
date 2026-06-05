@@ -100,6 +100,79 @@ $('#urlInput').addEventListener('change', () => {
 $('#startCrawl').addEventListener('click', startCrawl);
 $('#urlInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') startCrawl(); });
 
+// ── Mode toggle: Spider vs List ──
+// Spider (default) = type one URL, crawler discovers from it.
+// List = paste/upload a URL list, crawl exactly those URLs (no discovery),
+// mirroring Screaming Frog's List mode.
+let _crawlMode = 'spider';
+let _listUrls = [];
+
+function updateListCount() {
+  const el = $('#urlListCount');
+  if (el) el.textContent = _listUrls.length === 1 ? '1 URL' : (_listUrls.length.toLocaleString() + ' URLs');
+}
+
+function parseTextareaUrls() {
+  const raw = ($('#urlListTextarea').value || '').split(/\r?\n/);
+  _listUrls = raw.map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+  updateListCount();
+}
+
+$$('#modeToggle .mode-pill').forEach(pill => {
+  pill.addEventListener('click', () => {
+    const mode = pill.dataset.mode;
+    if (mode === _crawlMode) return;
+    _crawlMode = mode;
+    $$('#modeToggle .mode-pill').forEach(p => {
+      const active = p.dataset.mode === mode;
+      p.classList.toggle('active', active);
+      p.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    if (mode === 'list') {
+      $('#urlInput').classList.add('hidden');
+      $('#urlListInput').classList.remove('hidden');
+      parseTextareaUrls();
+    } else {
+      $('#urlInput').classList.remove('hidden');
+      $('#urlListInput').classList.add('hidden');
+    }
+  });
+});
+
+const _urlListTa = $('#urlListTextarea');
+if (_urlListTa) _urlListTa.addEventListener('input', parseTextareaUrls);
+
+const _urlListFile = $('#urlListFile');
+if (_urlListFile) _urlListFile.addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const name = file.name.toLowerCase();
+  const type = name.endsWith('.xlsx') || name.endsWith('.xls') ? 'xlsx'
+             : name.endsWith('.csv') ? 'csv' : 'txt';
+  const countEl = $('#urlListCount');
+  if (countEl) countEl.textContent = 'Parsing…';
+  try {
+    const buf = await file.arrayBuffer();
+    const res = await fetch('/api/parse-url-list?type=' + type, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: buf
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    _listUrls = data.urls || [];
+    // Show parsed URLs in the textarea so the user can review/edit before
+    // starting the crawl.
+    $('#urlListTextarea').value = _listUrls.join('\n');
+    updateListCount();
+  } catch (err) {
+    alert('Could not parse file: ' + err.message);
+    if (countEl) countEl.textContent = '0 URLs';
+  }
+  // Reset the input so re-selecting the same file fires `change` again.
+  e.target.value = '';
+});
+
 function renderAll(analysis) {
   renderDashboard(analysis);
   renderAllPages(pagesData);
@@ -126,12 +199,17 @@ function renderAll(analysis) {
 }
 
 async function startCrawl() {
+  // List mode: use the parsed URL list; Spider mode: single URL from the input.
+  if (_crawlMode === 'list') parseTextareaUrls();
   const url = $('#urlInput').value.trim();
-  if (!url) return;
+  if (_crawlMode === 'list') {
+    if (_listUrls.length === 0) return alert('Paste or upload at least one URL.');
+  } else {
+    if (!url) return;
+  }
 
   const saveProject = $('#optSaveProject').checked;
   const body = {
-    url,
     maxPages: parseInt($('#optMaxPages').value) || 500,
     maxDepth: parseInt($('#optMaxDepth').value) || 10,
     concurrency: parseInt($('#optConcurrency').value) || 5,
@@ -139,10 +217,13 @@ async function startCrawl() {
     userAgent: $('#optUserAgent').value || undefined,
     saveProject
   };
+  if (_crawlMode === 'list') body.urls = _listUrls;
+  else body.url = url;
 
-  // Persist save preference per domain
+  // Persist save preference per domain (use first URL for list mode).
   try {
-    const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+    const seed = _crawlMode === 'list' ? _listUrls[0] : url;
+    const u = new URL(seed.startsWith('http') ? seed : 'https://' + seed);
     localStorage.setItem('seo-save-' + u.hostname, saveProject ? '1' : '0');
   } catch { /* ignore */ }
 
