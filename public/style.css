@@ -134,12 +134,14 @@ body {
 
 /* Topbar */
 .topbar {
-  height: var(--topbar-h);
+  /* min-height so the bar grows when List mode renders a multi-row input
+     area; without this the textarea + upload row overflowed past the bar. */
+  min-height: var(--topbar-h);
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  padding: 0 24px;
+  padding: 10px 24px;
   gap: 12px;
   position: sticky;
   top: 0;
@@ -210,16 +212,23 @@ body {
 }
 
 /* URL-list input (paste / upload). Replaces the single URL input when List
-   mode is active. Flexes to fill the bar so the textarea is roomy. */
+   mode is active. Capped width so it doesn't blow past the topbar on wide
+   screens; min-width:0 lets it shrink below content size inside the flex row;
+   flex-basis 320 keeps it usable on medium screens before wrapping. */
 .url-list-input {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  flex: 1;
-  min-width: 280px;
+  flex: 1 1 320px;
+  min-width: 0;
+  max-width: 500px;
 }
 .url-list-input textarea {
+  /* box-sizing so the 10/12 px padding doesn't push the element past its
+     container width (was the main cause of the off-screen overflow). */
+  box-sizing: border-box;
   width: 100%;
+  max-width: 100%;
   padding: 10px 12px;
   background: var(--bg-input);
   border: 1px solid var(--border);
@@ -234,6 +243,7 @@ body {
 .url-list-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
 }
 .url-list-upload {
@@ -768,12 +778,20 @@ a.url-cell:hover { text-decoration: underline; }
 /* duplicate table rules removed — originals above */
 
 /* Responsive */
+@media (max-width: 1100px) {
+  /* Medium screens: let the List-mode input area take its own row instead of
+     squeezing alongside the pills + action buttons (which made the textarea
+     overflow past the bar). */
+  .url-list-input { flex-basis: 100%; max-width: 100%; order: 10; }
+}
 @media (max-width: 768px) {
   .sidebar { transform: translateX(-100%); }
   .sidebar.open { transform: translateX(0); }
   .menu-toggle { display: block; }
   .main-content { margin-left: 0; }
-  .crawl-input-bar input[type="url"] { max-width: 250px; }
+  .crawl-input-bar input[type="url"] { max-width: 100%; flex-basis: 100%; }
+  .crawl-input-bar .btn { padding: 8px 14px; font-size: 13px; }
+  .mode-pill { padding: 6px 12px; font-size: 12px; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
