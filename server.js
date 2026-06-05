@@ -267,15 +267,21 @@ app.post('/api/import-project', express.json({ limit: '200mb' }), (req, res) => 
   }
 });
 
-// Start a new crawl
+// Start a new crawl. Two modes:
+//   1. Spider (default): seed with `url`, crawl everything reachable.
+//   2. List: client sends `urls` (array). We crawl ONLY those URLs, no
+//      discovery — matches Screaming Frog's List mode. The first URL's host
+//      becomes the project domain so history/saved-projects still group sanely.
 app.post('/api/crawls', (req, res) => {
-  const { url, maxPages, maxDepth, concurrency, respectRobots, userAgent, saveProject } = req.body;
+  const { url, urls, maxPages, maxDepth, concurrency, respectRobots, userAgent, saveProject } = req.body;
 
-  if (!url) return res.status(400).json({ error: 'URL is required' });
+  const listMode = Array.isArray(urls) && urls.length > 0;
+  if (!listMode && !url) return res.status(400).json({ error: 'URL is required' });
 
   let parsedUrl;
   try {
-    parsedUrl = new URL(url.startsWith('http') ? url : `https://${url}`);
+    const seed = listMode ? urls[0] : url;
+    parsedUrl = new URL(String(seed).startsWith('http') ? seed : `https://${seed}`);
   } catch {
     return res.status(400).json({ error: 'Invalid URL' });
   }
@@ -287,7 +293,9 @@ app.post('/api/crawls', (req, res) => {
     maxDepth: Math.min(parseInt(maxDepth) || 10, 50),
     concurrency: Math.min(parseInt(concurrency) || 5, 20),
     respectRobots: respectRobots !== false,
-    userAgent: userAgent || undefined
+    userAgent: userAgent || undefined,
+    listMode,
+    listSize: listMode ? urls.length : 0
   };
 
   const saved = saveProject ? 1 : 0;
@@ -327,14 +335,78 @@ app.post('/api/crawls', (req, res) => {
 
   activeCrawls.set(crawlId, crawler);
 
-  // Start crawl async
-  crawler.start(parsedUrl.href).catch(err => {
+  // Start crawl async. Pick the entrypoint based on mode.
+  const starter = listMode ? crawler.startList(urls) : crawler.start(parsedUrl.href);
+  starter.catch(err => {
     db.updateCrawlStatus(crawlId, 'error', { error: err.message });
     io.to(crawlId).emit('error', { message: err.message });
     activeCrawls.delete(crawlId);
   });
 
-  res.json({ id: crawlId, url: parsedUrl.href, domain, saved, status: 'running' });
+  res.json({ id: crawlId, url: parsedUrl.href, domain, saved, status: 'running', mode: listMode ? 'list' : 'spider', listSize: config.listSize });
+});
+
+// Parse an uploaded .xlsx / .csv / .txt file and return the URL list. Used by
+// the URL-list mode UI so the client doesn't have to bundle xlsx parsing.
+// Accepts the file as raw body (Content-Type: application/octet-stream) plus
+// a `?type=xlsx|csv|txt` hint; returns { urls: string[], total: number }.
+app.post('/api/parse-url-list', express.raw({ type: '*/*', limit: '20mb' }), (req, res) => {
+  try {
+    const buf = req.body;
+    const type = String(req.query.type || '').toLowerCase();
+    if (!buf || !buf.length) return res.status(400).json({ error: 'No file body' });
+
+    let urls = [];
+    if (type === 'xlsx' || type === 'xls') {
+      const XLSX = require('xlsx');
+      const wb = XLSX.read(buf, { type: 'buffer' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      if (!sheet) return res.status(400).json({ error: 'Empty workbook' });
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+      // Find the column index: prefer a header named url/URL/Url, else col 0.
+      let colIdx = 0;
+      if (rows[0] && Array.isArray(rows[0])) {
+        const header = rows[0].map(c => String(c).trim().toLowerCase());
+        const found = header.findIndex(h => h === 'url' || h === 'urls' || h === 'address');
+        if (found >= 0) {
+          colIdx = found;
+          rows.shift(); // drop header row
+        }
+      }
+      for (const row of rows) {
+        const cell = row[colIdx];
+        if (cell) urls.push(String(cell).trim());
+      }
+    } else {
+      // csv / txt: parse as text. CSV gets the first column (split on , ; or \t)
+      // unless the first line has a `url` header.
+      const text = buf.toString('utf8');
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      if (type === 'csv' && lines.length > 0) {
+        const splitRow = (l) => l.split(/[,;\t]/);
+        const header = splitRow(lines[0]).map(c => c.trim().toLowerCase());
+        const urlIdx = header.findIndex(h => h === 'url' || h === 'urls' || h === 'address');
+        if (urlIdx >= 0) {
+          for (let i = 1; i < lines.length; i++) {
+            const parts = splitRow(lines[i]);
+            if (parts[urlIdx]) urls.push(parts[urlIdx].trim().replace(/^["']|["']$/g, ''));
+          }
+        } else {
+          for (const l of lines) {
+            const first = splitRow(l)[0];
+            if (first) urls.push(first.trim().replace(/^["']|["']$/g, ''));
+          }
+        }
+      } else {
+        urls = lines;
+      }
+    }
+    // Filter to plausible URLs (drop empty + obviously non-URL rows like "N/A").
+    const clean = urls.filter(u => /\S/.test(u) && /^(https?:\/\/|\/\/|[a-z0-9-]+\.[a-z]{2,})/i.test(u));
+    res.json({ urls: clean, total: clean.length, skipped: urls.length - clean.length });
+  } catch (e) {
+    res.status(400).json({ error: 'Failed to parse file: ' + e.message });
+  }
 });
 
 // Get crawl details

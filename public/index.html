@@ -124,7 +124,19 @@
     <div class="topbar">
       <button class="menu-toggle" id="menuToggle">☰</button>
       <div class="crawl-input-bar" id="crawlBar">
+        <div class="mode-toggle" id="modeToggle" role="tablist" aria-label="Crawl mode">
+          <button type="button" class="mode-pill active" data-mode="spider" role="tab" aria-selected="true">Spider</button>
+          <button type="button" class="mode-pill" data-mode="list" role="tab" aria-selected="false">List</button>
+        </div>
         <input type="url" id="urlInput" placeholder="Enter website URL to crawl (e.g., https://example.com)" autocomplete="url">
+        <div class="url-list-input hidden" id="urlListInput">
+          <textarea id="urlListTextarea" placeholder="Paste one URL per line, or upload a .txt / .csv / .xlsx file" rows="3"></textarea>
+          <div class="url-list-actions">
+            <label class="btn btn-secondary url-list-upload" for="urlListFile">Upload file…</label>
+            <input type="file" id="urlListFile" accept=".txt,.csv,.xlsx,.xls" style="display:none">
+            <span id="urlListCount" class="url-list-count">0 URLs</span>
+          </div>
+        </div>
         <button class="btn btn-primary" id="startCrawl">Start Crawl</button>
         <button class="btn btn-warning hidden" id="pauseCrawl">Pause</button>
         <button class="btn btn-success hidden" id="resumeCrawl">Resume</button>

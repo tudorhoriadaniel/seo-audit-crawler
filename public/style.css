@@ -156,6 +156,7 @@ body {
 .crawl-input-bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   flex: 1;
 }
@@ -180,6 +181,70 @@ body {
   white-space: nowrap;
 }
 .crawl-options-toggle:hover { color: var(--text); }
+
+/* Mode toggle (Spider / List) */
+.mode-toggle {
+  display: inline-flex;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+}
+.mode-pill {
+  background: transparent;
+  border: none;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 999px;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.mode-pill:hover { color: var(--text); }
+.mode-pill.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* URL-list input (paste / upload). Replaces the single URL input when List
+   mode is active. Flexes to fill the bar so the textarea is roomy. */
+.url-list-input {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 280px;
+}
+.url-list-input textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  resize: vertical;
+  min-height: 60px;
+}
+.url-list-input textarea:focus { border-color: var(--primary); outline: none; }
+.url-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.url-list-upload {
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.url-list-count {
+  font-size: 12px;
+  color: var(--text-muted);
+}
 
 /* Buttons */
 .btn {
