@@ -600,20 +600,40 @@ function collectImageAssets(crawlId) {
   if (!pages.length) return null;
   const assetExt = /\.(jpe?g|png|gif|webp|avif|svg|ico|bmp|tiff?)(\?|#|$)/i;
   const byHref = new Map();
-  const add = (href, source) => {
+  // For each asset, remember the first <img>-occurrence alt state so the
+  // client can derive alt-issue counts restricted to images that actually
+  // returned 200. `fromImg` is true if the URL was ever referenced as an
+  // <img src> (vs. only as an <a href> to a .jpg) — only <img> uses qualify
+  // for the alt-issue report. Matches the prior analyzer's "first occurrence
+  // wins" dedupe semantics.
+  const add = (href, source, imgMeta) => {
     if (!href || !/^https?:\/\//i.test(href)) return;
     if (!assetExt.test(href)) return;
     let entry = byHref.get(href);
-    if (!entry) { entry = { href, sources: [] }; byHref.set(href, entry); }
+    if (!entry) {
+      entry = { href, sources: [], fromImg: false, firstImgHasAlt: null, firstImgAltEmpty: null, sampleAlt: null, samplePageUrl: null };
+      byHref.set(href, entry);
+    }
     entry.sources.push(source);
+    if (imgMeta && !entry.fromImg) {
+      entry.fromImg = true;
+      entry.firstImgHasAlt = !!imgMeta.hasAlt;
+      entry.firstImgAltEmpty = !!imgMeta.altEmpty;
+      entry.sampleAlt = imgMeta.alt;
+      entry.samplePageUrl = imgMeta.pageUrl;
+    }
   };
   for (const p of pages) {
     let images = [];
     try { images = JSON.parse(p.images || '[]'); } catch { /* row */ }
-    for (const img of images) add(img.src, { url: p.url, anchor: img.alt || '[image]' });
+    for (const img of images) {
+      add(img.src, { url: p.url, anchor: img.alt || '[image]' }, {
+        hasAlt: !!img.hasAlt, altEmpty: !!img.altEmpty, alt: img.alt, pageUrl: p.url
+      });
+    }
     let links = [];
     try { links = JSON.parse(p.links || '[]'); } catch { /* row */ }
-    for (const l of links) if (l && !l.isMalformed) add(l.href, { url: p.url, anchor: l.anchor || '' });
+    for (const l of links) if (l && !l.isMalformed) add(l.href, { url: p.url, anchor: l.anchor || '' }, null);
   }
   const items = Array.from(byHref.values()).map(e => {
     const cached = db.kvGet('asset-status:' + e.href);
@@ -623,7 +643,15 @@ function collectImageAssets(crawlId) {
       sources: e.sources.slice(0, 50),
       status: cached?.status ?? null,
       checkedAt: cached?.checkedAt ?? null,
-      error: cached?.error ?? null
+      error: cached?.error ?? null,
+      fromImg: e.fromImg,
+      // Alt-attribute status taken from the first <img> reference. Only
+      // meaningful when fromImg is true; client filters by status === 2xx
+      // before counting these so 4xx images don't pollute the alt report.
+      missingAlt: e.fromImg && e.firstImgHasAlt === false,
+      emptyAlt: e.fromImg && e.firstImgHasAlt === true && e.firstImgAltEmpty === true,
+      sampleAlt: e.sampleAlt,
+      samplePageUrl: e.samplePageUrl
     };
   });
   items.sort((a, b) => b.sourceCount - a.sourceCount || a.href.localeCompare(b.href));

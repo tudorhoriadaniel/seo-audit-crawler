@@ -1461,38 +1461,86 @@ function renderImages(analysis) {
 }
 function filterImg(f) { _imgFilter = (_imgFilter === f) ? 'all' : f; _renderImagesUI(); }
 function _renderImagesUI() {
-  const r = _imgData;
+  const r = _imgData || { totalImages: 0, missingAlt: 0, emptyAlt: 0, uniqueIssueImages: 0, issueImages: [] };
   const f = _imgFilter;
+
+  // Once the image-assets dataset has been fetched (with cached statuses),
+  // recompute the alt counts restricted to images that returned 2xx — this
+  // is the user's requirement: don't surface alt issues on broken images,
+  // since the real fix is to remove/fix the URL, not the alt text. We also
+  // surface a dedicated "Broken (4xx)" scorecard from the same dataset.
+  //
+  // Before the asset probe finishes, we fall back to the analyzer's totals
+  // (which DO already drop "no src" images) so the tab isn't empty.
+  let totalImages = r.totalImages || 0;
+  let missingAltCount = r.missingAlt || 0;
+  let emptyAltCount = r.emptyAlt || 0;
+  let uniqueWithIssues = r.uniqueIssueImages || 0;
+  let broken4xxCount = 0;
+  let issueRows = (r.issueImages || []).map(i => ({
+    src: i.src, pageUrl: i.pageUrl, issue: i.issue, occurrences: i.occurrences
+  }));
+
+  if (_imgAssetsData && Array.isArray(_imgAssetsData.items)) {
+    const fromImg = _imgAssetsData.items.filter(i => i.fromImg);
+    const ok = (i) => i.status >= 200 && i.status < 300;
+    const broken4xx = fromImg.filter(i => i.status >= 400 && i.status < 500);
+    const okImgs = fromImg.filter(ok);
+
+    totalImages = okImgs.length;
+    broken4xxCount = broken4xx.length;
+    const okMissing = okImgs.filter(i => i.missingAlt);
+    const okEmpty = okImgs.filter(i => i.emptyAlt);
+    missingAltCount = okMissing.length;
+    emptyAltCount = okEmpty.length;
+    uniqueWithIssues = okMissing.length + okEmpty.length;
+
+    // Build per-row issue list from the 2xx subset, ordered by frequency.
+    issueRows = okImgs
+      .filter(i => i.missingAlt || i.emptyAlt)
+      .map(i => ({
+        src: i.href,
+        pageUrl: i.samplePageUrl,
+        issue: i.missingAlt ? 'Missing alt attribute' : 'Empty alt text',
+        occurrences: i.sourceCount
+      }))
+      .sort((a, b) => b.occurrences - a.occurrences);
+  }
+
   const cb = (key, label, count, color) => {
     const active = f === key ? 'border:2px solid #fff;' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
     return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterImg('${key}')">${statCardInner(label, count)}</div>`;
   };
   let html = `<div class="stats-grid">
-    ${cb('all', 'Total Images', r.totalImages, '')}
-    ${cb('missingalt', 'Missing Alt Attr', r.missingAlt, r.missingAlt > 0 ? 'danger' : 'success')}
-    ${cb('emptyalt', 'Empty Alt Text', r.emptyAlt, r.emptyAlt > 0 ? 'warning' : 'success')}
-    ${cb('unique', 'Unique Images with Issues', r.uniqueIssueImages || 0, r.uniqueIssueImages > 0 ? 'danger' : 'success')}
+    ${cb('all', 'Total Images (2xx)', totalImages, '')}
+    ${cb('missingalt', 'Missing Alt Attr', missingAltCount, missingAltCount > 0 ? 'danger' : 'success')}
+    ${cb('emptyalt', 'Empty Alt Text', emptyAltCount, emptyAltCount > 0 ? 'warning' : 'success')}
+    ${cb('broken', 'Broken (4xx)', broken4xxCount, broken4xxCount > 0 ? 'danger' : 'success')}
   </div>`;
 
-  let issues = r.issueImages || [];
+  // Apply filter pill to the row list.
+  let issues = issueRows;
   if (f === 'missingalt') issues = issues.filter(i => i.issue === 'Missing alt attribute');
   else if (f === 'emptyalt') issues = issues.filter(i => i.issue !== 'Missing alt attribute');
+  else if (f === 'broken') issues = []; // broken images shown in the dedicated section below
 
-  if (issues.length > 0) {
-    html += `<div class="section-card"><h3>Images with Alt Issues (${issues.length} unique images)</h3>
-      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Each image URL is shown once with one example origin page. "Occurrences" shows how many times this image appears across the site.</p>
-      <table><thead><tr><th>Image URL</th><th>Found On</th><th>Issue</th><th>Occurrences</th></tr></thead>
-      <tbody>${issues.slice(0, 500).map(i => `<tr>
-        <td>${i.src ? urlLink(i.src) : '<span style="color:var(--text-muted)">No src</span>'}</td>
-        <td>${urlLink(i.pageUrl)}</td>
-        <td>${i.issue === 'Missing alt attribute' ? '<span class="badge badge-danger">Missing alt attr</span>' : '<span class="badge badge-warning">Empty alt text</span>'}</td>
-        <td>${i.occurrences}</td>
-      </tr>`).join('')}</tbody></table></div>`;
-  } else {
-    html += `<div class="section-card" style="text-align:center;padding:40px">
-      <div style="font-size:48px;margin-bottom:16px">✅</div>
-      <h3>${f === 'all' ? 'All Images Have Alt Text' : 'No images match this filter'}</h3>
-    </div>`;
+  if (f !== 'broken') {
+    if (issues.length > 0) {
+      html += `<div class="section-card"><h3>Images with Alt Issues (${issues.length.toLocaleString()} unique images)</h3>
+        <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Only images returning 200 are counted. Each image URL is shown once with one example origin page. "Occurrences" shows how many times this image appears across the site.</p>
+        <table><thead><tr><th>Image URL</th><th>Found On</th><th>Issue</th><th>Occurrences</th></tr></thead>
+        <tbody>${issues.slice(0, 500).map(i => `<tr>
+          <td>${urlLink(i.src)}</td>
+          <td>${i.pageUrl ? urlLink(i.pageUrl) : '<span style="color:var(--text-muted)">—</span>'}</td>
+          <td>${i.issue === 'Missing alt attribute' ? '<span class="badge badge-danger">Missing alt attr</span>' : '<span class="badge badge-warning">Empty alt text</span>'}</td>
+          <td>${i.occurrences}</td>
+        </tr>`).join('')}</tbody></table></div>`;
+    } else {
+      html += `<div class="section-card" style="text-align:center;padding:40px">
+        <div style="font-size:48px;margin-bottom:16px">✅</div>
+        <h3>${f === 'all' ? (_imgAssetsData ? 'All 2xx Images Have Alt Text' : 'All Images Have Alt Text') : 'No images match this filter'}</h3>
+      </div>`;
+    }
   }
 
   $('#imagesContent').innerHTML = exportBtn('images') + html
@@ -1510,13 +1558,19 @@ let _imgAssetsChecking = false;
 async function loadBrokenImages() {
   const wrap = document.getElementById('brokenImagesSection');
   if (!wrap || !currentCrawlId) return;
-  if (_imgAssetsChecking && _imgAssetsData) { renderBrokenImages(); return; }
+  // Already have the dataset (from an earlier visit to this tab): just paint
+  // the broken-images section. Avoids a redundant fetch when _renderImagesUI
+  // is called a second time with status-filtered scorecards.
+  if (_imgAssetsData) { renderBrokenImages(); return; }
   wrap.innerHTML = '<div class="section-card"><p style="color:var(--text-muted)">Loading image references…</p></div>';
   try {
     const res = await fetch(`/api/crawls/${currentCrawlId}/image-assets`);
     if (!res.ok) throw new Error((await res.json()).error || 'failed');
     _imgAssetsData = await res.json();
-    renderBrokenImages();
+    // First time the assets dataset arrives, re-render the whole Images tab
+    // so the top scorecards switch from analyzer-fallback counts to the
+    // status-filtered (2xx only) counts + Broken (4xx) tile.
+    _renderImagesUI();
     const unchecked = (_imgAssetsData.items || []).filter(i => i.status == null && !i.error).length;
     if (unchecked > 0 && !_imgAssetsChecking) startImageAssetCheck();
   } catch (e) {
@@ -1573,7 +1627,10 @@ async function startImageAssetCheck(force) {
       <div style="height:8px;background:var(--bg-input);border-radius:999px;overflow:hidden;border:1px solid var(--border)"><div style="height:100%;width:${pct}%;background:${finished ? 'linear-gradient(135deg,#16A34A,#22C55E)' : 'linear-gradient(135deg,#6366F1,#8B5CF6)'};transition:width .3s"></div></div>`;
   };
   let pending = false;
-  const refresh = () => { if (pending) return; pending = true; setTimeout(() => { pending = false; if (_imgAssetsChecking) renderBrokenImages(); }, 1500); };
+  // Re-render the WHOLE Images tab (not just the broken-images section), so
+  // the top scorecards — Missing Alt / Empty Alt / Broken (4xx) — update live
+  // as the background checker reports new statuses.
+  const refresh = () => { if (pending) return; pending = true; setTimeout(() => { pending = false; if (_imgAssetsChecking) _renderImagesUI(); }, 1500); };
   try {
     const res = await fetch(`/api/crawls/${currentCrawlId}/image-assets/check`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: !!force })
