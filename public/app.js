@@ -2401,8 +2401,9 @@ function _renderStatusCodesUI() {
     const showSources = imageView;
     html += `<div class="section-card" style="border-left:4px solid ${g.color}">
       <h3>${esc(g.label)} (${g.urls.length})</h3>
-      <table><thead><tr><th>URL</th><th>Status</th>${key === '3xx' && !imageView ? '<th>Redirects To</th>' : ''}${key === 'error' ? '<th>Error</th>' : ''}${showSources ? '<th>Used on</th>' : ''}</tr></thead>
-      <tbody>${g.urls.slice(0, 500).map(u => `<tr>
+      <table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th><th>Status</th>${key === '3xx' && !imageView ? '<th>Redirects To</th>' : ''}${key === 'error' ? '<th>Error</th>' : ''}${showSources ? '<th>Used on</th>' : ''}</tr></thead>
+      <tbody>${g.urls.slice(0, 500).map((u, i) => `<tr>
+        <td style="text-align:right;color:var(--text-muted)">${i+1}</td>
         <td>${urlLink(u.url)}</td>
         <td>${u.statusCode ? statusBadge(u.statusCode) : '<span class="badge badge-danger">Error</span>'}</td>
         ${key === '3xx' && !imageView ? `<td>${u.finalUrl ? urlLink(u.finalUrl) : '-'}</td>` : ''}
@@ -2552,7 +2553,7 @@ function _renderMT() {
     ${cb('dup', 'Duplicates', r.duplicates.length, r.duplicates.length > 0 ? 'danger' : 'success')}
   </div>`;
   if (f === 'all' || f === 'missing') {
-    if (r.missing.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing Title (${r.missing.length})</h3><table><thead><tr><th>URL</th></tr></thead><tbody>${r.missing.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td></tr>`).join('')}</tbody></table></div>`;
+    if (r.missing.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing Title (${r.missing.length})</h3><table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th></tr></thead><tbody>${r.missing.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td></tr>`).join('')}</tbody></table></div>`;
   }
   if (f === 'all' || f === 'dup') {
     if (r.duplicates.length > 0) { html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Duplicate Titles (${r.duplicates.length} groups)</h3>`;
@@ -2560,10 +2561,10 @@ function _renderMT() {
       html += `</div>`; }
   }
   if (f === 'all' || f === 'short') {
-    if (r.tooShort.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Short (${r.tooShort.length})</h3><table><thead><tr><th>URL</th><th>Title</th><th>Len</th></tr></thead><tbody>${r.tooShort.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${esc(p.title)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
+    if (r.tooShort.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Short (${r.tooShort.length})</h3><table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th><th>Title</th><th>Len</th></tr></thead><tbody>${r.tooShort.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td><td>${esc(p.title)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
   }
   if (f === 'all' || f === 'long') {
-    if (r.tooLong.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Long (${r.tooLong.length})</h3><table><thead><tr><th>URL</th><th>Title</th><th>Len</th></tr></thead><tbody>${r.tooLong.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${esc(p.title)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
+    if (r.tooLong.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Long (${r.tooLong.length})</h3><table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th><th>Title</th><th>Len</th></tr></thead><tbody>${r.tooLong.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td><td>${esc(p.title)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
   }
   $('#metatitlesContent').innerHTML = exportBtn('metatitles') + html;
 }
@@ -2591,7 +2592,7 @@ function _renderMD() {
     ${cb('dup', 'Duplicates', r.duplicates.length, r.duplicates.length > 0 ? 'danger' : 'success')}
   </div>`;
   if (f === 'all' || f === 'missing') {
-    if (r.missing.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing Description (${r.missing.length})</h3><table><thead><tr><th>URL</th></tr></thead><tbody>${r.missing.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td></tr>`).join('')}</tbody></table></div>`;
+    if (r.missing.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing Description (${r.missing.length})</h3><table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th></tr></thead><tbody>${r.missing.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td></tr>`).join('')}</tbody></table></div>`;
   }
   if (f === 'all' || f === 'dup') {
     if (r.duplicates.length > 0) { html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Duplicate Descriptions (${r.duplicates.length} groups)</h3>`;
@@ -2599,10 +2600,10 @@ function _renderMD() {
       html += `</div>`; }
   }
   if (f === 'all' || f === 'short') {
-    if (r.tooShort.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Short (${r.tooShort.length})</h3><table><thead><tr><th>URL</th><th>Description</th><th>Len</th></tr></thead><tbody>${r.tooShort.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${esc(p.metaDescription)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
+    if (r.tooShort.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Short (${r.tooShort.length})</h3><table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th><th>Description</th><th>Len</th></tr></thead><tbody>${r.tooShort.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td><td>${esc(p.metaDescription)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
   }
   if (f === 'all' || f === 'long') {
-    if (r.tooLong.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Long (${r.tooLong.length})</h3><table><thead><tr><th>URL</th><th>Description</th><th>Len</th></tr></thead><tbody>${r.tooLong.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${esc(p.metaDescription)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
+    if (r.tooLong.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Too Long (${r.tooLong.length})</h3><table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th><th>Description</th><th>Len</th></tr></thead><tbody>${r.tooLong.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td><td>${esc(p.metaDescription)}</td><td>${p.length}</td></tr>`).join('')}</tbody></table></div>`;
   }
   $('#metadescriptionsContent').innerHTML = exportBtn('metadescriptions') + html;
 }
@@ -2956,13 +2957,13 @@ function _renderHD() {
     ${cb('missingH2', 'Missing H2', r.missingH2.length, r.missingH2.length > 0 ? 'warning' : 'success')}
   </div>`;
   if (f === 'all' || f === 'missingH1') {
-    if (r.missingH1.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing H1 (${r.missingH1.length})</h3><table><thead><tr><th>URL</th><th>H2 Count</th></tr></thead><tbody>${r.missingH1.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${p.h2Count}</td></tr>`).join('')}</tbody></table></div>`;
+    if (r.missingH1.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing H1 (${r.missingH1.length})</h3><table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th><th>H2 Count</th></tr></thead><tbody>${r.missingH1.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td><td>${p.h2Count}</td></tr>`).join('')}</tbody></table></div>`;
   }
   if (f === 'all' || f === 'multipleH1') {
-    if (r.multipleH1.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Multiple H1s (${r.multipleH1.length})</h3><table><thead><tr><th>URL</th><th>H1 Count</th><th>H1 Tags</th></tr></thead><tbody>${r.multipleH1.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${p.h1Count}</td><td style="font-size:12px">${(p.h1||[]).map(h=>esc(h)).join(', ')}</td></tr>`).join('')}</tbody></table></div>`;
+    if (r.multipleH1.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Multiple H1s (${r.multipleH1.length})</h3><table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th><th>H1 Count</th><th>H1 Tags</th></tr></thead><tbody>${r.multipleH1.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td><td>${p.h1Count}</td><td style="font-size:12px">${(p.h1||[]).map(h=>esc(h)).join(', ')}</td></tr>`).join('')}</tbody></table></div>`;
   }
   if (f === 'all' || f === 'missingH2') {
-    if (r.missingH2.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Missing H2 (${r.missingH2.length})</h3><table><thead><tr><th>URL</th><th>H1 Count</th></tr></thead><tbody>${r.missingH2.slice(0,500).map(p=>`<tr><td>${urlLink(p.url)}</td><td>${p.h1Count}</td></tr>`).join('')}</tbody></table></div>`;
+    if (r.missingH2.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Missing H2 (${r.missingH2.length})</h3><table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th><th>H1 Count</th></tr></thead><tbody>${r.missingH2.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td><td>${p.h1Count}</td></tr>`).join('')}</tbody></table></div>`;
   }
   $('#headingsContent').innerHTML = exportBtn('headings') + html;
 }
