@@ -2187,7 +2187,10 @@ async function loadMalformedLinks() {
 
 window.loadCrawl = async function(id) {
   setCurrentCrawlId(id);
-  const res = await fetch(`/api/crawls/${id}/analysis`);
+  // Cache-bust + force a fresh network round-trip so deployed analyzer fixes
+  // (versioned via Analyzer.VERSION in the cached blob) are picked up
+  // immediately instead of any HTTP/proxy cache serving the old report.
+  const res = await fetch(`/api/crawls/${id}/analysis?t=${Date.now()}`, { cache: 'no-store' });
   if (!res.ok) return alert('Could not load analysis');
   const analysis = await res.json();
   analysisData = analysis;

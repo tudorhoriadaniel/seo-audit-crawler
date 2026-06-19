@@ -459,6 +459,10 @@ function freshCachedAnalysis(crawlId) {
 // Falls back to computing on demand for older crawls / outdated caches (and
 // back-fills the cache so the next load is instant too).
 app.get('/api/crawls/:id/analysis', (req, res) => {
+  // Tell the browser never to cache. Server-side caching (the analysis blob
+  // in SQLite) is enough for instant loads; an extra HTTP cache here would
+  // hide deployed analyzer fixes from anyone who already loaded the report.
+  res.set('Cache-Control', 'no-store');
   const cached = freshCachedAnalysis(req.params.id);
   if (cached) return res.json(cached);
 
