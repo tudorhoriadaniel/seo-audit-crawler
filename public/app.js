@@ -750,7 +750,10 @@ function renderStatusBars(breakdown) {
 // ── Pages table ──
 async function loadPages() {
   if (!currentCrawlId) return;
-  const res = await fetch(`/api/crawls/${currentCrawlId}/pages?limit=5000`);
+  // Lite projection = every crawled page (no 5k cap) without the heavy
+  // link/image blobs, so the list reflects the true total. Detail is fetched
+  // on row click.
+  const res = await fetch(`/api/crawls/${currentCrawlId}/pages?fields=lite`);
   const allPages = await res.json();
   // Filter out non-HTML resources (images, CSS, JS, fonts, etc.)
   pagesData = allPages.filter(p => {
@@ -864,10 +867,19 @@ function renderPagesTable(pages) {
   }
 
   const count = filtered.length;
+  // Render cap — high enough to show entire large crawls, bounded so a runaway
+  // DOM doesn't lock the tab. The "Showing X of Y" line always reports the true
+  // numbers even when we render fewer rows than matched.
+  const RENDER_CAP = 50000;
+  const shown = Math.min(count, RENDER_CAP);
   const sortIcon = (col) => _sortCol === col ? (_sortDir === 'asc' ? ' ▲' : ' ▼') : '';
-  const html = `<p style="color:var(--text-muted);font-size:13px;margin-bottom:8px">Showing ${count} of ${pages.length} pages</p>
+  const showingLine = count > RENDER_CAP
+    ? `Showing first ${shown.toLocaleString()} of ${count.toLocaleString()} matching (${pages.length.toLocaleString()} crawled) — refine filters to narrow`
+    : `Showing ${count.toLocaleString()} of ${pages.length.toLocaleString()} pages`;
+  const html = `<p style="color:var(--text-muted);font-size:13px;margin-bottom:8px">${showingLine}</p>
   <table>
     <thead><tr>
+      <th style="width:48px;text-align:right">#</th>
       <th style="min-width:280px;cursor:pointer" onclick="sortPages('url')">URL${sortIcon('url')}</th>
       <th style="cursor:pointer" onclick="sortPages('status')">Status${sortIcon('status')}</th>
       <th style="min-width:200px;cursor:pointer" onclick="sortPages('title')">Meta Title${sortIcon('title')}</th>
@@ -883,12 +895,13 @@ function renderPagesTable(pages) {
       <th style="cursor:pointer" onclick="sortPages('resp')">Resp ms${sortIcon('resp')}</th>
       <th style="cursor:pointer" onclick="sortPages('depth')">Depth${sortIcon('depth')}</th>
     </tr></thead>
-    <tbody>${filtered.slice(0, 2000).map(p => {
+    <tbody>${filtered.slice(0, RENDER_CAP).map((p, i) => {
       const h1s = JSON.parse(p.h1 || '[]');
       const hls = JSON.parse(p.hreflangs || '[]');
       const sdt = JSON.parse(p.structured_data_types || '[]');
       const dir = p.meta_robots || 'index, follow';
       return `<tr class="page-row" data-url="${esc(p.url)}">
+      <td style="text-align:right;color:var(--text-muted)">${i + 1}</td>
       <td>${urlLink(p.url)}</td>
       <td>${statusBadge(p.status_code)}</td>
       <td style="white-space:normal;max-width:250px">${esc(p.title || '-')}</td>
@@ -907,15 +920,16 @@ function renderPagesTable(pages) {
       <td>${p.depth || 0}</td>
     </tr>`}).join('')}</tbody>
   </table>`;
-  $('#pagesTable').innerHTML = html;
+  const tableWrap = $('#pagesTable');
+  tableWrap.innerHTML = html;
 
-  $$('.page-row').forEach(row => {
-    row.addEventListener('click', (e) => {
-      // Don't trigger row click if clicking a URL link (let the link handle it)
-      if (e.target.closest('a.url-cell')) return;
-      showPageDetail(row.dataset.url, pages);
-    });
-  });
+  // One delegated listener instead of one-per-row — essential for large crawls
+  // (20k rows × a listener each froze the tab).
+  tableWrap.onclick = (e) => {
+    if (e.target.closest('a.url-cell')) return; // let URL links handle their own click
+    const row = e.target.closest('.page-row');
+    if (row && row.dataset.url) showPageDetail(row.dataset.url);
+  };
 }
 
 ['pagesFilter'].forEach(id => { $('#'+id)?.addEventListener('input', () => { if (pagesData.length) renderPagesTable(pagesData); }); });
@@ -923,8 +937,17 @@ function renderPagesTable(pages) {
   $('#'+id)?.addEventListener('change', () => { if (pagesData.length) renderPagesTable(pagesData); });
 });
 
-function showPageDetail(url, pages) {
-  const p = pages.find(pg => pg.url === url);
+async function showPageDetail(url) {
+  // The All Pages list is now a lightweight projection (no link/image/heading
+  // blobs), so fetch the full row on demand for the detail modal.
+  let p;
+  try {
+    const res = await fetch(`/api/crawls/${currentCrawlId}/page?url=${encodeURIComponent(url)}`);
+    if (!res.ok) throw new Error('not found');
+    p = await res.json();
+  } catch {
+    p = (pagesData || []).find(pg => pg.url === url);
+  }
   if (!p) return;
   const hreflangs = JSON.parse(p.hreflangs || '[]');
   const conflicts = JSON.parse(p.hreflang_canonical_conflicts || '[]');
