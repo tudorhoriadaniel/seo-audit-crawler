@@ -116,6 +116,40 @@ app.use((req, res, next) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Loose hreflang-equivalence key. Treats encoding (literal Unicode vs %xx),
+// non-root trailing slash and host case as equivalent — Google does too.
+// Used here to retroactively drop crawler-time false positives stored in
+// pages.hreflang_canonical_conflicts without needing a re-crawl.
+function hreflangKey(u, base) {
+  if (!u) return '';
+  try {
+    const x = new URL(u, base || undefined);
+    x.hash = '';
+    let h = x.href;
+    if (x.pathname !== '/' && h.endsWith('/')) h = h.slice(0, -1);
+    return h.toLowerCase();
+  } catch { return String(u).toLowerCase(); }
+}
+
+// Drop conflict entries that an older, strict-comparison crawler emitted but
+// the loose hreflang-equivalence key reveals as false positives. Currently
+// covers `missing_self_referencing_hreflang` (the one that produced the "no
+// self" badges on URLs with literal-unicode vs percent-encoded mismatch).
+function filterStaleHreflangConflicts(conflicts, pageUrl, hreflangs, canonical) {
+  if (!Array.isArray(conflicts) || conflicts.length === 0) return conflicts || [];
+  const pageKey = hreflangKey(pageUrl, pageUrl);
+  const canonicalKey = canonical ? hreflangKey(canonical, pageUrl) : null;
+  const hreflangKeys = (hreflangs || []).map(h => hreflangKey(h.href, pageUrl));
+  return conflicts.filter(c => {
+    if (c.type !== 'missing_self_referencing_hreflang') return true;
+    // If any hreflang matches the page key (or the canonical's key) under
+    // the loose equivalence, the original "missing self-ref" verdict was a
+    // false positive — drop it.
+    const hasSelfRef = hreflangKeys.some(k => k === pageKey || (canonicalKey && k === canonicalKey));
+    return !hasSelfRef;
+  });
+}
+
 // ── Shared helper: map DB rows to analysis format ──
 function mapPagesForAnalysis(pages) {
   return pages.map(p => ({
@@ -145,7 +179,19 @@ function mapPagesForAnalysis(pages) {
     ogImage: p.og_image,
     inSitemap: !!p.in_sitemap,
     hreflangs: JSON.parse(p.hreflangs || '[]'),
-    hreflangCanonicalConflicts: JSON.parse(p.hreflang_canonical_conflicts || '[]'),
+    // Re-validate `missing_self_referencing_hreflang` on read with the loose
+    // hreflang-equivalence key (encoding/trailing-slash/case insensitive).
+    // The crawler's old, strict comparison falsely flagged pages whose
+    // <link rel=alternate> spelled the URL differently from the recorded
+    // page URL — e.g. /qualitätssicherung vs /qualit%C3%A4tssicherung.
+    // Without this filter, existing crawls would still show the stale issue
+    // until re-run; with it, a simple report reload clears the false rows.
+    hreflangCanonicalConflicts: filterStaleHreflangConflicts(
+      JSON.parse(p.hreflang_canonical_conflicts || '[]'),
+      p.url,
+      JSON.parse(p.hreflangs || '[]'),
+      p.canonical
+    ),
     redirectChain: JSON.parse(p.redirect_chain || '[]'),
     securityHeaders: JSON.parse(p.security_headers || '{}'),
     links: JSON.parse(p.links || '[]'),
