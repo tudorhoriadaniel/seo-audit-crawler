@@ -329,7 +329,7 @@ socket.on('page', (page) => {
     item.className = 'feed-item';
     item.innerHTML = `
       <span class="feed-status">${statusBadge(page.statusCode)}</span>
-      <span class="feed-url" title="${esc(page.url)}">${esc(page.url)}</span>
+      <span class="feed-url" title="${esc(prettyUrl(page.url))}">${esc(prettyUrl(page.url))}</span>
       <span class="feed-time">${page.responseTime || 0}ms</span>
     `;
     feed.prepend(item);
@@ -958,7 +958,7 @@ async function showPageDetail(url) {
   modal.className = 'modal-overlay';
   modal.innerHTML = `<div class="modal">
     <button class="modal-close">&times;</button>
-    <h3>${esc(p.url)}</h3>
+    <h3>${esc(prettyUrl(p.url))}</h3>
     <div class="detail-grid">
       ${detailItem('Status', statusBadge(p.status_code))}
       ${detailItem('Title', esc(p.title || 'None') + ` (${p.title_length || 0} chars)`)}
@@ -1122,7 +1122,7 @@ function inspectUrl(url) {
 
     modal.innerHTML = `<div class="modal">
       <button class="modal-close">&times;</button>
-      <h3 style="word-break:break-all">${esc(p.url)}</h3>
+      <h3 style="word-break:break-all">${esc(prettyUrl(p.url))}</h3>
       <div class="detail-grid">
         ${detailItem('Status', statusBadge(p.status_code))}
         ${detailItem('Title', esc(p.title || 'None') + ` (${p.title_length || 0} chars)`)}
@@ -1255,7 +1255,7 @@ function renderHreflang(analysis) {
         <td>${urlLink(i.from)}</td>
         <td>${urlLink(i.to)}</td>
         <td>${esc(i.lang)}</td>
-        <td style="font-size:12px">${esc(i.message)}</td>
+        <td style="font-size:12px">${esc(prettyUrl(i.message))}</td>
       </tr>`).join('')}</tbody></table></div>`;
   }
 
@@ -1384,7 +1384,7 @@ function _renderConflicts() {
     const visibleConflicts = f === 'all' ? page.conflicts : page.conflicts.filter(c => c.type === f);
     const hasCritical = visibleConflicts.some(c => c.severity === 'critical');
     html += `<div class="conflict-card ${hasCritical ? '' : 'warning'}">
-      <div class="conflict-url">${esc(page.url)}</div>
+      <div class="conflict-url">${esc(prettyUrl(page.url))}</div>
       <div style="margin-bottom:12px;font-size:13px;color:var(--text-muted)">
         Canonical: <strong>${esc(page.canonical || 'None')}</strong> |
         Hreflangs: ${(page.hreflangs || []).map(h => `<span class="badge badge-info">${esc(h.lang)}</span>`).join(' ')}
@@ -1466,7 +1466,7 @@ function renderContent(analysis) {
     html += `<div class="section-card"><h3>Duplicate Titles (${d.duplicateTitles.length} groups)</h3>`;
     for (const group of d.duplicateTitles.slice(0, 20)) {
       html += `<div style="margin-bottom:12px"><strong>${esc(group[0].title)}</strong><ul style="margin-top:4px;padding-left:20px">
-        ${group.map(p => `<li style="font-size:13px;color:var(--text-muted)">${esc(p.url)}</li>`).join('')}
+        ${group.map(p => `<li style="font-size:13px;color:var(--text-muted)">${esc(prettyUrl(p.url))}</li>`).join('')}
       </ul></div>`;
     }
     html += '</div>';
@@ -3265,9 +3265,21 @@ function exportFilteredPages() {
     URL.revokeObjectURL(url);
   }).catch(err => alert('Export failed: ' + err.message));
 }
+// Decode percent-encoded characters for DISPLAY so URLs with diacritics show
+// the real letters (…/test-et-assurance-qualité) instead of the wire form
+// (…/qualit%C3%A9). decodeURI (not decodeURIComponent) leaves structural
+// reserved chars — / ? & = # — untouched, so only things like %C3%A9 → é are
+// turned back. The actual href stays in its original (encoded) form, which is
+// always valid to click. Falls back to the raw string if decoding fails
+// (malformed %-sequence).
+function prettyUrl(url) {
+  if (!url) return '';
+  try { return decodeURI(url); } catch { return String(url); }
+}
 function urlLink(url) {
   if (!url) return '-';
-  return `<a href="${esc(url)}" target="_blank" rel="noopener" class="url-cell" title="${esc(url)}">${esc(url)}</a>`;
+  const shown = prettyUrl(url);
+  return `<a href="${esc(url)}" target="_blank" rel="noopener" class="url-cell" title="${esc(shown)}">${esc(shown)}</a>`;
 }
 function formatBytes(b) { if (b < 1024) return b + ' B'; if (b < 1048576) return (b/1024).toFixed(1) + ' KB'; return (b/1048576).toFixed(1) + ' MB'; }
 function statusBadge(code) {

@@ -150,6 +150,32 @@ function filterStaleHreflangConflicts(conflicts, pageUrl, hreflangs, canonical) 
   });
 }
 
+// Decode a URL for display so diacritics show as letters (…/qualité) instead
+// of the wire form (…/qualit%C3%A9), matching how Google Search Console
+// reports them. decodeURI leaves structural reserved chars (/ ? & # =) alone.
+function decodeUrlSafe(s) { try { return decodeURI(s); } catch { return s; } }
+// True only for string cells that actually hold a URL (http(s):// or //) at
+// the start of the value or a line — so URL columns get decoded while titles /
+// meta descriptions (which may contain a stray %) are left untouched.
+const _looksLikeUrlCell = (v) => typeof v === 'string' && /(^|\n)\s*(https?:)?\/\//.test(v);
+// Decode URL cells in an array of row objects (json_to_sheet input).
+function decodeUrlCells(rows) {
+  if (!Array.isArray(rows)) return rows;
+  return rows.map(r => {
+    if (!r || typeof r !== 'object') return r;
+    const out = {};
+    for (const k of Object.keys(r)) out[k] = _looksLikeUrlCell(r[k]) ? decodeUrlSafe(r[k]) : r[k];
+    return out;
+  });
+}
+// Decode URL cells in an array-of-arrays (aoa_to_sheet input).
+function decodeUrlCellsAoa(rows) {
+  if (!Array.isArray(rows)) return rows;
+  return rows.map(row => Array.isArray(row)
+    ? row.map(v => _looksLikeUrlCell(v) ? decodeUrlSafe(v) : v)
+    : row);
+}
+
 // ── Shared helper: map DB rows to analysis format ──
 function mapPagesForAnalysis(pages) {
   return pages.map(p => ({
@@ -809,7 +835,7 @@ app.get('/api/crawls/:id/image-assets/export/xlsx', (req, res) => {
     rows.push([i.href, statusOf(i), i.sourceCount || (i.sources || []).length, (i.sources || [])[0]?.url || '', (i.sources || []).map(s => s.url).join('\n')]);
   }
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const ws = XLSX.utils.aoa_to_sheet(decodeUrlCellsAoa(rows));
   ws['!cols'] = [{ wch: 70 }, { wch: 14 }, { wch: 14 }, { wch: 60 }, { wch: 80 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Image Status Codes');
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -888,7 +914,7 @@ app.get('/api/crawls/:id/external-links/export/:format', (req, res) => {
       summary.push([i.href, statusOf(i), i.sourceCount || (i.sources || []).length, (i.sources || [])[0]?.url || '', all]);
     }
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(summary);
+    const ws = XLSX.utils.aoa_to_sheet(decodeUrlCellsAoa(summary));
     ws['!cols'] = [{ wch: 70 }, { wch: 14 }, { wch: 12 }, { wch: 60 }, { wch: 80 }];
     XLSX.utils.book_append_sheet(wb, ws, 'External Links');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -1277,7 +1303,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       }
       const addSheet = (wb, rows, name) => {
         if (!rows.length) return;
-        const ws = XLSX.utils.json_to_sheet(rows);
+        const ws = XLSX.utils.json_to_sheet(decodeUrlCells(rows));
         const cols = Object.keys(rows[0]).map(k => ({ wch: Math.min(100, Math.max(k.length, ...rows.slice(0,100).map(r => String(r[k]||'').length)) + 2) }));
         ws['!cols'] = cols;
         XLSX.utils.book_append_sheet(wb, ws, name);
@@ -1300,7 +1326,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       const cr = analysis.canonicalReport || {};
       const addSheet = (wb, rows, name) => {
         if (!rows.length) return;
-        const ws = XLSX.utils.json_to_sheet(rows);
+        const ws = XLSX.utils.json_to_sheet(decodeUrlCells(rows));
         const cols = Object.keys(rows[0]).map(k => ({ wch: Math.min(100, Math.max(k.length, ...rows.slice(0,100).map(r => String(r[k]||'').length)) + 2) }));
         ws['!cols'] = cols;
         XLSX.utils.book_append_sheet(wb, ws, name);
@@ -1319,7 +1345,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       const hr = analysis.hreflangReport || {};
       const addSheet = (wb, rows, name) => {
         if (!rows.length) return;
-        const ws = XLSX.utils.json_to_sheet(rows);
+        const ws = XLSX.utils.json_to_sheet(decodeUrlCells(rows));
         const cols = Object.keys(rows[0]).map(k => ({ wch: Math.min(100, Math.max(k.length, ...rows.slice(0,100).map(r => String(r[k]||'').length)) + 2) }));
         ws['!cols'] = cols;
         XLSX.utils.book_append_sheet(wb, ws, name);
@@ -1378,7 +1404,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       const mtFilter = req.query.filter || 'all';
       const addSheet = (wb, rows, name) => {
         if (!rows.length) return;
-        const ws = XLSX.utils.json_to_sheet(rows);
+        const ws = XLSX.utils.json_to_sheet(decodeUrlCells(rows));
         const cols = Object.keys(rows[0]).map(k => ({ wch: Math.min(100, Math.max(k.length, ...rows.slice(0,100).map(r => String(r[k]||'').length)) + 2) }));
         ws['!cols'] = cols;
         XLSX.utils.book_append_sheet(wb, ws, name);
@@ -1403,7 +1429,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       const mdFilter = req.query.filter || 'all';
       const addSheet = (wb, rows, name) => {
         if (!rows.length) return;
-        const ws = XLSX.utils.json_to_sheet(rows);
+        const ws = XLSX.utils.json_to_sheet(decodeUrlCells(rows));
         const cols = Object.keys(rows[0]).map(k => ({ wch: Math.min(100, Math.max(k.length, ...rows.slice(0,100).map(r => String(r[k]||'').length)) + 2) }));
         ws['!cols'] = cols;
         XLSX.utils.book_append_sheet(wb, ws, name);
@@ -1488,7 +1514,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       const _aib = analysis.aiBotsReport || {};
       const addSheet = (wb, rows, name) => {
         if (!rows || !rows.length) return;
-        const ws = XLSX.utils.json_to_sheet(rows);
+        const ws = XLSX.utils.json_to_sheet(decodeUrlCells(rows));
         const cols = Object.keys(rows[0]).map(k => ({ wch: Math.min(120, Math.max(k.length, ...rows.slice(0,100).map(r => String(r[k]||'').length)) + 2) }));
         ws['!cols'] = cols;
         XLSX.utils.book_append_sheet(wb, ws, name.substring(0, 31));
@@ -1615,7 +1641,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
   }
 
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(data);
+  const ws = XLSX.utils.json_to_sheet(decodeUrlCells(data));
   // Auto-size columns
   if (data.length > 0) {
     const cols = Object.keys(data[0]).map(k => {
@@ -1643,7 +1669,7 @@ app.post('/api/crawls/:id/export-filtered-xlsx', (req, res) => {
     if (!rows || !rows.length) return res.status(400).json({ error: 'No data to export' });
     const XLSX = require('xlsx');
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const ws = XLSX.utils.json_to_sheet(decodeUrlCells(rows));
     if (rows.length > 0) {
       const cols = Object.keys(rows[0]).map(k => {
         const maxLen = Math.max(k.length, ...rows.slice(0, 100).map(r => String(r[k] || '').length));
