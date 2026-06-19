@@ -112,9 +112,14 @@ function updateListCount() {
   if (el) el.textContent = _listUrls.length === 1 ? '1 URL' : (_listUrls.length.toLocaleString() + ' URLs');
 }
 
+// Decode %xx so a URL with diacritics is kept/shown with its real letters
+// (…/qualité), not the wire form (…/qualit%C3%A9) the browser puts on the
+// clipboard. decodeURI leaves structural reserved chars alone.
+function decodeUrlInput(s) { try { return decodeURI(s); } catch { return s; } }
+
 function parseTextareaUrls() {
   const raw = ($('#urlListTextarea').value || '').split(/\r?\n/);
-  _listUrls = raw.map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+  _listUrls = raw.map(l => decodeUrlInput(l.trim())).filter(l => l && !l.startsWith('#'));
   updateListCount();
 }
 
@@ -140,7 +145,27 @@ $$('#modeToggle .mode-pill').forEach(pill => {
 });
 
 const _urlListTa = $('#urlListTextarea');
-if (_urlListTa) _urlListTa.addEventListener('input', parseTextareaUrls);
+if (_urlListTa) {
+  _urlListTa.addEventListener('input', parseTextareaUrls);
+  // Decode on paste so a copied URL shows its accents (…/qualité) immediately
+  // in the box — the same way the browser address bar renders %C3%A9 as é —
+  // instead of the raw clipboard form (…/qualit%C3%A9).
+  _urlListTa.addEventListener('paste', (e) => {
+    const cd = e.clipboardData || window.clipboardData;
+    if (!cd) return;
+    const text = cd.getData('text');
+    if (!text) return;
+    e.preventDefault();
+    const decoded = text.split(/\r?\n/).map(l => decodeUrlInput(l)).join('\n');
+    // Insert at the caret, preserving any text already typed around it.
+    const ta = _urlListTa;
+    const start = ta.selectionStart, end = ta.selectionEnd;
+    ta.value = ta.value.slice(0, start) + decoded + ta.value.slice(end);
+    const caret = start + decoded.length;
+    ta.setSelectionRange(caret, caret);
+    parseTextareaUrls();
+  });
+}
 
 const _urlListFile = $('#urlListFile');
 if (_urlListFile) _urlListFile.addEventListener('change', async (e) => {
@@ -160,7 +185,8 @@ if (_urlListFile) _urlListFile.addEventListener('change', async (e) => {
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    _listUrls = data.urls || [];
+    // Decode so diacritic URLs from the file show their real letters too.
+    _listUrls = (data.urls || []).map(decodeUrlInput);
     // Show parsed URLs in the textarea so the user can review/edit before
     // starting the crawl.
     $('#urlListTextarea').value = _listUrls.join('\n');
