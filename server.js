@@ -488,6 +488,52 @@ app.get('/api/crawls/:id/page', (req, res) => {
   res.json(row);
 });
 
+// Diagnostic: shows exactly what the hreflang return-link check compares, so we
+// can see whether a flagged row is a real asymmetry or a normalisation gap.
+// Recomputes from the live DB rows (not the cache) with the current analyzer.
+// Usage: /api/crawls/:id/debug-hreflang?q=qualit  (substring filter, optional)
+app.get('/api/crawls/:id/debug-hreflang', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const q = String(req.query.q || '').toLowerCase();
+  const pages = mapPagesForAnalysis(db.getCrawlPages(req.params.id))
+    .filter(p => p.statusCode < 300 && p.hreflangs && p.hreflangs.length > 0);
+
+  const key = (u) => hreflangKey(u);
+  const byKey = new Map();
+  for (const p of pages) byKey.set(key(p.url), p);
+
+  const rows = [];
+  for (const page of pages) {
+    if (q && !page.url.toLowerCase().includes(q)) continue;
+    const pageKey = key(page.url);
+    for (const hl of page.hreflangs) {
+      const hlKey = key(hl.href);
+      if (hlKey === pageKey) continue;
+      const target = byKey.get(hlKey);
+      const targetHasBack = target ? target.hreflangs.some(h => key(h.href) === pageKey) : null;
+      // Only surface the ones the analyzer would flag (target exists, no back link)
+      if (target && !targetHasBack) {
+        rows.push({
+          flaggedTarget: hl.href,
+          flaggedTargetKey: hlKey,
+          iteratingPage: page.url,
+          iteratingPageKey: pageKey,
+          targetExistsInCrawl: true,
+          targetHreflangs: target.hreflangs.map(h => ({ lang: h.lang, href: h.href, key: key(h.href) })),
+          verdict: 'target page has no hreflang whose key equals iteratingPageKey → flagged'
+        });
+      }
+    }
+  }
+  res.json({
+    analyzerVersion: Analyzer.VERSION,
+    pagesWithHreflangs: pages.length,
+    matched: rows.length,
+    note: 'If iteratingPageKey is absent from targetHreflangs[].key, the asymmetry is REAL (different URLs). If it IS present but flagged, that is a normalisation bug.',
+    rows: rows.slice(0, 100)
+  });
+});
+
 // Treat a cached analysis as fresh only if its `_version` matches the current
 // Analyzer.VERSION. Older blobs are recomputed (and the cache rewritten with
 // the new version) so a deployed analyzer fix takes effect on existing crawls
@@ -509,7 +555,9 @@ app.get('/api/crawls/:id/analysis', (req, res) => {
   // in SQLite) is enough for instant loads; an extra HTTP cache here would
   // hide deployed analyzer fixes from anyone who already loaded the report.
   res.set('Cache-Control', 'no-store');
-  const cached = freshCachedAnalysis(req.params.id);
+  // ?fresh=1 forces a recompute, bypassing the cache entirely — lets us prove
+  // whether a lingering issue is stale cache vs a real analyzer result.
+  const cached = req.query.fresh ? null : freshCachedAnalysis(req.params.id);
   if (cached) return res.json(cached);
 
   const pages = db.getCrawlPages(req.params.id);
