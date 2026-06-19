@@ -416,14 +416,30 @@ app.get('/api/crawls/:id', (req, res) => {
   res.json({ ...crawl, stats: JSON.parse(crawl.stats || '{}'), config: JSON.parse(crawl.config || '{}') });
 });
 
-// Get crawl pages
+// Get crawl pages. `?fields=lite` returns EVERY crawled page with only the
+// columns the All Pages table needs (no huge link/image blobs), so the list
+// reflects the true total instead of a 5–10k cap. Default behaviour (full
+// rows, capped) is unchanged for other callers.
 app.get('/api/crawls/:id/pages', (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit) || 1000, 10000);
+  if (req.query.fields === 'lite') {
+    return res.json(db.getCrawlPagesLite(req.params.id));
+  }
+  const limit = Math.min(parseInt(req.query.limit) || 1000, 60000);
   const offset = parseInt(req.query.offset) || 0;
   const statusCode = req.query.status ? parseInt(req.query.status) : null;
 
   const pages = db.getCrawlPages(req.params.id, { limit, offset, statusCode });
   res.json(pages);
+});
+
+// Full detail for a single crawled page (populates the All Pages modal on
+// click — so the list itself can stay lightweight).
+app.get('/api/crawls/:id/page', (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).json({ error: 'url query param required' });
+  const row = db.getCrawlPageByUrl(req.params.id, String(url));
+  if (!row) return res.status(404).json({ error: 'Page not found in this crawl' });
+  res.json(row);
 });
 
 // Get crawl analysis. Served from the cached blob written by finalizeCrawl
@@ -1090,15 +1106,22 @@ app.get('/api/crawls/:id/export/:format', (req, res) => {
 const { generatePDFReport } = require('./lib/pdf-report');
 app.get('/api/crawls/:id/export-pdf', (req, res) => {
   try {
-    const pages = db.getCrawlPages(req.params.id, { limit: 10000 });
-    if (!pages.length) return res.status(404).json({ error: 'No pages found' });
     const crawl = db.getCrawl(req.params.id);
-    const stats = JSON.parse(crawl?.stats || '{}');
-    const mapped = mapPagesForAnalysis(pages);
-    const analyzer = new Analyzer(mapped, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
-    const analysis = analyzer.analyze();
-    const siteUrl = crawl?.url || 'Unknown';
-    generatePDFReport(res, analysis, siteUrl);
+    if (!crawl) return res.status(404).json({ error: 'Crawl not found' });
+    // Prefer the cached analysis — it was computed over EVERY crawled page at
+    // finalize time, so "Pages Crawled" matches the dashboard. The old code
+    // re-analysed a 10k-capped subset here, which is why a 20k crawl showed
+    // 10000 in the PDF. Fall back to an uncapped recompute for legacy crawls.
+    let analysis = db.getAnalysis(req.params.id);
+    if (!analysis) {
+      const pages = db.getCrawlPages(req.params.id);
+      if (!pages.length) return res.status(404).json({ error: 'No pages found' });
+      const stats = JSON.parse(crawl?.stats || '{}');
+      const mapped = mapPagesForAnalysis(pages);
+      analysis = new Analyzer(mapped, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData }).analyze();
+      try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal */ }
+    }
+    generatePDFReport(res, analysis, crawl?.url || 'Unknown');
   } catch (err) {
     console.error('PDF export error:', err);
     if (!res.headersSent) res.status(500).json({ error: err.message });
@@ -1110,10 +1133,18 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
   try {
   const crawl = db.getCrawl(req.params.id);
   if (!crawl) return res.status(404).json({ error: 'Crawl not found' });
+  // Several sheets (status codes + origins, hreflang list, All Pages) need the
+  // actual page rows, so we always load them — uncapped, so exports cover the
+  // full crawl. The aggregate `analysis` reuses the cached full-crawl result
+  // when present (matches dashboard counts; skips re-analysing 20k pages).
   const pages = db.getCrawlPages(req.params.id);
   const mapped = mapPagesForAnalysis(pages);
   const Analyzer = require('./lib/analyzer');
-  const analysis = new Analyzer(mapped).analyze();
+  let analysis = db.getAnalysis(req.params.id);
+  if (!analysis) {
+    analysis = new Analyzer(mapped).analyze();
+    try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal */ }
+  }
   const XLSX = require('xlsx');
   const section = req.params.section;
 
