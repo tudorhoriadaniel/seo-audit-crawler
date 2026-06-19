@@ -442,13 +442,24 @@ app.get('/api/crawls/:id/page', (req, res) => {
   res.json(row);
 });
 
+// Treat a cached analysis as fresh only if its `_version` matches the current
+// Analyzer.VERSION. Older blobs are recomputed (and the cache rewritten with
+// the new version) so a deployed analyzer fix takes effect on existing crawls
+// without re-running them.
+function freshCachedAnalysis(crawlId) {
+  const cached = db.getAnalysis(crawlId);
+  if (!cached) return null;
+  if (cached._version !== Analyzer.VERSION) return null;
+  return cached;
+}
+
 // Get crawl analysis. Served from the cached blob written by finalizeCrawl
-// when available (instant — no recompute), so reloading a 10k+ page report no
-// longer re-runs the whole analyzer on every request and times out. Falls back
-// to computing on demand for older crawls that predate the cache (and back-
-// fills the cache so the next load is instant too).
+// when available AND its analyzer version matches the current code — so a
+// deployed fix is picked up on next load instead of returning stale results.
+// Falls back to computing on demand for older crawls / outdated caches (and
+// back-fills the cache so the next load is instant too).
 app.get('/api/crawls/:id/analysis', (req, res) => {
-  const cached = db.getAnalysis(req.params.id);
+  const cached = freshCachedAnalysis(req.params.id);
   if (cached) return res.json(cached);
 
   const pages = db.getCrawlPages(req.params.id);
@@ -484,7 +495,7 @@ app.get('/api/share/:id/pages', (req, res) => {
   res.json(pages);
 });
 app.get('/api/share/:id/analysis', (req, res) => {
-  const cached = db.getAnalysis(req.params.id);
+  const cached = freshCachedAnalysis(req.params.id);
   if (cached) return res.json(cached);
   const pages = db.getCrawlPages(req.params.id);
   if (pages.length === 0) return res.status(404).json({ error: 'No pages found' });
@@ -1112,7 +1123,7 @@ app.get('/api/crawls/:id/export-pdf', (req, res) => {
     // finalize time, so "Pages Crawled" matches the dashboard. The old code
     // re-analysed a 10k-capped subset here, which is why a 20k crawl showed
     // 10000 in the PDF. Fall back to an uncapped recompute for legacy crawls.
-    let analysis = db.getAnalysis(req.params.id);
+    let analysis = freshCachedAnalysis(req.params.id);
     if (!analysis) {
       const pages = db.getCrawlPages(req.params.id);
       if (!pages.length) return res.status(404).json({ error: 'No pages found' });
@@ -1140,7 +1151,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
   const pages = db.getCrawlPages(req.params.id);
   const mapped = mapPagesForAnalysis(pages);
   const Analyzer = require('./lib/analyzer');
-  let analysis = db.getAnalysis(req.params.id);
+  let analysis = freshCachedAnalysis(req.params.id);
   if (!analysis) {
     analysis = new Analyzer(mapped).analyze();
     try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal */ }
