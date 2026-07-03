@@ -2287,14 +2287,19 @@ let _nfData = null;        // { items, typeCounts, total }
 let _nfTypeFilter = 'all';
 let _nfLoading = false;
 
+// Plain-text labels only — an earlier version put literal "<a href>" in a
+// label, which the browser parsed as a real (unclosed) anchor tag and turned
+// half the view into underlined links. Colors are a CVD-validated categorical
+// palette (identity, not status), assigned per type in this fixed order and
+// shared by the tiles, the pie chart and the table badges.
 const NF_TYPE_META = {
-  anchor:     { label: 'Anchors (<a href>)',  color: 'danger' },
-  canonical:  { label: 'Canonicals',          color: 'danger' },
-  hreflang:   { label: 'Hreflangs',           color: 'warning' },
-  image:      { label: 'Images (<img src>)',  color: 'warning' },
-  pagination: { label: 'Pagination (rel=next/prev)', color: 'warning' },
-  sitemap:    { label: 'Sitemap',             color: 'danger' },
-  redirect:   { label: 'Redirects',           color: 'warning' }
+  anchor:     { label: 'Anchor links',    hex: '#6366F1' },
+  canonical:  { label: 'Canonical tags',  hex: '#F59E0B' },
+  hreflang:   { label: 'Hreflang tags',   hex: '#0EA5E9' },
+  image:      { label: 'Image tags',      hex: '#EC4899' },
+  pagination: { label: 'Pagination tags', hex: '#A16207' },
+  sitemap:    { label: 'XML Sitemap',     hex: '#14B8A6' },
+  redirect:   { label: 'Redirects',       hex: '#8B5CF6' }
 };
 const nfTypeLabel = (t) => (NF_TYPE_META[t] && NF_TYPE_META[t].label) || t;
 
@@ -2340,20 +2345,55 @@ function renderNotFound() {
   const counts = _nfData.typeCounts || {};
   const f = _nfTypeFilter;
 
-  const tile = (key, label, count, color) => {
-    const active = f === key ? 'border:2px solid var(--primary);' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
-    return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterNotFound('${key}')">${statCardInner(label, count)}</div>`;
+  // Plain clickable cards — no link styling. The active filter gets a primary
+  // border; inactive ones dim slightly. A colored identity dot ties each tile
+  // to its pie slice and table badge.
+  const tile = (key, label, count, hex) => {
+    const active = f === key
+      ? 'border:2px solid var(--primary);cursor:pointer;'
+      : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.55') + ';';
+    const dot = hex ? `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${hex};margin-right:6px"></span>` : '';
+    return `<div class="stat-card" style="${active}user-select:none" onclick="filterNotFound('${key}')">
+      <div class="stat-value">${count.toLocaleString()}</div>
+      <div class="stat-label">${dot}${esc(label)}</div>
+    </div>`;
   };
 
   let html = `<div class="stats-grid">
-    ${tile('all', 'All 4xx Pages', _nfData.total, _nfData.total > 0 ? 'danger' : 'success')}
-    ${Object.keys(NF_TYPE_META).map(t => tile(t, nfTypeLabel(t), counts[t] || 0, counts[t] > 0 ? NF_TYPE_META[t].color : '')).join('')}
+    ${tile('all', 'All 4xx pages', _nfData.total, null)}
+    ${Object.keys(NF_TYPE_META).map(t => tile(t, NF_TYPE_META[t].label, counts[t] || 0, NF_TYPE_META[t].hex)).join('')}
   </div>`;
+
+  // Camembert: share of broken pages per referencing source type. Slices keep
+  // the fixed type order (palette adjacency was validated in that order).
+  const pieData = Object.keys(NF_TYPE_META)
+    .map(t => ({ label: NF_TYPE_META[t].label, color: NF_TYPE_META[t].hex, count: counts[t] || 0 }))
+    .filter(d => d.count > 0);
+  const pieTotal = pieData.reduce((s, d) => s + d.count, 0) || 1;
+  pieData.forEach(d => { d.percentage = ((d.count / pieTotal) * 100).toFixed(1); });
+  if (pieData.length > 0) {
+    html += `<div class="section-card"><h3>Where the 404s come from</h3>
+      <p style="color:var(--text-muted);font-size:12px;margin:4px 0 10px">Broken pages per referencing source — a page referenced from several places counts once per source type.</p>
+      <div class="pie-chart-container">
+        ${renderPieChart(pieData, 200)}
+        <div class="pie-legend">
+          ${pieData.map(s => `<div class="pie-legend-item">
+            <div class="pie-legend-dot" style="background:${s.color}"></div>
+            <span class="pie-legend-label">${esc(s.label)}</span>
+            <span class="pie-legend-count">${s.count.toLocaleString()} (${s.percentage}%)</span>
+          </div>`).join('')}
+        </div>
+      </div>
+    </div>`;
+  }
 
   const items = _nfFilteredItems();
   const CAP = 1000;
   const shown = items.slice(0, CAP);
-  const typeBadge = (t) => `<span class="badge badge-${(NF_TYPE_META[t] && NF_TYPE_META[t].color) || 'muted'}" style="margin:1px" title="${esc(nfTypeLabel(t))}">${esc(t)}</span>`;
+  const typeBadge = (t) => {
+    const m = NF_TYPE_META[t] || {};
+    return `<span class="badge badge-muted" style="margin:1px" title="${esc(m.label || t)}"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${m.hex || 'var(--text-muted)'};margin-right:4px"></span>${esc(t)}</span>`;
+  };
 
   html += `<div class="section-card">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
@@ -2926,9 +2966,16 @@ function renderSitemaps(analysis) {
 function renderPieChart(data, size) {
   const total = data.reduce((s, d) => s + d.count, 0);
   if (total === 0) return '';
-  const r = size / 2;
-  const cx = r, cy = r;
+  // Radius pulled in 1px so the slice-gap stroke isn't clipped by the viewBox
+  const r = size / 2 - 1;
+  const cx = size / 2, cy = size / 2;
   let currentAngle = -Math.PI / 2;
+
+  // 2px surface-colored stroke = visible gap between adjacent slices (reads
+  // better and keeps slices distinguishable for colorblind users); <title>
+  // gives every slice a native hover tooltip.
+  const gap = 'stroke="var(--bg-card)" stroke-width="2" stroke-linejoin="round"';
+  const tip = (slice, pct) => `<title>${esc(slice.label ? slice.label + ': ' : '')}${slice.count.toLocaleString()} (${slice.percentage != null ? slice.percentage : (pct * 100).toFixed(1)}%)</title>`;
 
   let paths = '';
   for (const slice of data) {
@@ -2943,9 +2990,9 @@ function renderPieChart(data, size) {
 
     if (pct >= 0.999) {
       // Full circle
-      paths += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${slice.color}"/>`;
+      paths += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${slice.color}" ${gap}>${tip(slice, pct)}</circle>`;
     } else {
-      paths += `<path d="M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${largeArc} 1 ${x2},${y2} Z" fill="${slice.color}"/>`;
+      paths += `<path d="M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${largeArc} 1 ${x2},${y2} Z" fill="${slice.color}" ${gap}>${tip(slice, pct)}</path>`;
     }
     currentAngle += angle;
   }
