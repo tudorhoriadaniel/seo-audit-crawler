@@ -821,6 +821,113 @@ app.get('/api/crawls/:id/image-assets', (req, res) => {
   res.json({ total: items.length, items });
 });
 
+// ── 404 source attribution ────────────────────────────────────────────
+// For every 4xx URL in the crawl, find every place it is referenced FROM:
+// <a href> anchors, canonical tags, hreflang alternates, <img src>,
+// rel=next/prev pagination tags, the XML sitemap, redirect chains landing on
+// it, and (as a fallback) the crawl-discovery parent. Powers the "404 Pages"
+// tab, which filters/exports by these source types.
+function collectBrokenSources(crawlId) {
+  const pages = db.getCrawlPages(crawlId);
+  if (!pages.length) return null;
+
+  // 4xx targets, keyed with the loose URL-equivalence key (encoding /
+  // trailing slash / host case insensitive) so a reference spelled slightly
+  // differently still attributes to the right broken page.
+  const targets = new Map(); // key -> { url, status, sources: [], typeSet: Set }
+  for (const p of pages) {
+    if (p.status_code >= 400 && p.status_code < 500) {
+      const k = hreflangKey(p.url);
+      if (!targets.has(k)) targets.set(k, { url: p.url, status: p.status_code, sources: [], typeSet: new Set(), inSitemap: !!p.in_sitemap, parent: p.parent || null });
+    }
+  }
+  if (targets.size === 0) return { items: [], typeCounts: {}, total: 0 };
+
+  const MAX_SOURCES_PER_TARGET = 100;
+  const addSource = (targetKey, type, from, detail) => {
+    const t = targets.get(targetKey);
+    if (!t) return;
+    t.typeSet.add(type);
+    if (t.sources.length < MAX_SOURCES_PER_TARGET) t.sources.push({ type, from, detail: detail || '' });
+    else t.overflow = (t.overflow || 0) + 1;
+  };
+
+  for (const p of pages) {
+    const from = p.url;
+    // <a href> anchors
+    let links = [];
+    try { links = JSON.parse(p.links || '[]'); } catch { /* row */ }
+    for (const l of links) {
+      if (!l || !l.href) continue;
+      const k = hreflangKey(l.href);
+      if (targets.has(k)) addSource(k, 'anchor', from, l.anchor ? `anchor: "${String(l.anchor).slice(0, 80)}"` : 'empty anchor');
+    }
+    // canonical
+    if (p.canonical) {
+      const k = hreflangKey(p.canonical);
+      if (targets.has(k)) addSource(k, 'canonical', from, 'rel=canonical');
+    }
+    // hreflangs
+    let hls = [];
+    try { hls = JSON.parse(p.hreflangs || '[]'); } catch { /* row */ }
+    for (const h of hls) {
+      if (!h || !h.href) continue;
+      const k = hreflangKey(h.href);
+      if (targets.has(k)) addSource(k, 'hreflang', from, `hreflang="${h.lang || '?'}"`);
+    }
+    // images
+    let imgs = [];
+    try { imgs = JSON.parse(p.images || '[]'); } catch { /* row */ }
+    for (const im of imgs) {
+      if (!im || !im.src) continue;
+      const k = hreflangKey(im.src);
+      if (targets.has(k)) addSource(k, 'image', from, 'img src');
+    }
+    // pagination tags
+    for (const [relVal, relName] of [[p.rel_next, 'rel=next'], [p.rel_prev, 'rel=prev']]) {
+      if (!relVal) continue;
+      const k = hreflangKey(relVal);
+      if (targets.has(k)) addSource(k, 'pagination', from, relName);
+    }
+    // redirect landing on a 4xx (row is the redirecting URL, final_url is where it lands)
+    if (p.final_url && p.status_code >= 300 && p.status_code < 400) {
+      const k = hreflangKey(p.final_url);
+      if (targets.has(k)) addSource(k, 'redirect', from, `redirects (${p.status_code}) to the broken URL`);
+    }
+  }
+
+  // Per-target flags that don't come from scanning other pages
+  for (const t of targets.values()) {
+    if (t.inSitemap) { t.typeSet.add('sitemap'); t.sources.unshift({ type: 'sitemap', from: 'XML sitemap', detail: 'listed in sitemap' }); }
+    // Discovery parent as fallback so no 404 row is ever source-less
+    if (t.typeSet.size === 0 && t.parent) {
+      const type = t.parent === 'sitemap' ? 'sitemap' : 'anchor';
+      t.typeSet.add(type);
+      t.sources.push({ type, from: t.parent === 'sitemap' ? 'XML sitemap' : t.parent, detail: 'discovered from' });
+    }
+  }
+
+  const items = [...targets.values()].map(t => ({
+    url: t.url,
+    status: t.status,
+    types: [...t.typeSet].sort(),
+    sourceCount: t.sources.length + (t.overflow || 0),
+    sources: t.sources
+  })).sort((a, b) => b.sourceCount - a.sourceCount || a.url.localeCompare(b.url));
+
+  const typeCounts = {};
+  for (const it of items) for (const ty of it.types) typeCounts[ty] = (typeCounts[ty] || 0) + 1;
+
+  return { items, typeCounts, total: items.length };
+}
+
+app.get('/api/crawls/:id/broken-sources', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const data = collectBrokenSources(req.params.id);
+  if (!data) return res.status(404).json({ error: 'Crawl not found / no pages' });
+  res.json(data);
+});
+
 app.get('/api/crawls/:id/image-assets/export/xlsx', (req, res) => {
   const items = collectImageAssets(req.params.id);
   if (!items) return res.status(404).send('Crawl not found / no pages');
@@ -1663,7 +1770,10 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
 });
 
 // Export filtered pages (POST with row data from client)
-app.post('/api/crawls/:id/export-filtered-xlsx', (req, res) => {
+// Own JSON parser with a raised limit: the global express.json() default is
+// 100kb, and filtered exports (e.g. 404 Pages with multi-line source lists)
+// can easily exceed that.
+app.post('/api/crawls/:id/export-filtered-xlsx', express.json({ limit: '50mb' }), (req, res) => {
   try {
     const { rows, sheetName, fileName } = req.body;
     if (!rows || !rows.length) return res.status(400).json({ error: 'No data to export' });
