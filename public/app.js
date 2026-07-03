@@ -62,6 +62,7 @@ $$('.nav-link').forEach(link => {
     if (view === 'gsc') loadGscView();
     if (view === 'strategy') loadStrategyView();
     if (view === 'externallinks') loadExternalLinks();
+    if (view === 'notfound') loadNotFoundView();
   });
 });
 
@@ -265,6 +266,10 @@ async function startCrawl() {
     setCurrentCrawlId(data.id);
     pagesData = [];
     analysisData = null;
+    // Reset per-crawl cached datasets so tabs don't show the previous crawl
+    _nfData = null;
+    _imgAssetsData = null;
+    _extLinksData = null;
 
     socket.emit('join', currentCrawlId);
 
@@ -2213,6 +2218,10 @@ async function loadMalformedLinks() {
 
 window.loadCrawl = async function(id) {
   setCurrentCrawlId(id);
+  // Reset per-crawl cached datasets so tabs reload for the newly opened crawl
+  _nfData = null;
+  _imgAssetsData = null;
+  _extLinksData = null;
   // Cache-bust + force a fresh network round-trip so deployed analyzer fixes
   // (versioned via Analyzer.VERSION in the cached blob) are picked up
   // immediately instead of any HTTP/proxy cache serving the old report.
@@ -2269,6 +2278,161 @@ window.deleteCrawl = async function(id) {
   if (!confirm('Delete this crawl?')) return;
   await fetch(`/api/crawls/${id}`, { method: 'DELETE' });
 };
+
+// ── 404 Pages (source attribution) ──────────────────────────────────────
+// Shows every 4xx URL together with WHERE it is referenced from — anchors,
+// canonicals, hreflangs, images, pagination tags, sitemap, redirects — with
+// per-type filter tiles, a text filter, and filtered Excel export.
+let _nfData = null;        // { items, typeCounts, total }
+let _nfTypeFilter = 'all';
+let _nfLoading = false;
+
+const NF_TYPE_META = {
+  anchor:     { label: 'Anchors (<a href>)',  color: 'danger' },
+  canonical:  { label: 'Canonicals',          color: 'danger' },
+  hreflang:   { label: 'Hreflangs',           color: 'warning' },
+  image:      { label: 'Images (<img src>)',  color: 'warning' },
+  pagination: { label: 'Pagination (rel=next/prev)', color: 'warning' },
+  sitemap:    { label: 'Sitemap',             color: 'danger' },
+  redirect:   { label: 'Redirects',           color: 'warning' }
+};
+const nfTypeLabel = (t) => (NF_TYPE_META[t] && NF_TYPE_META[t].label) || t;
+
+async function loadNotFoundView(force) {
+  const wrap = $('#notfoundContent');
+  if (!wrap) return;
+  if (!currentCrawlId) { wrap.innerHTML = '<p style="color:var(--text-muted)">Run a crawl first.</p>'; return; }
+  if (_nfData && !force) { renderNotFound(); return; }
+  if (_nfLoading) return;
+  _nfLoading = true;
+  wrap.innerHTML = '<p style="color:var(--text-muted)">Cross-referencing 4xx URLs against every anchor, canonical, hreflang, image and pagination tag…</p>';
+  try {
+    const res = await fetch(`/api/crawls/${currentCrawlId}/broken-sources`, { cache: 'no-store' });
+    if (!res.ok) throw new Error((await res.json()).error || 'HTTP ' + res.status);
+    _nfData = await res.json();
+    _nfTypeFilter = 'all';
+    renderNotFound();
+  } catch (e) {
+    wrap.innerHTML = `<p style="color:var(--danger)">Failed to load: ${esc(e.message)}</p>`;
+  } finally {
+    _nfLoading = false;
+  }
+}
+
+function filterNotFound(type) {
+  _nfTypeFilter = (_nfTypeFilter === type) ? 'all' : type;
+  renderNotFound();
+}
+
+function _nfFilteredItems() {
+  const items = (_nfData && _nfData.items) || [];
+  const q = ($('#nfTextFilter')?.value || '').trim().toLowerCase();
+  return items.filter(it => {
+    if (_nfTypeFilter !== 'all' && !it.types.includes(_nfTypeFilter)) return false;
+    if (q && !it.url.toLowerCase().includes(q) && !prettyUrl(it.url).toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+
+function renderNotFound() {
+  const wrap = $('#notfoundContent');
+  if (!wrap || !_nfData) return;
+  const counts = _nfData.typeCounts || {};
+  const f = _nfTypeFilter;
+
+  const tile = (key, label, count, color) => {
+    const active = f === key ? 'border:2px solid var(--primary);' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
+    return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterNotFound('${key}')">${statCardInner(label, count)}</div>`;
+  };
+
+  let html = `<div class="stats-grid">
+    ${tile('all', 'All 4xx Pages', _nfData.total, _nfData.total > 0 ? 'danger' : 'success')}
+    ${Object.keys(NF_TYPE_META).map(t => tile(t, nfTypeLabel(t), counts[t] || 0, counts[t] > 0 ? NF_TYPE_META[t].color : '')).join('')}
+  </div>`;
+
+  const items = _nfFilteredItems();
+  const CAP = 1000;
+  const shown = items.slice(0, CAP);
+  const typeBadge = (t) => `<span class="badge badge-${(NF_TYPE_META[t] && NF_TYPE_META[t].color) || 'muted'}" style="margin:1px" title="${esc(nfTypeLabel(t))}">${esc(t)}</span>`;
+
+  html += `<div class="section-card">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <h3 style="margin:0">Broken pages ${f !== 'all' ? `referenced via ${esc(nfTypeLabel(f))}` : ''} (${items.length.toLocaleString()})</h3>
+      <input id="nfTextFilter" placeholder="Filter URLs…" value="${esc($('#nfTextFilter')?.value || '')}"
+        style="margin-left:auto;padding:8px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;min-width:220px">
+      <button id="nfExportBtn" class="btn btn-secondary" style="padding:8px 14px">Export to Excel</button>
+    </div>
+    ${items.length === 0
+      ? '<p style="color:var(--text-muted);padding:12px 0">No 4xx pages match this filter. 🎉</p>'
+      : `<table><thead><tr>
+          <th style="width:48px;text-align:right">#</th>
+          <th>404 URL</th>
+          <th style="text-align:center">Status</th>
+          <th>Found in</th>
+          <th style="text-align:center">Refs</th>
+          <th>Source pages (where it's referenced)</th>
+        </tr></thead>
+        <tbody>${shown.map((it, i) => {
+          const srcs = f === 'all' ? it.sources : it.sources.filter(s => s.type === f);
+          const srcRows = srcs.slice(0, 5).map(s =>
+            `<div style="margin:2px 0">${typeBadge(s.type)} ${s.from && /^https?:/i.test(s.from) ? urlLink(s.from) : esc(s.from || '')}${s.detail ? ` <span style="color:var(--text-muted);font-size:11px">· ${esc(s.detail)}</span>` : ''}</div>`
+          ).join('');
+          const more = srcs.length > 5 ? `<div style="color:var(--text-muted);font-size:11px">+${srcs.length - 5} more</div>` : '';
+          return `<tr>
+            <td style="text-align:right;color:var(--text-muted)">${i + 1}</td>
+            <td>${urlLink(it.url)}</td>
+            <td style="text-align:center">${statusBadge(it.status)}</td>
+            <td style="white-space:nowrap">${it.types.map(typeBadge).join('')}</td>
+            <td style="text-align:center;color:var(--text-muted)">${it.sourceCount}</td>
+            <td style="font-size:12px">${srcRows}${more}</td>
+          </tr>`;
+        }).join('')}</tbody></table>
+        ${items.length > CAP ? `<p style="color:var(--text-muted);font-size:12px;margin-top:8px">Showing first ${CAP.toLocaleString()} of ${items.length.toLocaleString()} — refine filters to narrow, or export for the full list.</p>` : ''}`}
+  </div>`;
+
+  wrap.innerHTML = html;
+  // Re-render on typing, then restore focus + caret — innerHTML replacement
+  // destroys the input element, which would otherwise eat the focus after
+  // every keystroke.
+  $('#nfTextFilter')?.addEventListener('input', () => {
+    renderNotFound();
+    const el = $('#nfTextFilter');
+    if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  });
+  $('#nfExportBtn')?.addEventListener('click', exportNotFound);
+}
+
+function exportNotFound() {
+  const items = _nfFilteredItems();
+  if (!items.length) return alert('Nothing to export with the current filter.');
+  const f = _nfTypeFilter;
+  const rows = items.map((it, i) => {
+    const srcs = f === 'all' ? it.sources : it.sources.filter(s => s.type === f);
+    return {
+      '#': i + 1,
+      'URL': it.url,
+      'Status': it.status,
+      'Found In': it.types.map(nfTypeLabel).join(', '),
+      'Reference Count': it.sourceCount,
+      'Sources': srcs.slice(0, 50).map(s => `[${s.type}] ${s.from}${s.detail ? ' (' + s.detail + ')' : ''}`).join('\n')
+        + (srcs.length > 50 ? `\n…and ${srcs.length - 50} more` : '')
+    };
+  });
+  const suffix = f === 'all' ? 'all-sources' : f;
+  fetch(`/api/crawls/${currentCrawlId}/export-filtered-xlsx`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rows, sheetName: '404 Pages (' + suffix + ')', fileName: `404-pages_${suffix}.xlsx` })
+  }).then(async res => {
+    if (!res.ok) throw new Error('Export failed');
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `404-pages_${suffix}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }).catch(e => alert(e.message));
+}
 
 // ── Status Codes ──
 let _statusCodesData = null;
