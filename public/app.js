@@ -3166,10 +3166,60 @@ function renderAiBots(analysis) {
 }
 
 // ── Search Engines (Google / Bing bots in robots.txt) ──
+// WAF-challenge + cloaking-check sections shown at the top of the Search
+// Engines tab (live crawl access, complementing the robots.txt view below)
+function renderBotAccessSections(analysis) {
+  const ba = analysis.botAccessReport || { challengedCount: 0, byVendor: {}, pages: [], botLabel: '' };
+  const bp = analysis.botParityReport || { tested: false, testedCount: 0, differingCount: 0, challengedCount: 0, results: [] };
+  let html = '';
+
+  // WAF / bot-protection challenges during the crawl
+  if (ba.challengedCount > 0) {
+    const vendors = Object.entries(ba.byVendor).map(([v, n]) => `<strong>${esc(v)}</strong> (${n})`).join(', ');
+    html += `<div class="section-card" style="border-left:4px solid var(--danger);background:color-mix(in srgb, var(--danger) 8%, transparent)">
+      <h3 style="color:var(--danger);margin-bottom:8px">🛡️ Bot protection challenged ${ba.challengedCount} request(s)</h3>
+      <p style="margin-bottom:8px">Crawling as <strong>${esc(ba.botLabel)}</strong>, the site's WAF intercepted requests: ${vendors}.
+      The status codes and content of these URLs reflect the WAF's challenge page, <em>not</em> the real site — treat their crawl data as unreliable.</p>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">Real search-engine bots verify by IP (reverse DNS), so a spoofed bot UA from this crawler can be challenged even where the genuine bot is allowed.
+      If this is your own site, allowlist the <code>SEOAuditCrawler</code> user agent in the WAF and re-crawl.</p>
+      <table><thead><tr><th>URL</th><th>Status</th><th>WAF</th></tr></thead>
+      <tbody>${ba.pages.slice(0, 50).map(p => `<tr>
+        <td>${urlLink(p.url)}</td>
+        <td>${statusBadge(p.statusCode)}</td>
+        <td><span class="badge badge-danger">${esc(p.vendor)}</span></td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  // Cloaking / UA-parity check
+  if (bp.tested && bp.testedCount > 0) {
+    const problems = bp.results.filter(x => x.differs);
+    html += `<div class="section-card" ${problems.length > 0 ? 'style="border-left:4px solid var(--warning)"' : ''}>
+      <h3>Cloaking Check — ${esc(bp.crawledAs || '')} vs ${esc(bp.comparedWith || '')}</h3>
+      <p style="margin-bottom:12px;color:var(--text-muted);font-size:13px">After the crawl, ${bp.testedCount} page(s) were re-fetched with a different user agent
+      (<strong>${esc(bp.comparedWith || '')}</strong>) and compared against what the crawl saw. Differences in status, title, canonical or noindex indicate cloaking,
+      bot-specific serving, or a WAF treating the two user agents differently.</p>`;
+    if (problems.length === 0) {
+      html += `<p style="font-size:13px"><span class="badge badge-success">All good</span> Both user agents were served the same status, title, canonical and robots directives on all ${bp.testedCount} tested page(s).</p>`;
+    } else {
+      html += `<table><thead><tr><th>URL</th><th>What differs</th><th>Crawled as ${esc(bp.crawledAs || '')}</th><th>As ${esc(bp.comparedWith || '')}</th></tr></thead>
+        <tbody>${problems.map(p => p.diffs.map((d, i) => `<tr>
+          ${i === 0 ? `<td rowspan="${p.diffs.length}">${urlLink(p.url)}</td>` : ''}
+          <td><span class="badge ${d.field === 'access' ? 'badge-danger' : 'badge-warning'}">${esc(d.field)}</span></td>
+          <td style="white-space:normal;max-width:260px;font-size:12px">${esc(truncate(d.crawled, 120))}</td>
+          <td style="white-space:normal;max-width:260px;font-size:12px">${esc(truncate(d.compared, 120))}</td>
+        </tr>`).join('')).join('')}</tbody></table>`;
+    }
+    html += '</div>';
+  }
+
+  return html;
+}
+
 function renderSearchEngines(analysis) {
   const r = analysis.searchEnginesReport;
+  const botSections = renderBotAccessSections(analysis);
   if (!r || !r.hasRobotsTxt) {
-    $('#searchenginesContent').innerHTML = `<div class="section-card" style="text-align:center;padding:40px">
+    $('#searchenginesContent').innerHTML = botSections + `<div class="section-card" style="text-align:center;padding:40px">
       <div style="font-size:48px;margin-bottom:16px">🔍</div>
       <h3>No robots.txt Found</h3>
       <p style="color:var(--text-muted)">This site does not have a robots.txt file. All search engine crawlers are allowed by default.</p>
@@ -3183,7 +3233,7 @@ function renderSearchEngines(analysis) {
   const notMentioned = r.bots.filter(b => b.status === 'not_mentioned');
   const critical = r.criticalBlocked || [];
 
-  let html = '';
+  let html = botSections;
 
   // Critical warning banner — Googlebot or Bingbot blocked
   if (critical.length > 0) {
@@ -3249,7 +3299,7 @@ function renderSearchEngines(analysis) {
     <pre style="background:var(--bg);padding:16px;border-radius:8px;overflow-x:auto;font-size:12px;max-height:400px;overflow-y:auto;white-space:pre-wrap">${esc(r.rawRobotsTxt)}</pre>
   </div>`;
 
-  $('#searchenginesContent').innerHTML = html;
+  $('#searchenginesContent').innerHTML = exportBtn('searchengines', 'Export Bot Access') + html;
 }
 
 // ── Headings ──
@@ -3368,7 +3418,18 @@ function renderSummary(analysis) {
     return `<div class="summary-row"><span class="label">${label}</span><span class="value ${cls}">${value}</span></div>`;
   };
 
+  // Crawl-reliability banner: pages behind a WAF challenge carry the WAF's
+  // response, not the site's, so the whole report needs that context up top
+  const _ba = analysis.botAccessReport || { challengedCount: 0 };
+  const challengeBanner = _ba.challengedCount > 0 ? `
+    <div class="section-card" style="border-left:4px solid var(--danger);background:color-mix(in srgb, var(--danger) 8%, transparent);margin-bottom:20px">
+      <h3 style="color:var(--danger);margin-bottom:6px">🛡️ ${_ba.challengedCount} request(s) challenged by bot protection</h3>
+      <p style="font-size:13px;margin:0">Crawling as <strong>${esc(_ba.botLabel || '')}</strong> triggered ${esc(Object.keys(_ba.byVendor || {}).join(', '))} challenges —
+      data for those URLs reflects the WAF, not the site. See the <strong>Search Engines</strong> tab for details.</p>
+    </div>` : '';
+
   let html = `
+    ${challengeBanner}
     <div class="summary-score">
       <div class="score-num" style="color:${scoreColor}">${score}</div>
       <div class="score-label">${scoreLabel} — SEO Health Score</div>

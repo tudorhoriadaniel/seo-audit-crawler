@@ -231,7 +231,8 @@ function mapPagesForAnalysis(pages) {
     headingStructure: JSON.parse(p.heading_structure || '[]'),
     ogLocale: p.og_locale,
     detectedContentLang: p.detected_content_lang,
-    languageMismatch: JSON.parse(p.language_mismatch || 'null')
+    languageMismatch: JSON.parse(p.language_mismatch || 'null'),
+    botChallenge: p.bot_challenge || null
   }));
 }
 
@@ -245,7 +246,9 @@ function buildCrawlAnalysis(crawlId, summary) {
   const analyzer = new Analyzer(resultsForAnalysis, {
     robotsTxt: summary.robotsTxt,
     sitemapData: summary.sitemapData,
-    paramCheck: summary.paramCheck
+    paramCheck: summary.paramCheck,
+    botParity: summary.botParity,
+    botLabel: summary.botLabel
   });
   const analysis = analyzer.analyze();
 
@@ -271,7 +274,9 @@ function buildCrawlAnalysis(crawlId, summary) {
     ...issueMetrics,
     robotsTxt: summary.robotsTxt || null,
     sitemapData: summary.sitemapData || null,
-    paramCheck: summary.paramCheck || null
+    paramCheck: summary.paramCheck || null,
+    botParity: summary.botParity || null,
+    botLabel: summary.botLabel || null
   };
   return { analysis, issueMetrics, statsWithExtra };
 }
@@ -323,7 +328,7 @@ app.get('/api/crawls/:id/export-project', (req, res) => {
   const pages = db.getCrawlPages(req.params.id);
   const mapped = mapPagesForAnalysis(pages);
   const exportStats = JSON.parse(crawl.stats || '{}');
-  const analyzer = new Analyzer(mapped, { robotsTxt: crawl.robots_txt, sitemapData: crawl.sitemap_data ? JSON.parse(crawl.sitemap_data) : null, paramCheck: exportStats.paramCheck });
+  const analyzer = new Analyzer(mapped, { robotsTxt: crawl.robots_txt, sitemapData: crawl.sitemap_data ? JSON.parse(crawl.sitemap_data) : null, paramCheck: exportStats.paramCheck, botParity: exportStats.botParity, botLabel: exportStats.botLabel });
   const analysis = analyzer.analyze();
   const project = { version: '2.0', crawl: { ...crawl, stats: exportStats }, pages: mapped, analysis };
   res.setHeader('Content-Disposition', `attachment; filename="seo-crawl-${req.params.id.slice(0,8)}.json"`);
@@ -377,6 +382,16 @@ app.post('/api/crawls', (req, res) => {
   const resolvedUa = (preset && preset.ua) || userAgent || undefined;
   const resolvedRobotsToken = (preset && preset.robotsToken) || undefined;
 
+  // Cloaking-check comparison UA: the "opposite" of the crawl UA. Crawling
+  // with a bot UA → compare against a plain browser; crawling with the default
+  // browser UA (or a custom one) → compare against Googlebot Smartphone.
+  const gbPreset = CrawlerEngine.BOT_PRESETS.find(p => p.id === 'googlebot-smartphone');
+  const crawlingAsBot = !!(preset && preset.ua);
+  const parityUa = crawlingAsBot
+    ? new CrawlerEngine({}).userAgent // engine default browser UA
+    : gbPreset.ua;
+  const parityLabel = crawlingAsBot ? 'Browser (default UA)' : gbPreset.label;
+
   const config = {
     maxPages: Math.min(parseInt(maxPages) || 5000, 50000),
     maxDepth: Math.min(parseInt(maxDepth) || 10, 50),
@@ -386,6 +401,8 @@ app.post('/api/crawls', (req, res) => {
     robotsUserAgent: resolvedRobotsToken,
     botPreset: preset ? preset.id : (userAgent ? 'custom' : 'default'),
     botLabel: preset ? preset.label : (userAgent ? 'Custom user agent' : 'SEO Tool (default browser UA)'),
+    parityUa,
+    parityLabel,
     listMode,
     listSize: listMode ? urls.length : 0
   };
@@ -612,7 +629,7 @@ app.get('/api/crawls/:id/analysis', (req, res) => {
   const crawl = db.getCrawl(req.params.id);
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel });
   const analysis = analyzer.analyze();
   try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal back-fill */ }
   res.json(analysis);
@@ -646,7 +663,7 @@ app.get('/api/share/:id/analysis', (req, res) => {
   const crawl = db.getCrawl(req.params.id);
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel });
   const analysis = analyzer.analyze();
   try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal */ }
   res.json(analysis);
@@ -1262,7 +1279,7 @@ app.post('/api/chat/:crawlId', async (req, res) => {
   if (!pages.length) return res.status(404).json({ error: 'Crawl has no pages' });
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel });
   const analysis = summariseAnalysisForChat(analyzer.analyze());
 
   const contextBlob = JSON.stringify({
@@ -1340,7 +1357,7 @@ app.get('/api/crawls/:id/export/:format', (req, res) => {
   const crawl = db.getCrawl(req.params.id);
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel });
   const analysis = analyzer.analyze();
 
   switch (req.params.format) {
@@ -1380,7 +1397,7 @@ app.get('/api/crawls/:id/export-pdf', (req, res) => {
       if (!pages.length) return res.status(404).json({ error: 'No pages found' });
       const stats = JSON.parse(crawl?.stats || '{}');
       const mapped = mapPagesForAnalysis(pages);
-      analysis = new Analyzer(mapped, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck }).analyze();
+      analysis = new Analyzer(mapped, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel }).analyze();
       try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal */ }
     }
     generatePDFReport(res, analysis, crawl?.url || 'Unknown');
@@ -1405,7 +1422,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
   let analysis = freshCachedAnalysis(req.params.id);
   if (!analysis) {
     const sectionStats = JSON.parse(crawl.stats || '{}');
-    analysis = new Analyzer(mapped, { robotsTxt: sectionStats.robotsTxt, sitemapData: sectionStats.sitemapData, paramCheck: sectionStats.paramCheck }).analyze();
+    analysis = new Analyzer(mapped, { robotsTxt: sectionStats.robotsTxt, sitemapData: sectionStats.sitemapData, paramCheck: sectionStats.paramCheck, botParity: sectionStats.botParity, botLabel: sectionStats.botLabel }).analyze();
     try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal */ }
   }
   const XLSX = require('xlsx');
@@ -1530,6 +1547,24 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
         }))
       ];
       sheetName = 'Redirect Param Loss';
+      break;
+    }
+    case 'searchengines': {
+      const ba = analysis.botAccessReport || { pages: [] };
+      const bp = analysis.botParityReport || { results: [] };
+      data = [
+        ...(ba.pages || []).map(p => ({
+          Type: 'WAF challenge', URL: p.url, Status: p.statusCode, Detail: p.vendor
+        })),
+        ...(bp.results || []).map(r => ({
+          Type: 'Cloaking check',
+          URL: r.url,
+          Status: r.error ? `Error: ${r.error}` : (r.challenge ? `WAF (${r.challenge})` : (r.differs ? 'DIFFERS' : 'Match')),
+          Detail: r.diffs.map(d => `${d.field}: "${d.crawled}" vs "${d.compared}"`).join(' | ')
+        }))
+      ];
+      if (data.length === 0) data = [{ Note: 'No WAF challenges detected and no cloaking-check data for this crawl.' }];
+      sheetName = 'Bot Access';
       break;
     }
     case 'statuscodes': {
