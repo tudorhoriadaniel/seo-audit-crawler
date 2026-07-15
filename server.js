@@ -248,7 +248,8 @@ function buildCrawlAnalysis(crawlId, summary) {
     sitemapData: summary.sitemapData,
     paramCheck: summary.paramCheck,
     botParity: summary.botParity,
-    botLabel: summary.botLabel
+    botLabel: summary.botLabel,
+    crawlStats: summary.stats
   });
   const analysis = analyzer.analyze();
 
@@ -328,7 +329,7 @@ app.get('/api/crawls/:id/export-project', (req, res) => {
   const pages = db.getCrawlPages(req.params.id);
   const mapped = mapPagesForAnalysis(pages);
   const exportStats = JSON.parse(crawl.stats || '{}');
-  const analyzer = new Analyzer(mapped, { robotsTxt: crawl.robots_txt, sitemapData: crawl.sitemap_data ? JSON.parse(crawl.sitemap_data) : null, paramCheck: exportStats.paramCheck, botParity: exportStats.botParity, botLabel: exportStats.botLabel });
+  const analyzer = new Analyzer(mapped, { robotsTxt: crawl.robots_txt, sitemapData: crawl.sitemap_data ? JSON.parse(crawl.sitemap_data) : null, paramCheck: exportStats.paramCheck, botParity: exportStats.botParity, botLabel: exportStats.botLabel, crawlStats: exportStats });
   const analysis = analyzer.analyze();
   const project = { version: '2.0', crawl: { ...crawl, stats: exportStats }, pages: mapped, analysis };
   res.setHeader('Content-Disposition', `attachment; filename="seo-crawl-${req.params.id.slice(0,8)}.json"`);
@@ -629,7 +630,7 @@ app.get('/api/crawls/:id/analysis', (req, res) => {
   const crawl = db.getCrawl(req.params.id);
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel, crawlStats: stats });
   const analysis = analyzer.analyze();
   try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal back-fill */ }
   res.json(analysis);
@@ -663,7 +664,7 @@ app.get('/api/share/:id/analysis', (req, res) => {
   const crawl = db.getCrawl(req.params.id);
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel, crawlStats: stats });
   const analysis = analyzer.analyze();
   try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal */ }
   res.json(analysis);
@@ -1279,7 +1280,7 @@ app.post('/api/chat/:crawlId', async (req, res) => {
   if (!pages.length) return res.status(404).json({ error: 'Crawl has no pages' });
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel, crawlStats: stats });
   const analysis = summariseAnalysisForChat(analyzer.analyze());
 
   const contextBlob = JSON.stringify({
@@ -1357,7 +1358,7 @@ app.get('/api/crawls/:id/export/:format', (req, res) => {
   const crawl = db.getCrawl(req.params.id);
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel, crawlStats: stats });
   const analysis = analyzer.analyze();
 
   switch (req.params.format) {
@@ -1397,7 +1398,7 @@ app.get('/api/crawls/:id/export-pdf', (req, res) => {
       if (!pages.length) return res.status(404).json({ error: 'No pages found' });
       const stats = JSON.parse(crawl?.stats || '{}');
       const mapped = mapPagesForAnalysis(pages);
-      analysis = new Analyzer(mapped, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel }).analyze();
+      analysis = new Analyzer(mapped, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck, botParity: stats.botParity, botLabel: stats.botLabel, crawlStats: stats }).analyze();
       try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal */ }
     }
     generatePDFReport(res, analysis, crawl?.url || 'Unknown');
@@ -1422,7 +1423,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
   let analysis = freshCachedAnalysis(req.params.id);
   if (!analysis) {
     const sectionStats = JSON.parse(crawl.stats || '{}');
-    analysis = new Analyzer(mapped, { robotsTxt: sectionStats.robotsTxt, sitemapData: sectionStats.sitemapData, paramCheck: sectionStats.paramCheck, botParity: sectionStats.botParity, botLabel: sectionStats.botLabel }).analyze();
+    analysis = new Analyzer(mapped, { robotsTxt: sectionStats.robotsTxt, sitemapData: sectionStats.sitemapData, paramCheck: sectionStats.paramCheck, botParity: sectionStats.botParity, botLabel: sectionStats.botLabel, crawlStats: sectionStats }).analyze();
     try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal */ }
   }
   const XLSX = require('xlsx');

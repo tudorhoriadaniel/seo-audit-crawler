@@ -413,6 +413,11 @@ socket.on('building', () => {
 
 socket.on('complete', async (data) => {
   resetCrawlUI();
+  // WAF wall: the crawler stopped itself because ~every request was being
+  // challenged — tell the user immediately, before they dig into the report
+  if (data && data.stats && data.stats.challengeAborted) {
+    alert(`Crawl stopped early after ${data.stats.challengeAbortAfter} pages: ${data.stats.challengeAbortVendor} bot protection is challenging every request from the crawler's IP.\n\nWait for the WAF flag to decay (usually minutes to a few hours) or allowlist the "SEOAuditCrawler" user agent in the site's WAF, then re-crawl.`);
+  }
   // The analysis is no longer sent over the socket (it can be tens of MB and
   // socket.io drops messages >1 MB). Fetch the persisted report over HTTP —
   // it's served instantly from the server-side cache and gzipped. Reuse
@@ -3178,6 +3183,7 @@ function renderBotAccessSections(analysis) {
     const vendors = Object.entries(ba.byVendor).map(([v, n]) => `<strong>${esc(v)}</strong> (${n})`).join(', ');
     html += `<div class="section-card" style="border-left:4px solid var(--danger);background:color-mix(in srgb, var(--danger) 8%, transparent)">
       <h3 style="color:var(--danger);margin-bottom:8px">🛡️ Bot protection challenged ${ba.challengedCount} request(s)</h3>
+      ${ba.challengeAborted ? `<p style="margin-bottom:8px"><strong>The crawl was stopped early after ${ba.challengeAbortAfter} pages</strong> because the WAF was challenging essentially every request — continuing would only collect more challenge pages and further hurt this server's IP reputation. Wait for the flag to decay (usually minutes–hours) or allowlist the crawler, then re-crawl.</p>` : ''}
       <p style="margin-bottom:8px">Crawling as <strong>${esc(ba.botLabel)}</strong>, the site's WAF intercepted requests: ${vendors}.
       The status codes and content of these URLs reflect the WAF's challenge page, <em>not</em> the real site — treat their crawl data as unreliable.</p>
       <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">Real search-engine bots verify by IP (reverse DNS), so a spoofed bot UA from this crawler can be challenged even where the genuine bot is allowed.
@@ -3423,9 +3429,9 @@ function renderSummary(analysis) {
   const _ba = analysis.botAccessReport || { challengedCount: 0 };
   const challengeBanner = _ba.challengedCount > 0 ? `
     <div class="section-card" style="border-left:4px solid var(--danger);background:color-mix(in srgb, var(--danger) 8%, transparent);margin-bottom:20px">
-      <h3 style="color:var(--danger);margin-bottom:6px">🛡️ ${_ba.challengedCount} request(s) challenged by bot protection</h3>
+      <h3 style="color:var(--danger);margin-bottom:6px">🛡️ ${_ba.challengedCount} request(s) challenged by bot protection${_ba.challengeAborted ? ' — crawl stopped early' : ''}</h3>
       <p style="font-size:13px;margin:0">Crawling as <strong>${esc(_ba.botLabel || '')}</strong> triggered ${esc(Object.keys(_ba.byVendor || {}).join(', '))} challenges —
-      data for those URLs reflects the WAF, not the site. See the <strong>Search Engines</strong> tab for details.</p>
+      data for those URLs reflects the WAF, not the site.${_ba.challengeAborted ? ` The crawl was <strong>stopped after ${_ba.challengeAbortAfter} pages</strong> to avoid burning more challenged requests — wait for the WAF flag to decay or allowlist the crawler, then re-crawl.` : ''} See the <strong>Search Engines</strong> tab for details.</p>
     </div>` : '';
 
   let html = `
