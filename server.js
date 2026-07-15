@@ -347,8 +347,14 @@ app.post('/api/import-project', express.json({ limit: '200mb' }), (req, res) => 
 //   2. List: client sends `urls` (array). We crawl ONLY those URLs, no
 //      discovery — matches Screaming Frog's List mode. The first URL's host
 //      becomes the project domain so history/saved-projects still group sanely.
+// Bot presets for "crawl as" — id/label pairs the client renders in the
+// Settings dropdown; the full UA strings stay server-side in CrawlerEngine.
+app.get('/api/bot-presets', (req, res) => {
+  res.json(CrawlerEngine.BOT_PRESETS.map(p => ({ id: p.id, label: p.label })));
+});
+
 app.post('/api/crawls', (req, res) => {
-  const { url, urls, maxPages, maxDepth, concurrency, respectRobots, userAgent, saveProject } = req.body;
+  const { url, urls, maxPages, maxDepth, concurrency, respectRobots, userAgent, botPreset, saveProject } = req.body;
 
   const listMode = Array.isArray(urls) && urls.length > 0;
   if (!listMode && !url) return res.status(400).json({ error: 'URL is required' });
@@ -363,12 +369,23 @@ app.post('/api/crawls', (req, res) => {
 
   const domain = parsedUrl.hostname;
   const crawlId = uuidv4();
+
+  // Resolve "crawl as" bot preset → full UA + robots.txt token. A custom UA
+  // string (preset 'custom' or legacy clients sending only userAgent) is used
+  // as-is for both.
+  const preset = CrawlerEngine.BOT_PRESETS.find(p => p.id === botPreset);
+  const resolvedUa = (preset && preset.ua) || userAgent || undefined;
+  const resolvedRobotsToken = (preset && preset.robotsToken) || undefined;
+
   const config = {
     maxPages: Math.min(parseInt(maxPages) || 5000, 50000),
     maxDepth: Math.min(parseInt(maxDepth) || 10, 50),
     concurrency: Math.min(parseInt(concurrency) || 5, 20),
     respectRobots: respectRobots !== false,
-    userAgent: userAgent || undefined,
+    userAgent: resolvedUa,
+    robotsUserAgent: resolvedRobotsToken,
+    botPreset: preset ? preset.id : (userAgent ? 'custom' : 'default'),
+    botLabel: preset ? preset.label : (userAgent ? 'Custom user agent' : 'SEO Tool (default browser UA)'),
     listMode,
     listSize: listMode ? urls.length : 0
   };
@@ -418,7 +435,7 @@ app.post('/api/crawls', (req, res) => {
     activeCrawls.delete(crawlId);
   });
 
-  res.json({ id: crawlId, url: parsedUrl.href, domain, saved, status: 'running', mode: listMode ? 'list' : 'spider', listSize: config.listSize });
+  res.json({ id: crawlId, url: parsedUrl.href, domain, saved, status: 'running', mode: listMode ? 'list' : 'spider', listSize: config.listSize, botLabel: config.botLabel });
 });
 
 // Parse an uploaded .xlsx / .csv / .txt file and return the URL list. Used by

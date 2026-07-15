@@ -75,6 +75,25 @@ $('#settingsToggle').addEventListener('click', (e) => {
   e.stopPropagation();
   $('#settingsDropdown').classList.toggle('open');
 });
+
+// ── "Crawl as" bot preset ──
+// Populate from the server so the preset list (and UA strings) live in one
+// place; remember the last choice per browser.
+(async function initBotPresets() {
+  try {
+    const presets = await fetch('/api/bot-presets').then(r => r.json());
+    const sel = $('#optBotPreset');
+    sel.innerHTML = presets.map(p => `<option value="${p.id}">${p.label}</option>`).join('');
+    const saved = localStorage.getItem('seo-bot-preset');
+    if (saved && presets.some(p => p.id === saved)) sel.value = saved;
+    $('#customUaRow').style.display = sel.value === 'custom' ? '' : 'none';
+  } catch { /* keep default option */ }
+})();
+$('#optBotPreset').addEventListener('change', () => {
+  const v = $('#optBotPreset').value;
+  $('#customUaRow').style.display = v === 'custom' ? '' : 'none';
+  localStorage.setItem('seo-bot-preset', v);
+});
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.topbar-settings')) {
     $('#settingsDropdown').classList.remove('open');
@@ -98,6 +117,7 @@ $('#urlInput').addEventListener('change', () => {
 });
 
 // ── Start Crawl ──
+let _crawlBotLabel = '';
 $('#startCrawl').addEventListener('click', startCrawl);
 $('#urlInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') startCrawl(); });
 
@@ -236,12 +256,14 @@ async function startCrawl() {
   }
 
   const saveProject = $('#optSaveProject').checked;
+  const botPreset = $('#optBotPreset').value || 'default';
   const body = {
     maxPages: parseInt($('#optMaxPages').value) || 500,
     maxDepth: parseInt($('#optMaxDepth').value) || 10,
     concurrency: parseInt($('#optConcurrency').value) || 5,
     respectRobots: $('#optRobots').checked,
-    userAgent: $('#optUserAgent').value || undefined,
+    botPreset,
+    userAgent: botPreset === 'custom' ? ($('#optUserAgent').value || undefined) : undefined,
     saveProject
   };
   if (_crawlMode === 'list') body.urls = _listUrls;
@@ -263,6 +285,7 @@ async function startCrawl() {
     const data = await res.json();
     if (data.error) return alert(data.error);
 
+    _crawlBotLabel = data.botLabel || '';
     setCurrentCrawlId(data.id);
     pagesData = [];
     analysisData = null;
@@ -347,7 +370,7 @@ function resetCrawlUI() {
 socket.on('progress', (data) => {
   const pct = data.total > 0 ? ((data.crawled / Math.min(data.total, parseInt($('#optMaxPages').value) || 500)) * 100).toFixed(1) : 0;
   $('#progressFill').style.width = `${Math.min(pct, 100)}%`;
-  $('#progressText').textContent = `Crawling... ${data.crawled} pages`;
+  $('#progressText').textContent = `Crawling${_crawlBotLabel && _crawlBotLabel !== 'SEO Tool (default browser UA)' ? ' as ' + _crawlBotLabel : ''}... ${data.crawled} pages`;
   $('#progressStats').textContent = `${data.pagesPerSecond.toFixed(1)} pages/s | Queue: ${data.queued} | Errors: ${data.errors} | Elapsed: ${(data.elapsed / 1000).toFixed(0)}s`;
 });
 
