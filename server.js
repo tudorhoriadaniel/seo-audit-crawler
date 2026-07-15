@@ -244,7 +244,8 @@ function buildCrawlAnalysis(crawlId, summary) {
   const resultsForAnalysis = mapPagesForAnalysis(pages);
   const analyzer = new Analyzer(resultsForAnalysis, {
     robotsTxt: summary.robotsTxt,
-    sitemapData: summary.sitemapData
+    sitemapData: summary.sitemapData,
+    paramCheck: summary.paramCheck
   });
   const analysis = analyzer.analyze();
 
@@ -269,7 +270,8 @@ function buildCrawlAnalysis(crawlId, summary) {
     ...summary.stats,
     ...issueMetrics,
     robotsTxt: summary.robotsTxt || null,
-    sitemapData: summary.sitemapData || null
+    sitemapData: summary.sitemapData || null,
+    paramCheck: summary.paramCheck || null
   };
   return { analysis, issueMetrics, statsWithExtra };
 }
@@ -320,9 +322,10 @@ app.get('/api/crawls/:id/export-project', (req, res) => {
   if (!crawl) return res.status(404).json({ error: 'Crawl not found' });
   const pages = db.getCrawlPages(req.params.id);
   const mapped = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(mapped, { robotsTxt: crawl.robots_txt, sitemapData: crawl.sitemap_data ? JSON.parse(crawl.sitemap_data) : null });
+  const exportStats = JSON.parse(crawl.stats || '{}');
+  const analyzer = new Analyzer(mapped, { robotsTxt: crawl.robots_txt, sitemapData: crawl.sitemap_data ? JSON.parse(crawl.sitemap_data) : null, paramCheck: exportStats.paramCheck });
   const analysis = analyzer.analyze();
-  const project = { version: '2.0', crawl: { ...crawl, stats: JSON.parse(crawl.stats || '{}') }, pages: mapped, analysis };
+  const project = { version: '2.0', crawl: { ...crawl, stats: exportStats }, pages: mapped, analysis };
   res.setHeader('Content-Disposition', `attachment; filename="seo-crawl-${req.params.id.slice(0,8)}.json"`);
   res.setHeader('Content-Type', 'application/json');
   res.json(project);
@@ -592,7 +595,7 @@ app.get('/api/crawls/:id/analysis', (req, res) => {
   const crawl = db.getCrawl(req.params.id);
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck });
   const analysis = analyzer.analyze();
   try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal back-fill */ }
   res.json(analysis);
@@ -626,7 +629,7 @@ app.get('/api/share/:id/analysis', (req, res) => {
   const crawl = db.getCrawl(req.params.id);
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck });
   const analysis = analyzer.analyze();
   try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal */ }
   res.json(analysis);
@@ -1242,7 +1245,7 @@ app.post('/api/chat/:crawlId', async (req, res) => {
   if (!pages.length) return res.status(404).json({ error: 'Crawl has no pages' });
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck });
   const analysis = summariseAnalysisForChat(analyzer.analyze());
 
   const contextBlob = JSON.stringify({
@@ -1320,7 +1323,7 @@ app.get('/api/crawls/:id/export/:format', (req, res) => {
   const crawl = db.getCrawl(req.params.id);
   const stats = JSON.parse(crawl?.stats || '{}');
   const resultsForAnalysis = mapPagesForAnalysis(pages);
-  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData });
+  const analyzer = new Analyzer(resultsForAnalysis, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck });
   const analysis = analyzer.analyze();
 
   switch (req.params.format) {
@@ -1360,7 +1363,7 @@ app.get('/api/crawls/:id/export-pdf', (req, res) => {
       if (!pages.length) return res.status(404).json({ error: 'No pages found' });
       const stats = JSON.parse(crawl?.stats || '{}');
       const mapped = mapPagesForAnalysis(pages);
-      analysis = new Analyzer(mapped, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData }).analyze();
+      analysis = new Analyzer(mapped, { robotsTxt: stats.robotsTxt, sitemapData: stats.sitemapData, paramCheck: stats.paramCheck }).analyze();
       try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal */ }
     }
     generatePDFReport(res, analysis, crawl?.url || 'Unknown');
@@ -1384,7 +1387,8 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
   const Analyzer = require('./lib/analyzer');
   let analysis = freshCachedAnalysis(req.params.id);
   if (!analysis) {
-    analysis = new Analyzer(mapped).analyze();
+    const sectionStats = JSON.parse(crawl.stats || '{}');
+    analysis = new Analyzer(mapped, { robotsTxt: sectionStats.robotsTxt, sitemapData: sectionStats.sitemapData, paramCheck: sectionStats.paramCheck }).analyze();
     try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal */ }
   }
   const XLSX = require('xlsx');
@@ -1486,6 +1490,31 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       }));
       sheetName = 'Redirects';
       break;
+    case 'redirect-params': {
+      const rp = analysis.redirectParamsReport || {};
+      data = [
+        ...(rp.activeResults || []).map(r => ({
+          URL: r.url,
+          'Tested URL': r.testedUrl || '',
+          'Final URL': r.finalUrl || '',
+          Result: r.error ? `Error: ${r.error}` : (r.dropsParams ? 'DROPS PARAMS' : 'OK'),
+          'Dropped Params': (r.dropped || []).join(', '),
+          'Preserved Params': (r.preserved || []).join(', '),
+          Source: 'Active test'
+        })),
+        ...(rp.passiveDrops || []).map(r => ({
+          URL: r.url,
+          'Tested URL': '',
+          'Final URL': r.finalUrl,
+          Result: 'DROPS PARAMS',
+          'Dropped Params': r.dropped.join(', '),
+          'Preserved Params': '',
+          Source: 'Crawled redirect'
+        }))
+      ];
+      sheetName = 'Redirect Param Loss';
+      break;
+    }
     case 'statuscodes': {
       const scFilter = req.query.filter || 'all';
       let scPages = mapped;

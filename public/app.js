@@ -1433,10 +1433,60 @@ function _renderConflicts() {
 // ── Redirects ──
 function renderRedirects(analysis) {
   const r = analysis.redirectChains;
+  const rp = analysis.redirectParamsReport || { tested: false, testedCount: 0, testedParams: [], activeResults: [], activeDrops: [], passiveDrops: [], totalDropping: 0 };
   let html = `<div class="stats-grid">
     ${statCard('Total Redirects', r.total, r.total > 0 ? 'warning' : 'success')}
     ${statCard('Long Chains (3+)', r.longChains, r.longChains > 0 ? 'danger' : 'success')}
+    ${statCard('Param-Loss Tests', rp.testedCount, '')}
+    ${statCard('Dropping Marketing Params', rp.totalDropping, rp.totalDropping > 0 ? 'danger' : 'success')}
   </div>`;
+
+  // Marketing parameter preservation (UTM / gclid / fbclid …)
+  html += `<div class="section-card" ${rp.totalDropping > 0 ? 'style="border-left:4px solid var(--danger)"' : ''}>
+    <h3>Marketing Parameter Preservation (UTM, gclid, fbclid…)</h3>
+    <p style="margin-bottom:12px;color:var(--text-muted);font-size:13px">
+      After the crawl, each redirecting URL (plus the homepage) is re-requested with test marketing parameters appended
+      (${rp.testedParams.map(p => `<code>${esc(p)}</code>`).join(', ') || 'utm_*, gclid, fbclid…'}).
+      If a redirect drops these parameters, campaign traffic that passes through it loses attribution —
+      GA4 reports the session as <em>direct/none</em> and Google Ads / Meta / Microsoft click IDs never reach the landing page.
+    </p>`;
+
+  if (!rp.tested && rp.passiveDrops.length === 0) {
+    html += `<p style="color:var(--text-muted);font-size:13px">No parameter-preservation data for this crawl. Re-run the crawl to test redirects with marketing parameters.</p>`;
+  } else if (rp.totalDropping === 0) {
+    html += `<p style="font-size:13px"><span class="badge badge-success">All good</span> Marketing parameters survived redirects on all ${rp.testedCount} tested URL(s).</p>`;
+  }
+
+  if (rp.activeResults.length > 0) {
+    html += `<table><thead><tr><th>URL Tested</th><th>Final URL</th><th>Result</th><th>Dropped Params</th></tr></thead>
+      <tbody>${rp.activeResults.map(t => {
+        let result;
+        if (t.error) result = `<span class="badge badge-warning">Error: ${esc(t.error)}</span>`;
+        else if (t.dropsParams) result = `<span class="badge badge-danger">Drops params</span>`;
+        else if (t.redirected) result = `<span class="badge badge-success">Preserved (${t.hops} hop${t.hops > 1 ? 's' : ''})</span>`;
+        else result = `<span class="badge badge-success">No redirect</span>`;
+        return `<tr>
+          <td>${urlLink(t.url)}</td>
+          <td>${t.finalUrl ? urlLink(t.finalUrl) : '—'}</td>
+          <td>${result}</td>
+          <td>${(t.dropped || []).map(p => `<span class="badge badge-danger" style="margin:1px">${esc(p)}</span>`).join(' ') || '—'}</td>
+        </tr>`;
+      }).join('')}</tbody></table>`;
+  }
+  html += '</div>';
+
+  if (rp.passiveDrops.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--danger)">
+      <h3>Crawled Redirects That Dropped Marketing Params (${rp.passiveDrops.length})</h3>
+      <p style="margin-bottom:12px;color:var(--text-muted);font-size:13px">These URLs were discovered during the crawl already carrying marketing parameters, and their redirect target lost them.</p>
+      <table><thead><tr><th>Original URL</th><th>Final URL</th><th>Dropped Params</th><th>Hops</th></tr></thead>
+      <tbody>${rp.passiveDrops.map(d => `<tr>
+        <td>${urlLink(d.url)}</td>
+        <td>${urlLink(d.finalUrl)}</td>
+        <td>${d.dropped.map(p => `<span class="badge badge-danger" style="margin:1px">${esc(p)}</span>`).join(' ')}</td>
+        <td>${d.hops}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
 
   if (r.chains.length > 0) {
     html += `<div class="section-card"><h3>Redirect Chains</h3>
@@ -1449,7 +1499,11 @@ function renderRedirects(analysis) {
       </tr>`).join('')}</tbody></table></div>`;
   }
 
-  $('#redirectsContent').innerHTML = exportBtn('redirects') + html;
+  const exportRow = `<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px">
+    ${exportBtnInner('redirect-params', 'Export Param Check')}
+    ${exportBtnInner('redirects', 'Export Redirects')}
+  </div>`;
+  $('#redirectsContent').innerHTML = exportRow + html;
 }
 
 // ── Content ──
@@ -3395,13 +3449,16 @@ function renderSummary(analysis) {
 
 function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function truncate(s, len) { s = s || ''; return s.length > len ? s.substring(0, len) + '...' : s; }
-function exportBtn(section) {
+function exportBtn(section, label = 'Export to Excel') {
   return `<div style="display:flex;justify-content:flex-end;margin-bottom:12px">
-    <button onclick="exportSection('${section}')" style="display:inline-flex;align-items:center;gap:6px;background:#1d6f42;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s" onmouseover="this.style.background='#238d53'" onmouseout="this.style.background='#1d6f42'">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 17 15 14"/></svg>
-      Export to Excel
-    </button>
+    ${exportBtnInner(section, label)}
   </div>`;
+}
+function exportBtnInner(section, label = 'Export to Excel') {
+  return `<button onclick="exportSection('${section}')" style="display:inline-flex;align-items:center;gap:6px;background:#1d6f42;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s" onmouseover="this.style.background='#238d53'" onmouseout="this.style.background='#1d6f42'">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 17 15 14"/></svg>
+      ${label}
+    </button>`;
 }
 function exportSection(section) {
   if (!currentCrawlId) return;
