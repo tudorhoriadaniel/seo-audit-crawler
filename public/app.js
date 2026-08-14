@@ -64,6 +64,7 @@ $$('.nav-link').forEach(link => {
     if (view === 'externallinks') loadExternalLinks();
     if (view === 'notfound') loadNotFoundView();
     if (view === 'aivisibility') loadAiVisibilityView();
+    if (view === 'genai') loadGenAiView();
   });
 });
 
@@ -3448,6 +3449,161 @@ async function loadAiVisHistory(domain) {
         <td>${r.error ? `<span class="badge badge-warning" title="${esc(r.error)}">error</span>` : r.cited ? `<span class="badge badge-success">cited · #${r.position}</span>` : '<span class="badge badge-danger">not cited</span>'}</td>
       </tr>`).join('')}</tbody></table></div>`;
   } catch { /* history is best-effort */ }
+}
+
+// ── GenAI Performance (GSC "Generative AI features" report analysis) ──
+let _genaiRows = [];
+
+async function loadGenAiView() {
+  const el = $('#genaiContent');
+  if (!el.dataset.ready) {
+    el.dataset.ready = '1';
+    el.innerHTML = `
+      <div class="section-card"><p style="color:var(--text-muted);font-size:13px;margin:0">
+        Google Search Console's <strong>Performance → Generative AI features</strong> report shows which pages appear in AI Overviews / AI Mode — but hides the queries.
+        Import that report here: the tool joins it with your crawl data and your regular GSC search queries, <strong>predicts the AI queries each page likely appears for</strong>,
+        and generates concrete content edits for the low-impression pages so they get shown more often.</p></div>
+
+      <div class="section-card"><h3>1 · Import the Generative AI report</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin-bottom:10px">In GSC: Performance → Generative AI features → <strong>Export</strong> (Excel or CSV, the Pages table) — or just copy-paste the table below.</p>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+          <input type="file" id="genaiFile" accept=".csv,.xlsx,.xls">
+        </div>
+        <textarea id="genaiPaste" rows="5" style="width:100%;box-sizing:border-box" placeholder="…or paste rows here, one per line, e.g.&#10;https://www.example.ch/fr/page.html	12,065&#10;https://www.example.ch/de/seite.html	6,269"></textarea>
+        <div style="margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn" id="genaiParsePaste">Parse Pasted Text</button>
+          <span id="genaiParseStatus" style="font-size:13px;color:var(--text-muted)"></span>
+        </div>
+      </div>
+
+      <div class="section-card"><h3>2 · Analyze</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin-bottom:10px">Uses your latest crawl of the domain for content signals, your connected GSC account for real search queries (if available), and Claude for query predictions and suggestions.</p>
+        <button class="btn btn-primary" id="genaiAnalyze" disabled>Analyze Low Performers</button>
+        <span id="genaiRunStatus" style="margin-left:10px;font-size:13px;color:var(--text-muted)"></span>
+      </div>
+
+      <div id="genaiResults"></div>`;
+
+    $('#genaiFile').addEventListener('change', genaiHandleFile);
+    $('#genaiParsePaste').addEventListener('click', genaiHandlePaste);
+    $('#genaiAnalyze').addEventListener('click', genaiRunAnalysis);
+  }
+
+  // Show the previous analysis for the current domain, if one exists
+  const raw = $('#urlInput')?.value?.trim();
+  if (raw) {
+    try {
+      const domain = new URL(raw.startsWith('http') ? raw : 'https://' + raw).hostname.replace(/^www\./, '');
+      const data = await fetch('/api/genai/last?domain=' + encodeURIComponent(domain)).then(r => r.json());
+      if (data.result && !$('#genaiResults').innerHTML) renderGenAiResults(data.result, true);
+    } catch { /* no previous analysis */ }
+  }
+}
+
+function genaiSetRows(rows) {
+  _genaiRows = rows;
+  $('#genaiParseStatus').textContent = `${rows.length} page(s) loaded — top: ${rows[0].url} (${rows[0].impressions.toLocaleString()} impressions)`;
+  $('#genaiAnalyze').disabled = rows.length === 0;
+}
+
+async function genaiHandleFile(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  const type = file.name.toLowerCase().endsWith('.xlsx') ? 'xlsx' : file.name.toLowerCase().endsWith('.xls') ? 'xls' : 'csv';
+  $('#genaiParseStatus').textContent = 'Parsing…';
+  try {
+    const res = await fetch('/api/genai/parse-report?type=' + type, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' },
+      body: await file.arrayBuffer()
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    genaiSetRows(data.rows);
+  } catch (err) {
+    $('#genaiParseStatus').textContent = 'Error: ' + err.message;
+  }
+  e.target.value = '';
+}
+
+async function genaiHandlePaste() {
+  const text = $('#genaiPaste').value;
+  if (!text.trim()) return $('#genaiParseStatus').textContent = 'Paste some rows first.';
+  try {
+    const res = await fetch('/api/genai/parse-paste', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    genaiSetRows(data.rows);
+  } catch (err) {
+    $('#genaiParseStatus').textContent = 'Error: ' + err.message;
+  }
+}
+
+async function genaiRunAnalysis() {
+  const btn = $('#genaiAnalyze');
+  const status = $('#genaiRunStatus');
+  btn.disabled = true;
+  status.textContent = 'Analyzing — joining crawl data, fetching GSC queries, asking Claude… this can take 1–3 minutes.';
+  try {
+    const res = await fetch('/api/genai/analyze', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows: _genaiRows })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    status.textContent = 'Done ✓';
+    renderGenAiResults(data, false);
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+  } finally { btn.disabled = false; }
+}
+
+function renderGenAiResults(r, fromCache) {
+  const t = r.totals || {};
+  let html = fromCache
+    ? `<div class="section-card" style="border-left:4px solid var(--info,#3b82f6)"><p style="font-size:13px;margin:0;color:var(--text-muted)">Showing the last analysis for <strong>${esc(r.domain)}</strong> from ${esc(String(r.createdAt || '').slice(0, 16).replace('T', ' '))}. Import a fresh report above to re-run.</p></div>`
+    : '';
+
+  html += `<div class="stats-grid">
+    ${statCard('Pages in GenAI Report', t.pages ?? '—', 'info')}
+    ${statCard('Total AI Impressions', (t.impressions ?? 0).toLocaleString(), '')}
+    ${statCard('Low Performers Analyzed', (r.lowPerformers || []).length, 'warning')}
+    ${statCard('Data Sources', [r.crawlUsed ? 'crawl' : null, r.gscQueriesUsed ? 'GSC queries' : null, 'Claude'].filter(Boolean).join(' + '), 'success')}
+  </div>`;
+
+  if (!r.crawlUsed) {
+    html += `<div class="section-card" style="border-left:4px solid var(--warning)"><p style="font-size:13px;margin:0">No completed crawl of <strong>${esc(r.domain)}</strong> was found — suggestions are based on URLs and GSC queries only. <strong>Crawl the site first</strong> for much more specific recommendations.</p></div>`;
+  }
+
+  html += `<div class="section-card"><h3>🏆 Top Performers &amp; What They Share</h3>
+    <table><thead><tr><th>Page</th><th>AI Impressions</th></tr></thead>
+    <tbody>${(r.winners || []).map(w => `<tr><td>${urlLink(w.url)}${w.title ? `<div style="font-size:11px;color:var(--text-muted)">${esc(w.title)}</div>` : ''}</td><td>${(w.impressions || 0).toLocaleString()}</td></tr>`).join('')}</tbody></table>
+    ${r.winnersInsight ? `<p style="font-size:13px;margin-top:12px;padding:10px;background:var(--bg);border-radius:8px">${esc(r.winnersInsight)}</p>` : ''}</div>`;
+
+  if ((r.overallRecommendations || []).length > 0) {
+    html += `<div class="section-card"><h3>Site-Wide Recommendations</h3>
+      <ol style="margin:0;padding-left:20px;font-size:13px">${r.overallRecommendations.map(x => `<li style="margin:6px 0">${esc(x)}</li>`).join('')}</ol></div>`;
+  }
+
+  for (const p of r.lowPerformers || []) {
+    html += `<div class="section-card" style="border-left:4px solid var(--warning)">
+      <h3 style="font-size:14px">${urlLink(p.url)}</h3>
+      <div style="margin:6px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span class="badge badge-warning">${(p.impressions || 0).toLocaleString()} AI impressions</span>
+        ${p.title ? `<span style="font-size:12px;color:var(--text-muted)">${esc(p.title)}</span>` : ''}
+      </div>
+      ${p.whyLowVisibility ? `<p style="font-size:13px;margin:8px 0"><strong>Why it underperforms:</strong> ${esc(p.whyLowVisibility)}</p>` : ''}
+      ${(p.predictedQueries || []).length ? `<div style="margin:8px 0"><strong style="font-size:13px">Predicted AI queries:</strong><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+        ${p.predictedQueries.map(q => `<span class="badge badge-info" style="white-space:normal;text-align:left">${esc(q)}</span>`).join('')}</div></div>` : ''}
+      ${(p.gscQueries || []).length ? `<div style="font-size:11px;color:var(--text-muted);margin:6px 0">Real search queries: ${p.gscQueries.map(q => esc(q.query)).join(' · ')}</div>` : ''}
+      ${(p.suggestions || []).length ? `<div style="margin-top:10px"><strong style="font-size:13px">Content improvements:</strong>
+        <ul style="margin:6px 0 0;padding-left:20px;font-size:13px">${p.suggestions.map(s => `<li style="margin:6px 0"><strong>${esc(s.title)}</strong> — ${esc(s.detail)}</li>`).join('')}</ul></div>` : ''}
+    </div>`;
+  }
+
+  $('#genaiResults').innerHTML = html;
 }
 
 // ── Search Engines (Google / Bing bots in robots.txt) ──

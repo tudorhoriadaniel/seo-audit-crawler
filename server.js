@@ -1424,6 +1424,157 @@ app.post('/api/ai-visibility/run', async (req, res) => {
   res.json({ domain, results });
 });
 
+// ── GenAI Performance: analyze GSC's "Generative AI features" report ────────
+// GSC shows which pages get impressions in AI Overviews / AI Mode but hides
+// the queries. The user uploads/pastes that report; we join it with crawl data
+// and the page's regular-search GSC queries, then Claude predicts the likely
+// AI queries and writes content suggestions for the low performers.
+const genai = require('./lib/genai-analyzer');
+const GENAI_LAST_PREFIX = 'genai-analysis:';
+
+app.post('/api/genai/parse-report', express.raw({ type: '*/*', limit: '20mb' }), (req, res) => {
+  try {
+    if (!req.body || !req.body.length) return res.status(400).json({ error: 'No file body' });
+    const rows = genai.parseReportFile(req.body, String(req.query.type || '').toLowerCase());
+    if (rows.length === 0) return res.status(400).json({ error: 'No page URLs found in the file — export the report from GSC (Pages table) as CSV or Excel' });
+    res.json({ rows });
+  } catch (e) {
+    res.status(400).json({ error: 'Could not parse file: ' + e.message });
+  }
+});
+
+app.post('/api/genai/parse-paste', (req, res) => {
+  const rows = genai.parsePastedReport(req.body.text || '');
+  if (rows.length === 0) return res.status(400).json({ error: 'No page URLs found — paste lines containing the URL and its impressions' });
+  res.json({ rows });
+});
+
+// Look up a crawled page tolerating a trailing-slash difference
+function findCrawledPage(crawlId, url) {
+  let p = db.getCrawlPageByUrl(crawlId, url);
+  if (!p) p = db.getCrawlPageByUrl(crawlId, url.endsWith('/') ? url.slice(0, -1) : url + '/');
+  return p;
+}
+
+app.post('/api/genai/analyze', async (req, res) => {
+  try {
+    const rows = (req.body.rows || [])
+      .filter(r => r && /^https?:\/\//i.test(String(r.url || '')))
+      .map(r => ({ url: String(r.url).trim(), impressions: parseInt(r.impressions) || 0 }))
+      .sort((a, b) => b.impressions - a.impressions)
+      .slice(0, 200);
+    if (rows.length === 0) return res.status(400).json({ error: 'No report rows provided' });
+
+    const apiKey = getAiVisKeys().anthropic;
+    if (!apiKey) return res.status(400).json({ error: 'No Anthropic API key configured — add one in the AI Visibility tab (or set ANTHROPIC_API_KEY)' });
+
+    const domain = new URL(rows[0].url).hostname.toLowerCase().replace(/^www\./, '');
+
+    // Latest completed crawl of this domain, for page content signals
+    const crawl = db.listCrawls(200).find(c => {
+      if (c.status !== 'completed') return false;
+      try { return (c.domain || new URL(c.url).hostname).toLowerCase().replace(/^www\./, '') === domain; }
+      catch { return false; }
+    });
+
+    // Regular-search queries per page from the connected GSC account (best
+    // grounding signal for AI-query prediction). Optional — skipped silently
+    // if GSC isn't connected or the property isn't accessible.
+    let queriesByPage = new Map();
+    let gscQueriesUsed = false;
+    try {
+      const tokens = db.kvGet(GSC_TOKEN_KEY);
+      if (tokens && tokens.refresh_token) {
+        const valid = await gsc.getValidAccessToken(tokens, (u) => db.kvSet(GSC_TOKEN_KEY, u));
+        const sites = await gsc.listSites(valid.access_token);
+        const site = (sites || []).find(s => {
+          const su = String(s.siteUrl || '');
+          if (su.startsWith('sc-domain:')) { const d = su.slice(10).toLowerCase(); return domain === d || domain.endsWith('.' + d); }
+          try { return new URL(su).hostname.toLowerCase().replace(/^www\./, '') === domain; } catch { return false; }
+        });
+        if (site) {
+          const end = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+          const start = new Date(Date.now() - 93 * 86400000).toISOString().slice(0, 10);
+          const data = await gsc.searchAnalyticsQuery(valid.access_token, site.siteUrl, {
+            startDate: start, endDate: end, dimensions: ['page', 'query'], rowLimit: 25000, startRow: 0
+          });
+          for (const r of data.rows || []) {
+            const [page, query] = r.keys;
+            if (!queriesByPage.has(page)) queriesByPage.set(page, []);
+            queriesByPage.get(page).push({ query, clicks: r.clicks, impressions: r.impressions });
+          }
+          for (const list of queriesByPage.values()) list.sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions);
+          gscQueriesUsed = queriesByPage.size > 0;
+        }
+      }
+    } catch (e) { console.error('genai: GSC queries skipped:', e.message); }
+
+    // Merge crawl + GSC data into each report row
+    const merged = rows.map(r => {
+      const p = crawl ? findCrawledPage(crawl.id, r.url) : null;
+      let headings = [];
+      try { headings = JSON.parse(p?.heading_structure || '[]').map(h => `${h.tag}: ${h.text}`); } catch { /* row */ }
+      let h1 = null;
+      try { h1 = JSON.parse(p?.h1 || '[]')[0] || null; } catch { /* row */ }
+      return {
+        url: r.url, impressions: r.impressions,
+        title: p?.title || null, h1,
+        metaDescription: p?.meta_description || null,
+        htmlLang: p?.html_lang || null,
+        wordCount: p?.word_count ?? null,
+        headings,
+        geoSignals: (() => { try { return JSON.parse(p?.geo_signals || 'null'); } catch { return null; } })(),
+        gscQueries: (queriesByPage.get(r.url) || queriesByPage.get(r.url.replace(/\/$/, '')) || []).slice(0, 12),
+        inCrawl: !!p
+      };
+    });
+
+    // Winners = top 5; low performers = the lowest-impression pages (below
+    // median), capped at 8 to keep the Claude call fast and cheap.
+    const winners = merged.slice(0, Math.min(5, merged.length));
+    const median = merged[Math.floor(merged.length / 2)]?.impressions ?? 0;
+    const lowPool = merged.slice(winners.length).filter(m => m.impressions <= median);
+    const lowPerformers = (lowPool.length ? lowPool : merged.slice(winners.length)).slice(-8).reverse();
+    if (lowPerformers.length === 0) return res.status(400).json({ error: 'Need at least a few pages in the report to compare winners vs low performers' });
+
+    const analysis = await genai.analyzeWithClaude(apiKey, domain, winners, lowPerformers);
+    const byUrl = new Map((analysis.pages || []).map(p => [p.url, p]));
+
+    const result = {
+      domain,
+      crawlId: crawl?.id || null,
+      crawlUsed: !!crawl,
+      gscQueriesUsed,
+      createdAt: new Date().toISOString(),
+      totals: { pages: rows.length, impressions: rows.reduce((s, r) => s + r.impressions, 0), median },
+      winners: winners.map(w => ({ url: w.url, impressions: w.impressions, title: w.title })),
+      winnersInsight: analysis.winnersInsight || '',
+      overallRecommendations: analysis.overallRecommendations || [],
+      lowPerformers: lowPerformers.map(l => {
+        const a = byUrl.get(l.url) || {};
+        return {
+          url: l.url, impressions: l.impressions, title: l.title, inCrawl: l.inCrawl,
+          gscQueries: l.gscQueries.slice(0, 5),
+          predictedQueries: a.predictedQueries || [],
+          whyLowVisibility: a.whyLowVisibility || '',
+          suggestions: a.suggestions || []
+        };
+      })
+    };
+    db.kvSet(GENAI_LAST_PREFIX + domain, result);
+    res.json(result);
+  } catch (e) {
+    console.error('genai analyze failed:', e);
+    res.status(500).json({ error: e.message || 'Analysis failed' });
+  }
+});
+
+app.get('/api/genai/last', (req, res) => {
+  const domain = String(req.query.domain || '').toLowerCase().replace(/^www\./, '').trim();
+  if (!domain) return res.status(400).json({ error: 'domain is required' });
+  res.json({ result: db.kvGet(GENAI_LAST_PREFIX + domain) || null });
+});
+
 app.get('/api/ai-visibility/history', (req, res) => {
   const domain = aiVisibility.normalizeDomain(req.query.domain);
   if (!domain) return res.status(400).json({ error: 'domain is required' });
