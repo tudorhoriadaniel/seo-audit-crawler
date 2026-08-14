@@ -1295,11 +1295,33 @@ function exportIssuesToCSV() {
 // ── Hreflang ──
 function renderHreflang(analysis) {
   const r = analysis.hreflangReport;
+  const missing = r.missingLanguages || [];
   let html = `<div class="stats-grid">
     ${statCard('Pages with Hreflangs', r.pagesWithHreflangs, 'info')}
     ${statCard('Languages Found', r.languages.length, '')}
     ${statCard('Return Link Issues', r.totalReturnLinkIssues, r.totalReturnLinkIssues > 0 ? 'danger' : 'success')}
+    ${statCard('Languages Missing from Hreflang', missing.length, missing.length > 0 ? 'danger' : 'success')}
   </div>`;
+
+  if (missing.length > 0) {
+    const langName = (code) => {
+      try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(code) || code; }
+      catch { return code; }
+    };
+    const noHreflangAtAll = r.pagesWithHreflangs === 0;
+    html += `<div class="section-card" style="border-left:4px solid var(--danger)">
+      <h3>⚠ Languages Not Covered by Hreflang (${missing.length})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px">${noHreflangAtAll
+        ? 'This site serves multiple languages but has no hreflang annotations at all. Search engines cannot connect the language versions of your pages.'
+        : 'These languages exist on the site but are never referenced by any hreflang annotation. Search engines won\'t associate these pages with the other language versions, so the wrong version may rank in those markets.'}</p>
+      <table><thead><tr><th>Language</th><th>Pages</th><th>Detected via</th><th>Example URLs</th></tr></thead>
+      <tbody>${missing.map(m => `<tr>
+        <td style="white-space:nowrap"><span class="badge badge-danger">${esc(m.lang)}</span> ${esc(langName(m.lang))}</td>
+        <td>${m.pageCount}</td>
+        <td style="font-size:12px;color:var(--text-muted)">${[m.sources?.urlPrefix ? `URL prefix (${m.sources.urlPrefix})` : '', m.sources?.htmlLang ? `&lt;html lang&gt; (${m.sources.htmlLang})` : ''].filter(Boolean).join(', ')}</td>
+        <td style="font-size:12px">${(m.exampleUrls || []).slice(0, 3).map(u => `<div style="margin:2px 0">${urlLink(u)}</div>`).join('')}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
 
   if (r.languages.length > 0) {
     html += `<div class="section-card"><h3>Languages</h3><div style="display:flex;gap:8px;flex-wrap:wrap">
