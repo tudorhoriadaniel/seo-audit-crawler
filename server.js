@@ -1449,6 +1449,60 @@ app.post('/api/genai/parse-paste', (req, res) => {
   res.json({ rows });
 });
 
+// Resolve the connected GSC property that matches a domain, or null.
+async function resolveGscSite(domain) {
+  const tokens = db.kvGet(GSC_TOKEN_KEY);
+  if (!tokens || !tokens.refresh_token) return null;
+  const valid = await gsc.getValidAccessToken(tokens, (u) => db.kvSet(GSC_TOKEN_KEY, u));
+  const sites = await gsc.listSites(valid.access_token);
+  const site = (sites || []).find(s => {
+    const su = String(s.siteUrl || '');
+    if (su.startsWith('sc-domain:')) { const d = su.slice(10).toLowerCase(); return domain === d || domain.endsWith('.' + d); }
+    try { return new URL(su).hostname.toLowerCase().replace(/^www\./, '') === domain; } catch { return false; }
+  });
+  return site ? { site, accessToken: valid.access_token } : null;
+}
+
+// Attempt to pull the Generative AI report through the Search Console API.
+// As of Aug 2026 Google exposes this data only in the GSC dashboard (launched
+// June 2026, no API searchType yet) — but the endpoint probes for it on every
+// call, so the day Google opens API access the button starts working without
+// a code change. Until then it returns supported:false with a clear message.
+app.post('/api/genai/fetch-gsc', async (req, res) => {
+  try {
+    const domain = String(req.body.domain || '').toLowerCase().replace(/^www\./, '').trim();
+    if (!domain) return res.status(400).json({ error: 'domain is required' });
+    const resolved = await resolveGscSite(domain);
+    if (!resolved) {
+      return res.json({ supported: false, message: 'Search Console is not connected (or no property matches ' + domain + '). Connect it in the Search Console tab.' });
+    }
+    const end = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+    const start = new Date(Date.now() - 93 * 86400000).toISOString().slice(0, 10);
+    // Candidate searchType values Google might use when API access opens
+    for (const type of ['generativeAi', 'generative_ai', 'aiOverview']) {
+      try {
+        const data = await gsc.searchAnalyticsQuery(resolved.accessToken, resolved.site.siteUrl, {
+          startDate: start, endDate: end, dimensions: ['page'], type, rowLimit: 1000, startRow: 0
+        });
+        const rows = (data.rows || [])
+          .map(r => ({ url: r.keys[0], impressions: Math.round(r.impressions || 0) }))
+          .sort((a, b) => b.impressions - a.impressions);
+        return res.json({ supported: true, type, rows });
+      } catch (e) {
+        const msg = e.response?.data?.error?.message || '';
+        if (!/invalid|unsupported|bad request|type/i.test(msg) && e.response?.status !== 400) throw e;
+        // 400 on this type value → try the next candidate
+      }
+    }
+    res.json({
+      supported: false,
+      message: 'Google does not expose the Generative AI report through the Search Console API yet (dashboard-only since June 2026). Use Export or paste for now — this button will start working automatically once Google opens API access.'
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data?.error?.message || e.message });
+  }
+});
+
 // Look up a crawled page tolerating a trailing-slash difference
 function findCrawledPage(crawlId, url) {
   let p = db.getCrawlPageByUrl(crawlId, url);
@@ -1483,29 +1537,20 @@ app.post('/api/genai/analyze', async (req, res) => {
     let queriesByPage = new Map();
     let gscQueriesUsed = false;
     try {
-      const tokens = db.kvGet(GSC_TOKEN_KEY);
-      if (tokens && tokens.refresh_token) {
-        const valid = await gsc.getValidAccessToken(tokens, (u) => db.kvSet(GSC_TOKEN_KEY, u));
-        const sites = await gsc.listSites(valid.access_token);
-        const site = (sites || []).find(s => {
-          const su = String(s.siteUrl || '');
-          if (su.startsWith('sc-domain:')) { const d = su.slice(10).toLowerCase(); return domain === d || domain.endsWith('.' + d); }
-          try { return new URL(su).hostname.toLowerCase().replace(/^www\./, '') === domain; } catch { return false; }
+      const resolved = await resolveGscSite(domain);
+      if (resolved) {
+        const end = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+        const start = new Date(Date.now() - 93 * 86400000).toISOString().slice(0, 10);
+        const data = await gsc.searchAnalyticsQuery(resolved.accessToken, resolved.site.siteUrl, {
+          startDate: start, endDate: end, dimensions: ['page', 'query'], rowLimit: 25000, startRow: 0
         });
-        if (site) {
-          const end = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
-          const start = new Date(Date.now() - 93 * 86400000).toISOString().slice(0, 10);
-          const data = await gsc.searchAnalyticsQuery(valid.access_token, site.siteUrl, {
-            startDate: start, endDate: end, dimensions: ['page', 'query'], rowLimit: 25000, startRow: 0
-          });
-          for (const r of data.rows || []) {
-            const [page, query] = r.keys;
-            if (!queriesByPage.has(page)) queriesByPage.set(page, []);
-            queriesByPage.get(page).push({ query, clicks: r.clicks, impressions: r.impressions });
-          }
-          for (const list of queriesByPage.values()) list.sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions);
-          gscQueriesUsed = queriesByPage.size > 0;
+        for (const r of data.rows || []) {
+          const [page, query] = r.keys;
+          if (!queriesByPage.has(page)) queriesByPage.set(page, []);
+          queriesByPage.get(page).push({ query, clicks: r.clicks, impressions: r.impressions });
         }
+        for (const list of queriesByPage.values()) list.sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions);
+        gscQueriesUsed = queriesByPage.size > 0;
       }
     } catch (e) { console.error('genai: GSC queries skipped:', e.message); }
 
@@ -1546,6 +1591,9 @@ app.post('/api/genai/analyze', async (req, res) => {
       crawlUsed: !!crawl,
       gscQueriesUsed,
       createdAt: new Date().toISOString(),
+      // Full imported report — used by the AI Readiness tab to cross-reference
+      // GEO scores with actual generative-AI impressions per page
+      rows,
       totals: { pages: rows.length, impressions: rows.reduce((s, r) => s + r.impressions, 0), median },
       winners: winners.map(w => ({ url: w.url, impressions: w.impressions, title: w.title })),
       winnersInsight: analysis.winnersInsight || '',

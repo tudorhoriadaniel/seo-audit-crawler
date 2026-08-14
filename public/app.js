@@ -3226,6 +3226,9 @@ function renderAiReadiness(analysis) {
     a per-page GEO content score (answerability · extractability · citation-worthiness), and E-E-A-T entity signals.
     Pair this with the <strong>AI Bots</strong> tab (robots.txt access) and the <strong>AI Visibility</strong> tab (actual citations in AI answers).</p></div>`;
 
+  // Async cross-reference with the imported GSC Generative AI report
+  html += `<div id="aireadinessGenai"></div>`;
+
   // Snippet-blocked pages — hard exclusion from AI Overviews
   if (r.snippetBlocked.length > 0) {
     html += `<div class="section-card" style="border-left:4px solid var(--danger)">
@@ -3302,6 +3305,52 @@ function renderAiReadiness(analysis) {
   }
 
   $('#aireadinessContent').innerHTML = html;
+  annotateAiReadinessWithGenAi(geo);
+}
+
+// Cross-reference GEO scores with the imported GSC Generative AI report:
+// pages that score well but get zero AI impressions are the top opportunities.
+async function annotateAiReadinessWithGenAi(geo) {
+  const target = $('#aireadinessGenai');
+  if (!target || !geo?.pages?.length) return;
+  let domain = '';
+  try { domain = new URL(geo.pages[0].url).hostname.replace(/^www\./, ''); } catch { return; }
+  let result = null;
+  try {
+    const data = await fetch('/api/genai/last?domain=' + encodeURIComponent(domain)).then(r => r.json());
+    result = data.result;
+  } catch { return; }
+  if (!result?.rows?.length) return;
+
+  const impByUrl = new Map();
+  for (const r of result.rows) {
+    impByUrl.set(r.url.replace(/\/$/, ''), r.impressions);
+  }
+  const lookup = (u) => impByUrl.get(u.replace(/\/$/, ''));
+
+  const invisible = geo.pages
+    .filter(p => p.score >= 55 && !lookup(p.url))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 20);
+  const visible = geo.pages.filter(p => lookup(p.url) != null);
+
+  target.innerHTML = `<div class="section-card" style="border-left:4px solid var(--info,#3b82f6)">
+    <h3>💡 Citable but Invisible — GEO score vs GSC Generative AI report</h3>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">
+      Cross-referenced with your imported Generative AI report for <strong>${esc(result.domain)}</strong>
+      (${result.rows.length} pages, ${esc(String(result.createdAt || '').slice(0, 10))}):
+      ${visible.length} scored page(s) already appear in AI results.
+      These pages score well for AI citability but got <strong>no generative-AI impressions</strong> — likely the fastest wins.
+      Analyze them in the <strong>GenAI Performance</strong> tab or verify with <strong>AI Visibility</strong>.</p>
+    ${invisible.length === 0
+      ? '<p style="font-size:13px;color:var(--text-muted)">No gap found — every well-scoring page already appears in the report.</p>'
+      : `<table><thead><tr><th>Page</th><th>GEO Score</th><th>AI Impressions</th></tr></thead>
+        <tbody>${invisible.map(p => `<tr>
+          <td>${urlLink(p.url)}</td>
+          <td><span class="badge badge-${p.score >= 70 ? 'success' : 'warning'}">${p.score}</span></td>
+          <td><span class="badge badge-danger">0 — not in report</span></td>
+        </tr>`).join('')}</tbody></table>`}
+  </div>`;
 }
 
 // ── AI Visibility (citations in AI answers) ──
@@ -3333,6 +3382,7 @@ async function loadAiVisibilityView() {
           <input type="text" id="aivisDomain" placeholder="example.com" style="flex:1;min-width:200px">
         </div>
         <textarea id="aivisQueries" rows="4" style="width:100%;box-sizing:border-box" placeholder="One query per line — the questions your customers ask AI, e.g.&#10;best crm for small business&#10;how to fix hreflang errors"></textarea>
+        <div id="aivisPredicted" style="margin-top:6px"></div>
         <div id="aivisEngines" style="display:flex;gap:16px;margin:10px 0;flex-wrap:wrap"></div>
         <button class="btn btn-primary" id="aivisRun">Run Visibility Check</button>
         <span id="aivisRunStatus" style="margin-left:10px;font-size:13px;color:var(--text-muted)"></span>
@@ -3364,7 +3414,29 @@ async function loadAiVisibilityView() {
     const raw = $('#urlInput')?.value?.trim();
     if (raw) { try { dEl.value = new URL(raw.startsWith('http') ? raw : 'https://' + raw).hostname.replace(/^www\./, ''); } catch { /* leave empty */ } }
   }
-  if (dEl?.value) loadAiVisHistory(dEl.value);
+  if (dEl?.value) {
+    loadAiVisHistory(dEl.value);
+    offerPredictedQueries(dEl.value);
+  }
+}
+
+// If a GenAI Performance analysis exists for this domain, offer its predicted
+// AI queries as one-click input — closing the loop: GSC report → predictions →
+// verify against real engines here.
+async function offerPredictedQueries(domain) {
+  const box = $('#aivisPredicted');
+  if (!box) return;
+  try {
+    const data = await fetch('/api/genai/last?domain=' + encodeURIComponent(domain.replace(/^www\./, ''))).then(r => r.json());
+    const queries = [...new Set((data.result?.lowPerformers || []).flatMap(p => p.predictedQueries || []))].slice(0, 10);
+    if (queries.length === 0) { box.innerHTML = ''; return; }
+    box.innerHTML = `<button class="btn" id="aivisUsePredicted" style="font-size:12px">✨ Load ${queries.length} predicted queries from GenAI Performance analysis</button>`;
+    $('#aivisUsePredicted').addEventListener('click', () => {
+      const ta = $('#aivisQueries');
+      const existing = ta.value.split('\n').map(q => q.trim()).filter(Boolean);
+      ta.value = [...new Set([...existing, ...queries])].join('\n');
+    });
+  } catch { box.innerHTML = ''; }
 }
 
 async function saveAiVisKeys() {
@@ -3467,6 +3539,8 @@ async function loadGenAiView() {
       <div class="section-card"><h3>1 · Import the Generative AI report</h3>
         <p style="color:var(--text-muted);font-size:13px;margin-bottom:10px">In GSC: Performance → Generative AI features → <strong>Export</strong> (Excel or CSV, the Pages table) — or just copy-paste the table below.</p>
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+          <button class="btn" id="genaiFetchGsc" title="Pull the report through your connected Search Console account">⚡ Fetch from GSC</button>
+          <span style="color:var(--text-muted);font-size:13px">or</span>
           <input type="file" id="genaiFile" accept=".csv,.xlsx,.xls">
         </div>
         <textarea id="genaiPaste" rows="5" style="width:100%;box-sizing:border-box" placeholder="…or paste rows here, one per line, e.g.&#10;https://www.example.ch/fr/page.html	12,065&#10;https://www.example.ch/de/seite.html	6,269"></textarea>
@@ -3487,6 +3561,7 @@ async function loadGenAiView() {
     $('#genaiFile').addEventListener('change', genaiHandleFile);
     $('#genaiParsePaste').addEventListener('click', genaiHandlePaste);
     $('#genaiAnalyze').addEventListener('click', genaiRunAnalysis);
+    $('#genaiFetchGsc').addEventListener('click', genaiFetchFromGsc);
   }
 
   // Show the previous analysis for the current domain, if one exists
@@ -3523,6 +3598,31 @@ async function genaiHandleFile(e) {
     $('#genaiParseStatus').textContent = 'Error: ' + err.message;
   }
   e.target.value = '';
+}
+
+// Attempt an API pull via the connected GSC account. Google currently exposes
+// the Generative AI report only in the dashboard (no API yet) — the server
+// probes on every call, so this starts working the day Google opens access.
+async function genaiFetchFromGsc() {
+  const status = $('#genaiParseStatus');
+  const raw = $('#urlInput')?.value?.trim();
+  let domain = '';
+  try { domain = new URL(raw.startsWith('http') ? raw : 'https://' + raw).hostname.replace(/^www\./, ''); } catch { /* below */ }
+  if (!domain) return status.textContent = 'Type the site URL in the crawl bar above first, so I know which GSC property to query.';
+  status.textContent = 'Checking Search Console API…';
+  try {
+    const res = await fetch('/api/genai/fetch-gsc', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    if (!data.supported) { status.textContent = data.message; return; }
+    if (!data.rows?.length) { status.textContent = 'API responded but returned no Generative AI rows for this property.'; return; }
+    genaiSetRows(data.rows);
+  } catch (e) {
+    status.textContent = 'Fetch failed: ' + e.message;
+  }
 }
 
 async function genaiHandlePaste() {
