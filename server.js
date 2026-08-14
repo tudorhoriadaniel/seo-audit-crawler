@@ -232,7 +232,8 @@ function mapPagesForAnalysis(pages) {
     ogLocale: p.og_locale,
     detectedContentLang: p.detected_content_lang,
     languageMismatch: JSON.parse(p.language_mismatch || 'null'),
-    botChallenge: p.bot_challenge || null
+    botChallenge: p.bot_challenge || null,
+    geoSignals: JSON.parse(p.geo_signals || 'null')
   }));
 }
 
@@ -245,6 +246,7 @@ function buildCrawlAnalysis(crawlId, summary) {
   const resultsForAnalysis = mapPagesForAnalysis(pages);
   const analyzer = new Analyzer(resultsForAnalysis, {
     robotsTxt: summary.robotsTxt,
+    llmsTxt: summary.llmsTxt,
     sitemapData: summary.sitemapData,
     paramCheck: summary.paramCheck,
     botParity: summary.botParity,
@@ -274,6 +276,7 @@ function buildCrawlAnalysis(crawlId, summary) {
     ...summary.stats,
     ...issueMetrics,
     robotsTxt: summary.robotsTxt || null,
+    llmsTxt: summary.llmsTxt || null,
     sitemapData: summary.sitemapData || null,
     paramCheck: summary.paramCheck || null,
     botParity: summary.botParity || null,
@@ -1348,6 +1351,87 @@ app.post('/api/chat/:crawlId', async (req, res) => {
 // Quick status probe so the UI knows whether to show the chat button.
 app.get('/api/chat-status', (req, res) => {
   res.json({ available: !!anthropicClient });
+});
+
+// ── AI Visibility: are we cited in AI answers? ──────────────────────────────
+const aiVisibility = require('./lib/ai-visibility');
+const AI_VIS_KEYS = 'ai-visibility:keys';
+
+function getAiVisKeys() {
+  const stored = db.kvGet(AI_VIS_KEYS) || {};
+  return {
+    anthropic: stored.anthropic || process.env.ANTHROPIC_API_KEY || null,
+    openai: stored.openai || process.env.OPENAI_API_KEY || null,
+    perplexity: stored.perplexity || process.env.PERPLEXITY_API_KEY || null
+  };
+}
+
+// Which engines are usable (never returns the keys themselves)
+app.get('/api/ai-visibility/config', (req, res) => {
+  const keys = getAiVisKeys();
+  res.json({
+    engines: Object.fromEntries(
+      Object.entries(aiVisibility.ENGINES).map(([id, e]) => [id, { label: e.label, configured: !!keys[id] }])
+    )
+  });
+});
+
+// Save/replace API keys. Empty string clears a stored key.
+app.post('/api/ai-visibility/config', (req, res) => {
+  const stored = db.kvGet(AI_VIS_KEYS) || {};
+  for (const k of ['anthropic', 'openai', 'perplexity']) {
+    if (req.body[k] === undefined) continue;
+    const v = String(req.body[k]).trim();
+    if (v) stored[k] = v; else delete stored[k];
+  }
+  db.kvSet(AI_VIS_KEYS, stored);
+  res.json({ ok: true });
+});
+
+// Run a visibility check: queries × engines, persisted for history/trends.
+app.post('/api/ai-visibility/run', async (req, res) => {
+  const domain = aiVisibility.normalizeDomain(req.body.domain);
+  const queries = (req.body.queries || []).map(q => String(q).trim()).filter(Boolean).slice(0, 10);
+  const engines = (req.body.engines || []).filter(e => aiVisibility.ENGINES[e]);
+  if (!domain) return res.status(400).json({ error: 'domain is required' });
+  if (queries.length === 0) return res.status(400).json({ error: 'at least one query is required' });
+  if (engines.length === 0) return res.status(400).json({ error: 'select at least one engine' });
+
+  const keys = getAiVisKeys();
+  const missing = engines.filter(e => !keys[e]);
+  if (missing.length > 0) return res.status(400).json({ error: `No API key configured for: ${missing.join(', ')}` });
+
+  const results = [];
+  for (const query of queries) {
+    // Engines in parallel per query — independent APIs, no rate-limit overlap
+    const perQuery = await Promise.all(engines.map(async (engine) => {
+      try {
+        return await aiVisibility.checkVisibility(engine, keys[engine], query, domain);
+      } catch (e) {
+        const apiMsg = e.response?.data?.error?.message || e.error?.message || e.message;
+        return {
+          engine, engineLabel: aiVisibility.ENGINES[engine].label, query, domain,
+          cited: false, position: null, totalCitations: 0, citations: [],
+          matchedUrl: null, answerExcerpt: '', error: String(apiMsg || 'request failed')
+        };
+      }
+    }));
+    for (const r of perQuery) {
+      try { db.saveAiVisibilityResult(r); } catch (e) { console.error('saveAiVisibilityResult:', e.message); }
+      results.push(r);
+    }
+  }
+  res.json({ domain, results });
+});
+
+app.get('/api/ai-visibility/history', (req, res) => {
+  const domain = aiVisibility.normalizeDomain(req.query.domain);
+  if (!domain) return res.status(400).json({ error: 'domain is required' });
+  const rows = db.getAiVisibilityHistory(domain).map(r => ({
+    ...r,
+    citations: (() => { try { return JSON.parse(r.citations || '[]'); } catch { return []; } })()
+  }));
+  res.json({ domain, results: rows });
 });
 
 // Export

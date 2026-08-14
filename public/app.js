@@ -63,6 +63,7 @@ $$('.nav-link').forEach(link => {
     if (view === 'strategy') loadStrategyView();
     if (view === 'externallinks') loadExternalLinks();
     if (view === 'notfound') loadNotFoundView();
+    if (view === 'aivisibility') loadAiVisibilityView();
   });
 });
 
@@ -234,6 +235,7 @@ function renderAll(analysis) {
   renderSecurity(analysis);
   renderInternalLinks(analysis);
   renderAiBots(analysis);
+  renderAiReadiness(analysis);
   renderSearchEngines(analysis);
   renderSitemaps(analysis);
   renderStatusCodes(analysis);
@@ -2350,6 +2352,7 @@ window.loadCrawl = async function(id) {
   renderSecurity(analysis);
   renderLinks(analysis);
   renderAiBots(analysis);
+  renderAiReadiness(analysis);
   renderSearchEngines(analysis);
   renderSitemaps(analysis);
   renderStatusCodes(analysis);
@@ -3190,6 +3193,261 @@ function renderAiBots(analysis) {
   </div>`;
 
   $('#aibotsContent').innerHTML = html;
+}
+
+// ── AI Readiness (GEO) ──
+function renderAiReadiness(analysis) {
+  const r = analysis.aiReadinessReport;
+  if (!r) {
+    $('#aireadinessContent').innerHTML = `<div class="section-card" style="text-align:center;padding:40px">
+      <div style="font-size:48px;margin-bottom:16px">✨</div>
+      <h3>No AI Readiness Data</h3>
+      <p style="color:var(--text-muted)">This crawl was made before the AI Readiness feature. Re-crawl the site to see GEO analysis.</p>
+    </div>`;
+    return;
+  }
+
+  const geo = r.geo || { scoredPages: 0, avgScore: null, pages: [] };
+  const scoreColor = (s) => s >= 70 ? 'success' : s >= 45 ? 'warning' : 'danger';
+  const scoreBadge = (s) => `<span class="badge badge-${s >= 70 ? 'success' : s >= 45 ? 'warning' : 'danger'}">${s}</span>`;
+
+  let html = `<div class="stats-grid">
+    ${statCard('Avg GEO Score', geo.avgScore != null ? geo.avgScore + '/100' : '—', geo.avgScore != null ? scoreColor(geo.avgScore) : '')}
+    ${statCard('Snippet-Blocked Pages', r.snippetBlocked.length, r.snippetBlocked.length > 0 ? 'danger' : 'success')}
+    ${statCard('JS-Dependent Pages', r.jsDependent.length, r.jsDependent.length > 0 ? 'warning' : 'success')}
+    ${statCard('llms.txt', r.llmsTxt.found ? 'Found' : 'Missing', r.llmsTxt.found ? 'success' : 'warning')}
+  </div>`;
+
+  // What is this tab
+  html += `<div class="section-card"><p style="color:var(--text-muted);font-size:13px;margin:0">
+    How well this site can be <strong>crawled, retrieved and cited by AI answer engines</strong> — Google AI Overviews, ChatGPT, Perplexity, Claude.
+    Checks: snippet directives that exclude pages from AI Overviews, content that needs JavaScript (AI crawlers don't render JS), the llms.txt standard,
+    a per-page GEO content score (answerability · extractability · citation-worthiness), and E-E-A-T entity signals.
+    Pair this with the <strong>AI Bots</strong> tab (robots.txt access) and the <strong>AI Visibility</strong> tab (actual citations in AI answers).</p></div>`;
+
+  // Snippet-blocked pages — hard exclusion from AI Overviews
+  if (r.snippetBlocked.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--danger)">
+      <h3 style="color:var(--danger)">Excluded from Google AI Overviews (${r.snippetBlocked.length})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These pages carry <code>nosnippet</code> or <code>max-snippet:0</code>. Google builds AI Overviews from snippets, so these pages can never appear in them. Remove the directive if that's not intentional.</p>
+      <table><thead><tr><th>Page</th><th>Directive</th><th>Source</th></tr></thead>
+      <tbody>${r.snippetBlocked.map(s => `<tr><td>${urlLink(s.url)}</td><td><span class="badge badge-danger">${esc(s.directive)}</span></td><td>${esc(s.source)}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  if (r.snippetLimited.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--warning)">
+      <h3 style="color:var(--warning)">Snippet-Limited Pages (${r.snippetLimited.length})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">A small <code>max-snippet</code> cap or <code>data-nosnippet</code> blocks limit how much text AI systems may quote from these pages.</p>
+      <table><thead><tr><th>Page</th><th>Restriction</th></tr></thead>
+      <tbody>${r.snippetLimited.map(s => `<tr><td>${urlLink(s.url)}</td><td>${s.maxSnippet != null ? `max-snippet:${s.maxSnippet}` : `${s.dataNosnippet} data-nosnippet block(s)`}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+
+  // JS-dependent pages
+  if (r.jsDependent.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--warning)">
+      <h3 style="color:var(--warning)">Content Likely Requires JavaScript (${r.jsDependent.length})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Almost no text in the raw HTML. GPTBot, ClaudeBot and PerplexityBot don't execute JavaScript — for them these pages are effectively empty. Server-side render or pre-render the main content.</p>
+      <table><thead><tr><th>Page</th><th>Words in raw HTML</th><th>Text ratio</th></tr></thead>
+      <tbody>${r.jsDependent.slice(0, 200).map(j => `<tr><td>${urlLink(j.url)}</td><td>${j.wordCount}</td><td>${esc(String(j.textRatio))}%</td></tr>`).join('')}</tbody></table></div>`;
+  }
+
+  // llms.txt
+  html += `<div class="section-card" ${r.llmsTxt.found ? '' : 'style="border-left:4px solid var(--warning)"'}>
+    <h3>llms.txt ${r.llmsTxt.found ? '<span class="badge badge-success">found</span>' : '<span class="badge badge-warning">missing</span>'}</h3>
+    ${r.llmsTxt.found
+      ? `<p style="color:var(--text-muted);font-size:13px;margin-bottom:8px">${urlLink(r.llmsTxt.url)} (${(r.llmsTxt.size / 1024).toFixed(1)} KB)${r.llmsTxt.fullFound ? ` · llms-full.txt also present (${(r.llmsTxt.fullSize / 1024).toFixed(1)} KB)` : ''}</p>
+         ${r.llmsTxt.content ? `<pre style="background:var(--bg);padding:16px;border-radius:8px;overflow-x:auto;font-size:12px;max-height:300px;overflow-y:auto;white-space:pre-wrap">${esc(r.llmsTxt.content)}</pre>` : ''}`
+      : `<p style="color:var(--text-muted);font-size:13px">No <code>/llms.txt</code> found. It's an emerging standard — a markdown file that tells AI assistants what the site is about and which pages matter. Cheap to add, and AI crawlers from Anthropic, Perplexity and others already read it.</p>`}
+  </div>`;
+
+  // E-E-A-T / entity signals
+  const e = r.eeat || {};
+  const yn = (ok, labelOk, labelBad) => ok ? `<span class="badge badge-success">${labelOk}</span>` : `<span class="badge badge-warning">${labelBad}</span>`;
+  html += `<div class="section-card"><h3>E-E-A-T &amp; Entity Signals</h3>
+    <table><tbody>
+      <tr><td>Organization schema with <code>sameAs</code></td><td>${yn(e.orgSchemaWithSameAs, `yes · ${e.maxSameAsLinks} link(s)`, 'missing')}</td><td style="font-size:12px;color:var(--text-muted);white-space:normal">sameAs links (Wikipedia, Wikidata, LinkedIn…) are how AI engines disambiguate your brand as an entity</td></tr>
+      <tr><td>Articles with author schema</td><td>${e.articleCount > 0 ? `${e.articlesWithAuthor}/${e.articleCount}` : '—'}</td><td style="font-size:12px;color:var(--text-muted);white-space:normal">authored content carries more weight in AI answer selection</td></tr>
+      <tr><td>FAQ / QA schema pages</td><td>${e.faqPageCount}</td><td style="font-size:12px;color:var(--text-muted);white-space:normal">FAQ markup maps 1:1 to the questions people ask AI assistants</td></tr>
+      <tr><td>HowTo schema pages</td><td>${e.howtoPageCount}</td><td style="font-size:12px;color:var(--text-muted);white-space:normal"></td></tr>
+      <tr><td>About page</td><td>${yn(e.hasAboutPage, 'found', 'not found')}</td><td style="font-size:12px;color:var(--text-muted);white-space:normal">basic trust signal for both users and AI systems</td></tr>
+      <tr><td>Contact page</td><td>${yn(e.hasContactPage, 'found', 'not found')}</td><td style="font-size:12px;color:var(--text-muted);white-space:normal"></td></tr>
+    </tbody></table></div>`;
+
+  // Per-page GEO scores (worst first)
+  if (geo.pages.length > 0) {
+    const chip = (ok, label) => `<span class="badge ${ok ? 'badge-success' : ''}" style="${ok ? '' : 'background:var(--bg-hover);color:var(--text-muted);'}margin:1px">${label}</span>`;
+    html += `<div class="section-card"><h3>GEO Content Score by Page (${geo.scoredPages}${geo.scoredPages > geo.pages.length ? ` — showing ${geo.pages.length} lowest` : ''}, lowest first)</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Score 0–100: <strong>Answerability</strong> (question headings, direct-answer paragraph after H1, heading density) + <strong>Extractability</strong> (lists, tables, short paragraphs — LLMs cite passages, not pages) + <strong>Citation-worthiness</strong> (statistics, outbound sources, dates, quotes — the factors the Princeton GEO study found lift generative-engine visibility). Only pages with 150+ words are scored.</p>
+      <table><thead><tr><th>Page</th><th>Score</th><th>Answer</th><th>Extract</th><th>Cite</th><th>Signals</th></tr></thead>
+      <tbody>${geo.pages.map(p => `<tr>
+        <td>${urlLink(p.url)}</td>
+        <td>${scoreBadge(p.score)}</td>
+        <td>${p.answerability}/35</td>
+        <td>${p.extractability}/30</td>
+        <td>${p.citations}/35</td>
+        <td style="font-size:11px;white-space:normal;max-width:340px">
+          ${chip(p.questionHeadings > 0, `❓ ${p.questionHeadings} question heading(s)`)}
+          ${chip(p.firstParagraphWords >= 20 && p.firstParagraphWords <= 120, `💬 answer para ${p.firstParagraphWords}w`)}
+          ${chip(p.lists > 0, `📋 ${p.lists} list(s)`)}
+          ${chip(p.tables > 0, `▦ ${p.tables} table(s)`)}
+          ${chip(p.longParagraphs === 0, p.longParagraphs === 0 ? 'no text walls' : `${p.longParagraphs} wall(s) of text`)}
+          ${chip(p.numbersPer1000Words >= 10, `# ${p.numbersPer1000Words} stats/1k words`)}
+          ${chip(p.externalLinks >= 2, `🔗 ${p.externalLinks} outbound`)}
+          ${chip(p.hasDates, p.hasDates ? 'dated' : 'no dates')}
+        </td>
+      </tr>`).join('')}</tbody></table></div>`;
+  } else if (!r.hasGeoSignals) {
+    html += `<div class="section-card" style="text-align:center;padding:30px">
+      <p style="color:var(--text-muted)">This crawl predates GEO signal extraction — <strong>re-crawl the site</strong> to get per-page GEO scores, snippet checks and E-E-A-T analysis.</p></div>`;
+  }
+
+  $('#aireadinessContent').innerHTML = html;
+}
+
+// ── AI Visibility (citations in AI answers) ──
+let _aiVisConfig = { engines: {} };
+
+async function loadAiVisibilityView() {
+  const el = $('#aivisibilityContent');
+  try {
+    _aiVisConfig = await fetch('/api/ai-visibility/config').then(r => r.json());
+  } catch { _aiVisConfig = { engines: {} }; }
+
+  if (!el.dataset.ready) {
+    el.dataset.ready = '1';
+    el.innerHTML = `
+      <div class="section-card"><p style="color:var(--text-muted);font-size:13px;margin:0">
+        Ask real AI answer engines your target questions — with live web search — and check whether <strong>your domain is among the cited sources</strong>.
+        This is rank tracking for AI answers: run the same queries over time to see if your GEO optimizations (AI Readiness tab) move you into the citations.</p></div>
+
+      <div class="section-card"><h3>API Keys</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">Keys are stored only in this tool's local database and used server-side to query each engine. Configure at least one.</p>
+        <div id="aivisKeyRows"></div>
+        <button class="btn" id="aivisSaveKeys" style="margin-top:8px">Save Keys</button>
+        <span id="aivisKeyStatus" style="margin-left:10px;font-size:13px;color:var(--text-muted)"></span>
+      </div>
+
+      <div class="section-card"><h3>Run a Check</h3>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+          <label>Domain</label>
+          <input type="text" id="aivisDomain" placeholder="example.com" style="flex:1;min-width:200px">
+        </div>
+        <textarea id="aivisQueries" rows="4" style="width:100%;box-sizing:border-box" placeholder="One query per line — the questions your customers ask AI, e.g.&#10;best crm for small business&#10;how to fix hreflang errors"></textarea>
+        <div id="aivisEngines" style="display:flex;gap:16px;margin:10px 0;flex-wrap:wrap"></div>
+        <button class="btn btn-primary" id="aivisRun">Run Visibility Check</button>
+        <span id="aivisRunStatus" style="margin-left:10px;font-size:13px;color:var(--text-muted)"></span>
+      </div>
+
+      <div id="aivisResults"></div>
+      <div id="aivisHistory"></div>`;
+
+    $('#aivisSaveKeys').addEventListener('click', saveAiVisKeys);
+    $('#aivisRun').addEventListener('click', runAiVisibility);
+  }
+
+  // Key rows + engine checkboxes reflect current config on every visit
+  $('#aivisKeyRows').innerHTML = Object.entries(_aiVisConfig.engines || {}).map(([id, e]) => `
+    <div style="display:flex;gap:10px;align-items:center;margin:6px 0;flex-wrap:wrap">
+      <span style="min-width:90px">${esc(e.label)}</span>
+      <input type="password" id="aivisKey-${id}" placeholder="${e.configured ? '•••••••• configured — paste to replace' : 'API key'}" style="flex:1;min-width:240px">
+      ${e.configured ? '<span class="badge badge-success">configured</span>' : '<span class="badge" style="background:var(--bg-hover);color:var(--text-muted)">not set</span>'}
+    </div>`).join('');
+
+  $('#aivisEngines').innerHTML = Object.entries(_aiVisConfig.engines || {}).map(([id, e]) => `
+    <label style="display:flex;gap:6px;align-items:center;${e.configured ? '' : 'opacity:.5'}">
+      <input type="checkbox" value="${id}" ${e.configured ? 'checked' : 'disabled'}> ${esc(e.label)}
+    </label>`).join('');
+
+  // Prefill domain from the crawl bar
+  const dEl = $('#aivisDomain');
+  if (dEl && !dEl.value) {
+    const raw = $('#urlInput')?.value?.trim();
+    if (raw) { try { dEl.value = new URL(raw.startsWith('http') ? raw : 'https://' + raw).hostname.replace(/^www\./, ''); } catch { /* leave empty */ } }
+  }
+  if (dEl?.value) loadAiVisHistory(dEl.value);
+}
+
+async function saveAiVisKeys() {
+  const body = {};
+  for (const id of Object.keys(_aiVisConfig.engines || {})) {
+    const v = $(`#aivisKey-${id}`)?.value?.trim();
+    if (v) body[id] = v;
+  }
+  if (Object.keys(body).length === 0) { $('#aivisKeyStatus').textContent = 'Nothing to save — paste a key first.'; return; }
+  $('#aivisKeyStatus').textContent = 'Saving…';
+  try {
+    await fetch('/api/ai-visibility/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    $('#aivisKeyStatus').textContent = 'Saved ✓';
+    loadAiVisibilityView();
+  } catch (e) { $('#aivisKeyStatus').textContent = 'Save failed: ' + e.message; }
+}
+
+async function runAiVisibility() {
+  const domain = $('#aivisDomain').value.trim();
+  const queries = $('#aivisQueries').value.split('\n').map(q => q.trim()).filter(Boolean);
+  const engines = [...$('#aivisEngines').querySelectorAll('input:checked')].map(i => i.value);
+  const status = $('#aivisRunStatus');
+  if (!domain) return status.textContent = 'Enter a domain.';
+  if (queries.length === 0) return status.textContent = 'Enter at least one query.';
+  if (engines.length === 0) return status.textContent = 'Select at least one engine.';
+
+  const btn = $('#aivisRun');
+  btn.disabled = true;
+  status.textContent = `Querying ${engines.length} engine(s) × ${queries.length} quer${queries.length > 1 ? 'ies' : 'y'}… this can take a minute.`;
+  try {
+    const res = await fetch('/api/ai-visibility/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain, queries, engines })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    status.textContent = 'Done ✓';
+    renderAiVisResults(data.results, data.domain);
+    loadAiVisHistory(data.domain);
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+  } finally { btn.disabled = false; }
+}
+
+function renderAiVisResults(results, domain) {
+  const cited = results.filter(r => r.cited);
+  const errored = results.filter(r => r.error);
+  const citedBadge = (r) => r.error
+    ? `<span class="badge badge-warning" title="${esc(r.error)}">error</span>`
+    : r.cited
+      ? `<span class="badge badge-success">cited · #${r.position} of ${r.totalCitations}</span>`
+      : `<span class="badge badge-danger">not cited</span>`;
+  $('#aivisResults').innerHTML = `
+    <div class="stats-grid">
+      ${statCard('Checks Run', results.length, 'info')}
+      ${statCard('Cited', cited.length, cited.length > 0 ? 'success' : 'danger')}
+      ${statCard('Not Cited', results.length - cited.length - errored.length, '')}
+      ${errored.length ? statCard('Errors', errored.length, 'warning') : ''}
+    </div>
+    <div class="section-card"><h3>Results for ${esc(domain)}</h3>
+      <table><thead><tr><th>Query</th><th>Engine</th><th>Result</th><th style="min-width:260px">Cited Sources (top)</th></tr></thead>
+      <tbody>${results.map(r => `<tr>
+        <td style="white-space:normal;max-width:220px">${esc(r.query)}</td>
+        <td>${esc(r.engineLabel)}</td>
+        <td>${citedBadge(r)}${r.matchedUrl ? `<div style="font-size:11px;margin-top:2px">${urlLink(r.matchedUrl)}</div>` : ''}</td>
+        <td style="font-size:11px;white-space:normal">${(r.citations || []).slice(0, 5).map((c, i) => `<div>${i + 1}. ${urlLink(c.url)}</div>`).join('') || '<span style="color:var(--text-muted)">—</span>'}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+}
+
+async function loadAiVisHistory(domain) {
+  try {
+    const data = await fetch('/api/ai-visibility/history?domain=' + encodeURIComponent(domain)).then(r => r.json());
+    const rows = (data.results || []).slice(0, 100);
+    if (rows.length === 0) { $('#aivisHistory').innerHTML = ''; return; }
+    $('#aivisHistory').innerHTML = `<div class="section-card"><h3>History — ${esc(data.domain)} (${rows.length} most recent)</h3>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">Re-run the same queries after optimizing to track movement into AI citations.</p>
+      <table><thead><tr><th>Date</th><th>Query</th><th>Engine</th><th>Result</th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+        <td style="white-space:nowrap;font-size:12px">${esc(String(r.checked_at || '').replace('T', ' ').slice(0, 16))}</td>
+        <td style="white-space:normal;max-width:260px">${esc(r.query)}</td>
+        <td>${esc(r.engine)}</td>
+        <td>${r.error ? `<span class="badge badge-warning" title="${esc(r.error)}">error</span>` : r.cited ? `<span class="badge badge-success">cited · #${r.position}</span>` : '<span class="badge badge-danger">not cited</span>'}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  } catch { /* history is best-effort */ }
 }
 
 // ── Search Engines (Google / Bing bots in robots.txt) ──
