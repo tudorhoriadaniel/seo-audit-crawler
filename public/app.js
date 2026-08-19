@@ -3616,6 +3616,108 @@ function wpAccessRow(label, probe) {
   return `<tr><td>${esc(label)}</td><td><span class="badge badge-danger">${probe.status || 'error'}</span></td><td style="font-size:12px;color:var(--text-muted)">${detail}</td></tr>`;
 }
 
+// A refused AI bot only means something if the browser can still get through at
+// the same moment. If the re-check says otherwise, the site is rate-limiting
+// everyone — most likely triggered by this very scan — and telling someone to
+// go audit their WAF would send them chasing a rule that does not exist.
+function wpUaVerdict(api, restRoot) {
+  if (!api.browser?.ok || api.aiBot?.ok) return '';
+  if (api.rateLimited) {
+    return `<p style="font-size:13px;margin-top:10px;color:var(--text-muted)">
+      The AI-crawler probe was refused, but a browser was refused too on re-check — so this is the site's
+      REST rate limiter (Wordfence and similar plugins throttle <code>/wp-json</code> per IP), <strong>not</strong> a rule
+      aimed at AI crawlers. This scan itself is the likely trigger. Wait a minute and re-run to confirm.</p>`;
+  }
+  return `<p style="font-size:13px;margin-top:10px;color:var(--warning)">
+    The API answered a browser and refused the AI crawler, and the browser still worked on re-check —
+    so this looks like a genuine user-agent rule. Confirm by hand before changing anything:<br>
+    <code style="font-size:12px">curl -sI -A "GPTBot/1.2" ${esc(restRoot || '')}</code></p>`;
+}
+
+// The empty-body finding is only actionable once you know whether the same page
+// serves its text in HTML. It almost always does — page builders render fine to
+// a browser and to every AI crawler, which read HTML and never touch /wp-json.
+// So lead with the check that tells you whether to care, not with a fix.
+function wpRemediation(d) {
+  const empties = (d.items || []).filter(i => i.flag === 'empty');
+  if (empties.length === 0) return '';
+  // Archive-style pages (the Posts page, a shop index) legitimately have no
+  // post_content — a lousy example to hand someone as the copy-paste command.
+  const ARCHIVE_SLUGS = /^(blog|news|articles|shop|store|portfolio|home)$/i;
+  const ex = empties.find(i => i.link && !ARCHIVE_SLUGS.test(i.slug))
+    || empties.find(i => i.link) || empties[0];
+  const host = (() => { try { return new URL(d.site).host; } catch { return 'example.com'; } })();
+  const exUrl = ex.link || `https://${host}/`;
+  const restBase = (d.types || []).find(t => t.slug === ex.type)?.restBase || 'pages';
+
+  const php = `<?php
+/**
+ * Plugin Name: REST API — fill empty content.rendered for page-builder pages
+ * Save as: wp-content/mu-plugins/rest-builder-content.php
+ * (mu-plugins loads automatically — no activation needed. Create the folder if missing.)
+ */
+add_action( 'rest_api_init', function () {
+    foreach ( get_post_types( array( 'show_in_rest' => true ), 'objects' ) as $type ) {
+        add_filter( "rest_prepare_{$type->name}", 'cv_fill_builder_content', 10, 2 );
+    }
+} );
+
+function cv_fill_builder_content( $response, $post ) {
+    $data = $response->get_data();
+    if ( ! isset( $data['content']['rendered'] ) ) {
+        return $response;
+    }
+    // Only touch genuinely empty bodies — never overwrite real content.
+    if ( '' !== trim( wp_strip_all_tags( $data['content']['rendered'] ) ) ) {
+        return $response;
+    }
+    if ( ! class_exists( '\\Elementor\\Plugin' ) ) {
+        return $response;
+    }
+    $document = \\Elementor\\Plugin::$instance->documents->get( $post->ID );
+    if ( ! $document || ! $document->is_built_with_elementor() ) {
+        return $response;
+    }
+    $html = \\Elementor\\Plugin::$instance->frontend->get_builder_content_for_display( $post->ID );
+    if ( is_string( $html ) && '' !== $html ) {
+        $data['content']['rendered'] = $html;
+        $response->set_data( $data );
+    }
+    return $response;
+}`;
+
+  return `
+    <div class="section-card">
+      <h3>${empties.length} item(s) return an empty <code>content.rendered</code> — what to do</h3>
+
+      <p style="font-size:13px;margin:0 0 14px">
+        <strong>Step 1 — find out whether this matters at all.</strong>
+        Google and every AI crawler (GPTBot, ClaudeBot, PerplexityBot) read the <em>rendered HTML</em> at the page URL.
+        They do not read <code>/wp-json</code>. If the text is present in the HTML, your search and AI visibility are
+        <strong>not affected</strong> and there is nothing to fix. Check one of the flagged pages:</p>
+      <pre style="background:var(--bg-hover);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;margin:0 0 14px"><code>curl -s "${esc(exUrl)}" | perl -0777 -pe 's{&lt;script\\b.*?&lt;/script>}{ }gsi; s{&lt;style\\b.*?&lt;/style>}{ }gsi; s/&lt;[^>]*>/ /g' | tr -s " \\t\\n" ' ' | wc -c</code></pre>
+      <p style="font-size:13px;margin:0 0 14px;color:var(--text-muted)">
+        A few thousand characters back = the page is fine for SEO and AI. A number near zero = the content is injected
+        by JavaScript after load, and <em>that</em> is a real visibility problem worth fixing.
+        Note that an archive page — your Posts page, a shop index — has no body of its own by design, so an empty
+        result there is expected and needs no action.</p>
+
+      <p style="font-size:13px;margin:0 0 14px">
+        <strong>Step 2 — fix it only if something you own reads the REST API.</strong>
+        A headless front-end, a mobile app, a partner integration, an MCP server, or an AI tool pointed at
+        <code>/wp-json</code> gets a blank body for these ${empties.length} item(s) today. If nothing does, stop here —
+        this is informational, not a defect.</p>
+
+      <p style="font-size:13px;margin:0 0 8px">
+        <strong>Step 3 — if you do need it, add this must-use plugin.</strong> It fills in only the empty bodies and
+        never overwrites real content. Elementor-specific; test on staging first.</p>
+      <pre style="background:var(--bg-hover);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;margin:0 0 14px"><code>${esc(php)}</code></pre>
+
+      <p style="font-size:13px;margin:0 0 8px"><strong>Step 4 — verify.</strong> This should return characters instead of <code>""</code>:</p>
+      <pre style="background:var(--bg-hover);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;margin:0"><code>curl -s "https://${esc(host)}/wp-json/wp/v2/${esc(restBase)}/${ex.id}?_fields=content" | head -c 300</code></pre>
+    </div>`;
+}
+
 function renderWpScan() {
   const d = _wpScan;
   const box = $('#wpResults');
@@ -3628,9 +3730,7 @@ function renderWpScan() {
         ${wpAccessRow('Normal browser', d.api?.browser || {})}
         ${wpAccessRow('GPTBot (OpenAI crawler)', d.api?.aiBot || {})}
       </tbody></table>
-      ${d.api?.browser?.ok && !d.api?.aiBot?.ok ? `<p style="font-size:13px;margin-top:10px;color:var(--warning)">
-        The API answers a browser but refuses GPTBot. Everything below is readable by your tools and
-        <strong>not</strong> by OpenAI's crawler — worth checking against your WAF or bot-protection rules if that isn't deliberate.</p>` : ''}
+      ${wpUaVerdict(d.api || {}, d.restRoot)}
     </div>`;
 
   if (d.error) {
@@ -3650,11 +3750,7 @@ function renderWpScan() {
       ${statCard('Readable', t.ok || 0, 'success')}
     </div>
 
-    ${t.empty > 0 ? `<div class="section-card"><p style="margin:0;font-size:13px">
-      <strong>${t.empty} of ${t.items}</strong> item(s) return a completely empty <code>content.rendered</code>.
-      An AI reading this site through the REST API gets <strong>nothing at all</strong> from those URLs.
-      The usual cause is a page builder storing content in postmeta — the fix is either a REST filter that
-      renders the builder output into <code>content.rendered</code>, or making sure AI crawlers read the rendered HTML instead.</p></div>` : ''}
+    ${wpRemediation(d)}
 
     <div class="section-card"><h3>Post Types</h3>
       <table><thead><tr><th>Type</th><th>REST base</th><th>Items</th><th>Empty</th><th>Note</th></tr></thead>
