@@ -1424,6 +1424,24 @@ app.post('/api/ai-visibility/run', async (req, res) => {
   res.json({ domain, results });
 });
 
+// ── AI Content Visibility (WordPress REST API) ─────────────────────────────
+// Page builders keep their content in postmeta and leave post_content empty,
+// so a page that is full of text in a browser can return zero characters from
+// /wp-json/wp/v2/{type}/{id} — invisible to anything reading the site through
+// the API. This scans a WordPress site and counts what the API actually gives.
+const wpRest = require('./lib/wp-rest');
+
+app.post('/api/wp-rest/scan', async (req, res) => {
+  const site = String(req.body.site || '').trim();
+  if (!site) return res.status(400).json({ error: 'Enter a WordPress site URL' });
+  try {
+    const result = await wpRest.scanSite(site, { maxItems: req.body.maxItems });
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'Scan failed' });
+  }
+});
+
 // ── GenAI Performance: analyze GSC's "Generative AI features" report ────────
 // GSC shows which pages get impressions in AI Overviews / AI Mode but hides
 // the queries. The user uploads/pastes that report; we join it with crawl data

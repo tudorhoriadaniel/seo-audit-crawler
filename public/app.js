@@ -64,6 +64,7 @@ $$('.nav-link').forEach(link => {
     if (view === 'externallinks') loadExternalLinks();
     if (view === 'notfound') loadNotFoundView();
     if (view === 'aivisibility') loadAiVisibilityView();
+    if (view === 'aicontent') loadWpContentView();
     if (view === 'genai') loadGenAiView();
   });
 });
@@ -3521,6 +3522,192 @@ async function loadAiVisHistory(domain) {
         <td>${r.error ? `<span class="badge badge-warning" title="${esc(r.error)}">error</span>` : r.cited ? `<span class="badge badge-success">cited · #${r.position}</span>` : '<span class="badge badge-danger">not cited</span>'}</td>
       </tr>`).join('')}</tbody></table></div>`;
   } catch { /* history is best-effort */ }
+}
+
+// ── AI Content Visibility (WordPress REST API body-text audit) ──
+// A page built with Elementor/Divi/a theme builder stores its content in
+// postmeta, so post_content — and therefore content.rendered in the REST API —
+// comes back empty. The page looks full in a browser and blank to anything
+// reading the API. This tab measures that gap in characters.
+let _wpScan = null;
+let _wpFilter = 'all';
+
+function loadWpContentView() {
+  const el = $('#aicontentContent');
+  if (!el.dataset.ready) {
+    el.dataset.ready = '1';
+    el.innerHTML = `
+      <div class="section-card"><p style="color:var(--text-muted);font-size:13px;margin:0">
+        WordPress only. Checks whether the site's REST API is publicly readable, then reads
+        <code>/wp-json/wp/v2/{type}/{id}</code> for every public post type and counts how many characters of
+        body text each item actually returns.
+        <strong>Pages built with a page builder (Elementor, Divi, Bricks) usually return zero</strong> — their content
+        lives in postmeta, not <code>post_content</code>. Those pages are full of text for a human and completely
+        blank to an AI crawler, scraper, or any tool reading the API.</p></div>
+
+      <div class="section-card"><h3>Scan a WordPress Site</h3>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+          <label>Site URL</label>
+          <input type="text" id="wpSite" placeholder="example.com" style="flex:1;min-width:220px">
+          <label title="Upper bound on items fetched, across all post types">Max items</label>
+          <input type="number" id="wpMax" value="500" min="1" max="2000" style="width:90px">
+        </div>
+        <button class="btn btn-primary" id="wpRun">Run Scan</button>
+        <span id="wpStatus" style="margin-left:10px;font-size:13px;color:var(--text-muted)"></span>
+      </div>
+
+      <div id="wpResults"></div>`;
+
+    $('#wpRun').addEventListener('click', runWpScan);
+    $('#wpSite').addEventListener('keydown', (e) => { if (e.key === 'Enter') runWpScan(); });
+  }
+
+  // Prefill from the crawl bar, same as the AI Visibility tab
+  const sEl = $('#wpSite');
+  if (sEl && !sEl.value) {
+    const raw = $('#urlInput')?.value?.trim();
+    if (raw) { try { sEl.value = new URL(raw.startsWith('http') ? raw : 'https://' + raw).hostname; } catch { /* leave empty */ } }
+  }
+}
+
+async function runWpScan() {
+  const site = $('#wpSite').value.trim();
+  const maxItems = parseInt($('#wpMax').value, 10) || 500;
+  const status = $('#wpStatus');
+  if (!site) return status.textContent = 'Enter a site URL.';
+
+  const btn = $('#wpRun');
+  btn.disabled = true;
+  status.textContent = 'Scanning the REST API… this can take a moment on large sites.';
+  try {
+    const res = await fetch('/api/wp-rest/scan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ site, maxItems })
+    });
+    const data = await res.json();
+    if (data.error && !data.api) throw new Error(data.error);
+    _wpScan = data;
+    _wpFilter = 'all';
+    status.textContent = data.error ? '' : 'Done ✓';
+    renderWpScan();
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+  } finally { btn.disabled = false; }
+}
+
+function wpFlagBadge(flag) {
+  if (flag === 'empty') return '<span class="badge badge-danger">EMPTY</span>';
+  if (flag === 'thin') return '<span class="badge badge-warning">thin</span>';
+  if (flag === 'protected') return '<span class="badge" style="background:var(--bg-hover);color:var(--text-muted)">protected</span>';
+  return '<span class="badge badge-success">ok</span>';
+}
+
+// A UA that gets through where another is blocked is the whole story here: if
+// GPTBot is refused, the character counts below are academic — no AI ever sees
+// them in the first place.
+function wpAccessRow(label, probe) {
+  if (probe.challenged) return `<tr><td>${esc(label)}</td><td><span class="badge badge-danger">bot challenge</span></td><td style="font-size:12px;color:var(--text-muted)">Served a JavaScript interstitial instead of JSON</td></tr>`;
+  if (probe.ok) return `<tr><td>${esc(label)}</td><td><span class="badge badge-success">${probe.status} OK</span></td><td style="font-size:12px;color:var(--text-muted)">Reads the API normally</td></tr>`;
+  const detail = probe.error ? esc(probe.error)
+    : probe.status === 429 ? 'Rate-limited or blocked — retried once, still refused'
+    : probe.status === 403 ? 'Forbidden — the API is closed to this client'
+    : probe.status ? 'Did not return JSON'
+    : 'No response';
+  return `<tr><td>${esc(label)}</td><td><span class="badge badge-danger">${probe.status || 'error'}</span></td><td style="font-size:12px;color:var(--text-muted)">${detail}</td></tr>`;
+}
+
+function renderWpScan() {
+  const d = _wpScan;
+  const box = $('#wpResults');
+  if (!d) { box.innerHTML = ''; return; }
+
+  const accessCard = `
+    <div class="section-card"><h3>REST API Access${d.api?.siteName ? ' — ' + esc(d.api.siteName) : ''}</h3>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:10px">Endpoint: ${urlLink(d.restRoot)}</p>
+      <table><thead><tr><th>Client</th><th>Result</th><th>Meaning</th></tr></thead><tbody>
+        ${wpAccessRow('Normal browser', d.api?.browser || {})}
+        ${wpAccessRow('GPTBot (OpenAI crawler)', d.api?.aiBot || {})}
+      </tbody></table>
+      ${d.api?.browser?.ok && !d.api?.aiBot?.ok ? `<p style="font-size:13px;margin-top:10px;color:var(--warning)">
+        The API answers a browser but refuses GPTBot. Everything below is readable by your tools and
+        <strong>not</strong> by OpenAI's crawler — worth checking against your WAF or bot-protection rules if that isn't deliberate.</p>` : ''}
+    </div>`;
+
+  if (d.error) {
+    box.innerHTML = accessCard + `<div class="section-card"><p style="color:var(--danger);margin:0">${esc(d.error)}</p></div>`;
+    return;
+  }
+
+  const t = d.totals || {};
+  const typeErrors = (d.types || []).filter(x => x.error);
+  const items = (d.items || []).filter(i => _wpFilter === 'all' || i.flag === _wpFilter);
+
+  box.innerHTML = accessCard + `
+    <div class="stats-grid">
+      ${statCard('Items Checked', t.items || 0, 'info')}
+      ${statCard('Empty Body', t.empty || 0, t.empty > 0 ? 'danger' : 'success')}
+      ${statCard('Thin (&lt;500 chars)', t.thin || 0, t.thin > 0 ? 'warning' : '')}
+      ${statCard('Readable', t.ok || 0, 'success')}
+    </div>
+
+    ${t.empty > 0 ? `<div class="section-card"><p style="margin:0;font-size:13px">
+      <strong>${t.empty} of ${t.items}</strong> item(s) return a completely empty <code>content.rendered</code>.
+      An AI reading this site through the REST API gets <strong>nothing at all</strong> from those URLs.
+      The usual cause is a page builder storing content in postmeta — the fix is either a REST filter that
+      renders the builder output into <code>content.rendered</code>, or making sure AI crawlers read the rendered HTML instead.</p></div>` : ''}
+
+    <div class="section-card"><h3>Post Types</h3>
+      <table><thead><tr><th>Type</th><th>REST base</th><th>Items</th><th>Empty</th><th>Note</th></tr></thead>
+      <tbody>${(d.types || []).map(x => `<tr>
+        <td>${esc(x.label)} <span style="color:var(--text-muted);font-size:12px">(${esc(x.slug)})</span></td>
+        <td><code>wp/v2/${esc(x.restBase)}</code></td>
+        <td>${x.count}</td>
+        <td>${x.empty > 0 ? `<span class="badge badge-danger">${x.empty}</span>` : '0'}</td>
+        <td style="font-size:12px;color:var(--text-muted)">${x.error ? esc(x.error) : '—'}</td>
+      </tr>`).join('')}</tbody></table>
+      ${typeErrors.length ? `<p style="font-size:12px;color:var(--text-muted);margin-top:8px">
+        Types with a note returned an error — usually because that type requires authentication. Those are not counted above.</p>` : ''}
+    </div>
+
+    <div class="section-card">
+      <h3>Characters returned per item</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        ${['all', 'empty', 'thin', 'ok'].map(f => `<button class="btn wp-filter" data-filter="${f}" style="font-size:12px;${_wpFilter === f ? 'background:var(--accent);color:#fff' : ''}">${f === 'all' ? 'All' : f === 'ok' ? 'Readable' : f === 'empty' ? 'Empty only' : 'Thin only'}</button>`).join('')}
+        <button class="btn" id="wpCsv" style="font-size:12px;margin-left:auto">Export CSV</button>
+      </div>
+      ${t.truncated ? `<p style="font-size:12px;color:var(--warning);margin-bottom:8px">Stopped at the ${esc(String($('#wpMax').value))}-item cap — raise "Max items" to scan the rest.</p>` : ''}
+      <table><thead><tr><th>ID</th><th>Type</th><th>Title / slug</th><th>Raw HTML</th><th>Text chars</th><th>Flag</th></tr></thead>
+      <tbody>${items.map(i => `<tr>
+        <td>${i.id}</td>
+        <td style="font-size:12px">${esc(i.type)}</td>
+        <td style="white-space:normal;max-width:340px">${i.link ? urlLink(i.link) : esc(i.slug)}
+          ${i.title ? `<div style="font-size:11px;color:var(--text-muted)">${esc(i.title)}</div>` : ''}</td>
+        <td>${i.rawChars.toLocaleString()}</td>
+        <td${i.textChars === 0 ? ' style="color:var(--danger);font-weight:600"' : ''}>${i.textChars.toLocaleString()}</td>
+        <td>${wpFlagBadge(i.flag)}</td>
+      </tr>`).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">Nothing in this bucket.</td></tr>'}</tbody></table>
+    </div>`;
+
+  $$('.wp-filter').forEach(b => b.addEventListener('click', () => { _wpFilter = b.dataset.filter; renderWpScan(); }));
+  $('#wpCsv')?.addEventListener('click', exportWpCsv);
+}
+
+function exportWpCsv() {
+  if (!_wpScan) return;
+  const rows = [['id', 'type', 'slug', 'url', 'title', 'raw_html_chars', 'text_chars', 'excerpt_chars', 'flag']];
+  for (const i of _wpScan.items || []) {
+    rows.push([i.id, i.type, i.slug, i.link, i.title, i.rawChars, i.textChars, i.excerptChars, i.flag]);
+  }
+  const csv = rows.map(r => r.map(v => {
+    const s = String(v == null ? '' : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(',')).join('\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `ai-content-visibility-${(_wpScan.site || 'site').replace(/^https?:\/\//, '').replace(/[^a-z0-9.-]/gi, '-')}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 // ── GenAI Performance (GSC "Generative AI features" report analysis) ──
