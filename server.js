@@ -1389,7 +1389,57 @@ app.post('/api/ai-visibility/config', (req, res) => {
 });
 
 // Run a visibility check: queries × engines, persisted for history/trends.
-app.post('/api/ai-visibility/run', async (req, res) => {
+//
+// This runs as a background job rather than inside the request. A web-search
+// turn takes minutes, and an HTTP request that sends nothing for that long gets
+// killed by the platform's reverse proxy — which answers the browser with a
+// plain-text "upstream error" that isn't JSON, so the UI died on res.json()
+// while the work was still running fine server-side. The POST now returns a job
+// id immediately and the client polls for results as they land.
+const aiVisJobs = new Map();
+const AI_VIS_JOB_TTL = 30 * 60 * 1000;
+
+function pruneAiVisJobs() {
+  const cutoff = Date.now() - AI_VIS_JOB_TTL;
+  for (const [id, job] of aiVisJobs) {
+    if (job.status !== 'running' && (job.finishedAt || 0) < cutoff) aiVisJobs.delete(id);
+  }
+}
+
+async function runAiVisibilityJob(job, queries, engines, keys) {
+  try {
+    for (const query of queries) {
+      // Engines in parallel per query — independent APIs, no rate-limit overlap
+      const perQuery = await Promise.all(engines.map(async (engine) => {
+        try {
+          return await aiVisibility.checkVisibility(engine, keys[engine], query, job.domain);
+        } catch (e) {
+          const apiMsg = e.response?.data?.error?.message || e.error?.message || e.message;
+          return {
+            engine, engineLabel: aiVisibility.ENGINES[engine].label, query, domain: job.domain,
+            cited: false, position: null, totalCitations: 0, citations: [],
+            matchedUrl: null, answerExcerpt: '', error: String(apiMsg || 'request failed')
+          };
+        }
+      }));
+      for (const r of perQuery) {
+        try { db.saveAiVisibilityResult(r); } catch (e) { console.error('saveAiVisibilityResult:', e.message); }
+        job.results.push(r);
+        job.done++;
+      }
+    }
+    job.status = 'done';
+  } catch (e) {
+    job.status = 'error';
+    job.error = e.message || 'Visibility check failed';
+    console.error('ai-visibility job failed:', e);
+  } finally {
+    job.finishedAt = Date.now();
+    pruneAiVisJobs();
+  }
+}
+
+app.post('/api/ai-visibility/run', (req, res) => {
   const domain = aiVisibility.normalizeDomain(req.body.domain);
   const queries = (req.body.queries || []).map(q => String(q).trim()).filter(Boolean).slice(0, 10);
   const engines = (req.body.engines || []).filter(e => aiVisibility.ENGINES[e]);
@@ -1401,27 +1451,31 @@ app.post('/api/ai-visibility/run', async (req, res) => {
   const missing = engines.filter(e => !keys[e]);
   if (missing.length > 0) return res.status(400).json({ error: `No API key configured for: ${missing.join(', ')}` });
 
-  const results = [];
-  for (const query of queries) {
-    // Engines in parallel per query — independent APIs, no rate-limit overlap
-    const perQuery = await Promise.all(engines.map(async (engine) => {
-      try {
-        return await aiVisibility.checkVisibility(engine, keys[engine], query, domain);
-      } catch (e) {
-        const apiMsg = e.response?.data?.error?.message || e.error?.message || e.message;
-        return {
-          engine, engineLabel: aiVisibility.ENGINES[engine].label, query, domain,
-          cited: false, position: null, totalCitations: 0, citations: [],
-          matchedUrl: null, answerExcerpt: '', error: String(apiMsg || 'request failed')
-        };
-      }
-    }));
-    for (const r of perQuery) {
-      try { db.saveAiVisibilityResult(r); } catch (e) { console.error('saveAiVisibilityResult:', e.message); }
-      results.push(r);
-    }
-  }
-  res.json({ domain, results });
+  const job = {
+    id: uuidv4(), domain, status: 'running',
+    total: queries.length * engines.length, done: 0,
+    results: [], error: null, startedAt: Date.now(), finishedAt: null
+  };
+  aiVisJobs.set(job.id, job);
+  // Deliberately not awaited — the response goes out now, work continues.
+  runAiVisibilityJob(job, queries, engines, keys).catch(e => {
+    job.status = 'error';
+    job.error = e.message || 'Visibility check failed';
+    job.finishedAt = Date.now();
+  });
+
+  res.json({ jobId: job.id, domain, total: job.total });
+});
+
+// Poll a running check. Returns whatever has completed so far, so the UI can
+// fill the table in as each engine answers instead of waiting for all of them.
+app.get('/api/ai-visibility/job/:id', (req, res) => {
+  const job = aiVisJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'This check has expired — run it again.' });
+  res.json({
+    jobId: job.id, domain: job.domain, status: job.status,
+    done: job.done, total: job.total, results: job.results, error: job.error
+  });
 });
 
 // ── AI Content Visibility (WordPress REST API) ─────────────────────────────

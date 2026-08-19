@@ -3466,17 +3466,42 @@ async function runAiVisibility() {
 
   const btn = $('#aivisRun');
   btn.disabled = true;
-  status.textContent = `Querying ${engines.length} engine(s) × ${queries.length} quer${queries.length > 1 ? 'ies' : 'y'}… this can take a minute.`;
+  status.textContent = 'Starting…';
   try {
+    // The server answers immediately with a job id and does the slow part in
+    // the background; holding the request open for a multi-minute web-search
+    // run gets it killed by the proxy before any result comes back.
     const res = await fetch('/api/ai-visibility/run', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain, queries, engines })
     });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    status.textContent = 'Done ✓';
-    renderAiVisResults(data.results, data.domain);
-    loadAiVisHistory(data.domain);
+    const started = await res.json();
+    if (started.error) throw new Error(started.error);
+
+    const deadline = Date.now() + 15 * 60 * 1000;
+    let shown = 0;
+    let job;
+    for (;;) {
+      await new Promise(r => setTimeout(r, 2000));
+      const pollRes = await fetch(`/api/ai-visibility/job/${started.jobId}`);
+      job = await pollRes.json();
+      if (!pollRes.ok) throw new Error(job.error || 'Lost track of this check.');
+      if (job.status === 'error') throw new Error(job.error || 'Visibility check failed');
+
+      // Render partial results as engines answer, so a long run shows progress.
+      if (job.results.length > shown) {
+        shown = job.results.length;
+        renderAiVisResults(job.results, job.domain);
+      }
+      status.textContent = job.status === 'running'
+        ? `Checked ${job.done} of ${job.total}… (web search takes a minute per query)`
+        : 'Done ✓';
+      if (job.status !== 'running') break;
+      if (Date.now() > deadline) throw new Error('Timed out after 15 minutes.');
+    }
+
+    renderAiVisResults(job.results, job.domain);
+    loadAiVisHistory(job.domain);
   } catch (e) {
     status.textContent = 'Failed: ' + e.message;
   } finally { btn.disabled = false; }
