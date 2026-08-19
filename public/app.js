@@ -3650,6 +3650,13 @@ function wpRemediation(d) {
   const exUrl = ex.link || `https://${host}/`;
   const restBase = (d.types || []).find(t => t.slug === ex.type)?.restBase || 'pages';
 
+  const builders = d.builders || [];
+  const builderName = builders.length ? builders.join(' + ') : null;
+
+  // One snippet for every site. Each builder gets its own renderer, tried in
+  // turn, ending in a generic the_content pass that covers builders not listed
+  // here — so this is copy-pasteable whether the site runs Elementor, Bricks,
+  // Beaver, Oxygen, or something nobody has heard of.
   const php = `<?php
 /**
  * Plugin Name: REST API — fill empty content.rendered for page-builder pages
@@ -3671,15 +3678,50 @@ function cv_fill_builder_content( $response, $post ) {
     if ( '' !== trim( wp_strip_all_tags( $data['content']['rendered'] ) ) ) {
         return $response;
     }
-    if ( ! class_exists( '\\Elementor\\Plugin' ) ) {
-        return $response;
+
+    $html = '';
+
+    // Elementor
+    if ( ! $html && class_exists( '\\Elementor\\Plugin' ) ) {
+        $doc = \\Elementor\\Plugin::$instance->documents->get( $post->ID );
+        if ( $doc && $doc->is_built_with_elementor() ) {
+            $html = \\Elementor\\Plugin::$instance->frontend->get_builder_content_for_display( $post->ID );
+        }
     }
-    $document = \\Elementor\\Plugin::$instance->documents->get( $post->ID );
-    if ( ! $document || ! $document->is_built_with_elementor() ) {
-        return $response;
+
+    // Beaver Builder
+    if ( ! $html && class_exists( 'FLBuilderModel' ) && get_post_meta( $post->ID, '_fl_builder_enabled', true ) ) {
+        $html = do_shortcode( '[fl_builder_insert_layout id="' . $post->ID . '"]' );
     }
-    $html = \\Elementor\\Plugin::$instance->frontend->get_builder_content_for_display( $post->ID );
-    if ( is_string( $html ) && '' !== $html ) {
+
+    // Oxygen
+    if ( ! $html && defined( 'CT_VERSION' ) ) {
+        $shortcodes = get_post_meta( $post->ID, 'ct_builder_shortcodes', true );
+        if ( $shortcodes ) {
+            $html = do_shortcode( $shortcodes );
+        }
+    }
+
+    // Anything else: run the post through the_content in a proper loop
+    // context. Most builders hook that filter and will inject their output.
+    static $running = false;
+    if ( ! $html && ! $running ) {
+        $running = true;
+        global $wp_query;
+        $previous = $wp_query;
+        $wp_query = new WP_Query( array( 'p' => $post->ID, 'post_type' => $post->post_type ) );
+        if ( $wp_query->have_posts() ) {
+            $wp_query->the_post();
+            $html = apply_filters( 'the_content', get_the_content() );
+        }
+        // Restore the original query first — wp_reset_postdata() resets from
+        // whatever $wp_query currently holds.
+        $wp_query = $previous;
+        wp_reset_postdata();
+        $running = false;
+    }
+
+    if ( is_string( $html ) && '' !== trim( wp_strip_all_tags( $html ) ) ) {
         $data['content']['rendered'] = $html;
         $response->set_data( $data );
     }
@@ -3710,7 +3752,11 @@ function cv_fill_builder_content( $response, $post ) {
 
       <p style="font-size:13px;margin:0 0 8px">
         <strong>Step 3 — if you do need it, add this must-use plugin.</strong> It fills in only the empty bodies and
-        never overwrites real content. Elementor-specific; test on staging first.</p>
+        never overwrites real content. ${builderName
+          ? `Detected on this site: <strong>${esc(builderName)}</strong>.`
+          : 'No known builder was detected from the REST API, so this falls through to the generic renderer at the bottom of the snippet.'}
+        It handles Elementor, Beaver Builder and Oxygen directly and falls back to a generic
+        <code>the_content</code> pass for every other builder. Test on staging first.</p>
       <pre style="background:var(--bg-hover);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;margin:0 0 14px"><code>${esc(php)}</code></pre>
 
       <p style="font-size:13px;margin:0 0 8px"><strong>Step 4 — verify.</strong> This should return characters instead of <code>""</code>:</p>
