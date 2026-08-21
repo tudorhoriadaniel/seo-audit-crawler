@@ -3904,7 +3904,7 @@ function loadHackedView() {
           <label title="Upper bound on REST items read across all post types">Max items</label>
           <input type="number" id="hackedMax" value="400" min="10" max="2000" style="width:90px">
           <label title="Pages fetched as browser + Googlebot for hidden-text, script and cloaking checks">HTML sample</label>
-          <input type="number" id="hackedSample" value="12" min="3" max="40" style="width:70px">
+          <input type="number" id="hackedSample" value="12" min="3" max="100" style="width:70px">
         </div>
         <button class="btn btn-primary" id="hackedRun">Run Scan</button>
         <span id="hackedStatus" style="margin-left:10px;font-size:13px;color:var(--text-muted)"></span>
@@ -3986,6 +3986,7 @@ function hackedVerdictBanner(d) {
     <p style="font-size:12px;color:var(--text-muted);margin:0">
       Coverage: ${cov.restAvailable ? `${cov.restItems} items read from the REST API` : 'REST API not readable (sitemap fallback used)'} ·
       ${cov.htmlPages} pages fetched as browser · ${cov.cloakChecked} also fetched as Googlebot for cloak comparison.
+      ${(cov.pageErrors || []).length ? `${cov.pageErrors.length} page(s) could not be fully analyzed.` : ''}
       ${d.ai?.used ? `Claude adjudicated ${d.ai.adjudicated} flagged item(s); ${d.ai.ruledLegitimate} ruled legitimate site content and removed.` : (d.ai?.error ? `AI adjudication unavailable (${esc(d.ai.error)}).` : '')}
     </p>
   </div>`;
