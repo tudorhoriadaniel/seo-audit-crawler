@@ -3564,19 +3564,23 @@ function loadWpContentView() {
     el.dataset.ready = '1';
     el.innerHTML = `
       <div class="section-card"><p style="color:var(--text-muted);font-size:13px;margin:0">
-        WordPress only. Checks whether the site's REST API is publicly readable, then reads
-        <code>/wp-json/wp/v2/{type}/{id}</code> for every public post type and counts how many characters of
-        body text each item actually returns.
-        <strong>Pages built with a page builder (Elementor, Divi, Bricks) usually return zero</strong> — their content
-        lives in postmeta, not <code>post_content</code>. Those pages are full of text for a human and completely
-        blank to an AI crawler, scraper, or any tool reading the API.</p></div>
+        WordPress only. Answers one question: <strong>can an LLM read each page's content at all?</strong>
+        AI crawlers (GPTBot, ClaudeBot, PerplexityBot) read the <em>rendered HTML</em> at the page URL and do not
+        execute JavaScript — so the tool discovers every page via the REST API, then fetches the pages
+        <strong>as GPTBot</strong> and measures the content text actually present in the HTML.
+        A page is flagged only when that text is missing (JavaScript-injected content, a truly empty page)
+        or the AI crawler is refused outright. Pages whose REST API body is empty but whose HTML reads fine —
+        the normal Elementor/Divi situation — are <em>not</em> flagged; that detail is kept as a quiet note for
+        API integrations.</p></div>
 
       <div class="section-card"><h3>Scan a WordPress Site</h3>
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
           <label>Site URL</label>
           <input type="text" id="wpSite" placeholder="example.com" style="flex:1;min-width:220px">
-          <label title="Upper bound on items fetched, across all post types">Max items</label>
+          <label title="Upper bound on items discovered via the REST API, across all post types">Max items</label>
           <input type="number" id="wpMax" value="500" min="1" max="2000" style="width:90px">
+          <label title="How many page URLs to fetch as GPTBot for the HTML check (REST-empty pages are checked first)">HTML checks</label>
+          <input type="number" id="wpHtmlChecks" value="150" min="0" max="500" style="width:80px">
         </div>
         <button class="btn btn-primary" id="wpRun">Run Scan</button>
         <span id="wpStatus" style="margin-left:10px;font-size:13px;color:var(--text-muted)"></span>
@@ -3596,36 +3600,63 @@ function loadWpContentView() {
   }
 }
 
+let _wpPoll = null;
+
 async function runWpScan() {
   const site = $('#wpSite').value.trim();
   const maxItems = parseInt($('#wpMax').value, 10) || 500;
+  const htmlChecks = parseInt($('#wpHtmlChecks').value, 10);
   const status = $('#wpStatus');
   if (!site) return status.textContent = 'Enter a site URL.';
 
   const btn = $('#wpRun');
   btn.disabled = true;
-  status.textContent = 'Scanning the REST API… this can take a moment on large sites.';
+  clearInterval(_wpPoll);
+  status.textContent = 'Starting scan…';
   try {
     const res = await fetch('/api/wp-rest/scan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ site, maxItems })
+      body: JSON.stringify({ site, maxItems, htmlChecks: Number.isFinite(htmlChecks) ? htmlChecks : 150 })
     });
     const data = await res.json();
-    if (data.error && !data.api) throw new Error(data.error);
-    _wpScan = data;
-    _wpFilter = 'all';
-    status.textContent = data.error ? '' : 'Done ✓';
-    renderWpScan();
+    if (data.error) throw new Error(data.error);
+
+    _wpPoll = setInterval(async () => {
+      try {
+        const jr = await fetch(`/api/wp-rest/job/${data.jobId}`);
+        const job = await jr.json();
+        if (job.error && !job.result && job.status !== 'running') {
+          clearInterval(_wpPoll);
+          status.textContent = 'Failed: ' + job.error;
+          btn.disabled = false;
+          return;
+        }
+        if (job.status === 'running') {
+          status.textContent = job.progress || 'Scanning…';
+          return;
+        }
+        clearInterval(_wpPoll);
+        btn.disabled = false;
+        if (job.status === 'error') { status.textContent = 'Failed: ' + (job.error || 'scan failed'); return; }
+        _wpScan = job.result;
+        _wpFilter = 'all';
+        status.textContent = job.result?.error ? '' : 'Done ✓';
+        renderWpScan();
+      } catch { /* transient poll failure — keep polling */ }
+    }, 2000);
   } catch (e) {
     status.textContent = 'Failed: ' + e.message;
-  } finally { btn.disabled = false; }
+    btn.disabled = false;
+  }
 }
 
 function wpFlagBadge(flag) {
-  if (flag === 'empty') return '<span class="badge badge-danger">EMPTY</span>';
+  if (flag === 'invisible') return '<span class="badge badge-danger">INVISIBLE TO AI</span>';
+  if (flag === 'blocked') return '<span class="badge badge-danger">BLOCKED FOR AI</span>';
   if (flag === 'thin') return '<span class="badge badge-warning">thin</span>';
+  if (flag === 'unchecked') return '<span class="badge" style="background:var(--bg-hover);color:var(--text-muted)">unchecked</span>';
   if (flag === 'protected') return '<span class="badge" style="background:var(--bg-hover);color:var(--text-muted)">protected</span>';
-  return '<span class="badge badge-success">ok</span>';
+  return '<span class="badge badge-success">readable</span>';
 }
 
 // A UA that gets through where another is blocked is the whole story here: if
@@ -3664,8 +3695,45 @@ function wpUaVerdict(api, restRoot) {
 // serves its text in HTML. It almost always does — page builders render fine to
 // a browser and to every AI crawler, which read HTML and never touch /wp-json.
 // So lead with the check that tells you whether to care, not with a fix.
+// Primary remediation: pages an LLM genuinely cannot read.
+function wpVisibilityRemediation(d) {
+  const invisible = (d.items || []).filter(i => i.flag === 'invisible');
+  const blocked = (d.items || []).filter(i => i.flag === 'blocked');
+  if (invisible.length === 0 && blocked.length === 0) return '';
+
+  const parts = [];
+  if (invisible.length) {
+    const ex = invisible.find(i => i.link) || invisible[0];
+    parts.push(`
+      <p style="font-size:13px;margin:0 0 10px">
+        <strong>${invisible.length} page(s) have (almost) no content text in their HTML.</strong>
+        An AI crawler fetching ${ex?.link ? urlLink(ex.link) : 'these pages'} receives markup with no readable body —
+        most often because the content is injected by JavaScript after load (AI crawlers do not execute JS),
+        or because the page really is empty.</p>
+      <ul style="font-size:13px;margin:0 0 12px 18px;color:var(--text-muted)">
+        <li>If the theme/builder renders content client-side, enable its server-side rendering or static/cache output (WP Rocket, LiteSpeed Cache, etc. serve prerendered HTML).</li>
+        <li>Confirm by hand: <code>curl -s -A "GPTBot" "${esc(ex?.link || '')}"</code> — the text you see in a browser should be in that response.</li>
+        <li>Archive-style pages (a Posts page, shop index) may legitimately show little text — judge those by intent.</li>
+      </ul>`);
+  }
+  if (blocked.length) {
+    parts.push(`
+      <p style="font-size:13px;margin:0 0 10px">
+        <strong>${blocked.length} page(s) refuse AI crawlers.</strong> A normal browser gets the page, GPTBot does not —
+        a WAF/bot rule (Cloudflare, Wordfence, hosting-level) is turning AI crawlers away. If you want to be readable
+        (and citable) by AI tools, allow the AI crawler user agents in that layer.</p>`);
+  }
+  return `<div class="section-card">
+    <h3>Pages LLMs cannot read — what to do</h3>
+    ${parts.join('')}
+  </div>`;
+}
+
+// Secondary, deliberately quiet: REST-empty items. Not an LLM-visibility
+// problem (crawlers read HTML) — only relevant to API consumers, so it lives
+// in a collapsed details block instead of a red banner.
 function wpRemediation(d) {
-  const empties = (d.items || []).filter(i => i.flag === 'empty');
+  const empties = (d.items || []).filter(i => i.apiFlag === 'empty' && i.flag !== 'invisible' && i.flag !== 'blocked');
   if (empties.length === 0) return '';
   // Archive-style pages (the Posts page, a shop index) legitimately have no
   // post_content — a lousy example to hand someone as the copy-paste command.
@@ -3756,37 +3824,24 @@ function cv_fill_builder_content( $response, $post ) {
 
   return `
     <div class="section-card">
-      <h3>${empties.length} item(s) return an empty <code>content.rendered</code> — what to do</h3>
-
-      <p style="font-size:13px;margin:0 0 14px">
-        <strong>Step 1 — find out whether this matters at all.</strong>
-        Google and every AI crawler (GPTBot, ClaudeBot, PerplexityBot) read the <em>rendered HTML</em> at the page URL.
-        They do not read <code>/wp-json</code>. If the text is present in the HTML, your search and AI visibility are
-        <strong>not affected</strong> and there is nothing to fix. Check one of the flagged pages:</p>
-      <pre style="background:var(--bg-hover);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;margin:0 0 14px"><code>curl -s "${esc(exUrl)}" | perl -0777 -pe 's{&lt;script\\b.*?&lt;/script>}{ }gsi; s{&lt;style\\b.*?&lt;/style>}{ }gsi; s/&lt;[^>]*>/ /g' | tr -s " \\t\\n" ' ' | wc -c</code></pre>
-      <p style="font-size:13px;margin:0 0 14px;color:var(--text-muted)">
-        A few thousand characters back = the page is fine for SEO and AI. A number near zero = the content is injected
-        by JavaScript after load, and <em>that</em> is a real visibility problem worth fixing.
-        Note that an archive page — your Posts page, a shop index — has no body of its own by design, so an empty
-        result there is expected and needs no action.</p>
-
-      <p style="font-size:13px;margin:0 0 14px">
-        <strong>Step 2 — fix it only if something you own reads the REST API.</strong>
-        A headless front-end, a mobile app, a partner integration, an MCP server, or an AI tool pointed at
-        <code>/wp-json</code> gets a blank body for these ${empties.length} item(s) today. If nothing does, stop here —
-        this is informational, not a defect.</p>
-
-      <p style="font-size:13px;margin:0 0 8px">
-        <strong>Step 3 — if you do need it, add this must-use plugin.</strong> It fills in only the empty bodies and
-        never overwrites real content. ${builderName
-          ? `Detected on this site: <strong>${esc(builderName)}</strong>.`
-          : 'No known builder was detected from the REST API, so this falls through to the generic renderer at the bottom of the snippet.'}
-        It handles Elementor, Beaver Builder and Oxygen directly and falls back to a generic
-        <code>the_content</code> pass for every other builder. Test on staging first.</p>
-      <pre style="background:var(--bg-hover);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;margin:0 0 14px"><code>${esc(php)}</code></pre>
-
-      <p style="font-size:13px;margin:0 0 8px"><strong>Step 4 — verify.</strong> This should return characters instead of <code>""</code>:</p>
-      <pre style="background:var(--bg-hover);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;margin:0"><code>curl -s "https://${esc(host)}/wp-json/wp/v2/${esc(restBase)}/${ex.id}?_fields=content" | head -c 300</code></pre>
+      <details>
+        <summary style="cursor:pointer;font-size:13px;color:var(--text-muted)">
+          ℹ️ ${empties.length} item(s) return an empty body through the <strong>REST API</strong> — their HTML reads fine,
+          so LLM/search visibility is <strong>not affected</strong>. Only relevant if an API integration
+          (headless front-end, MCP server, mobile app) reads <code>/wp-json</code>. Click for the optional fix.
+        </summary>
+        <div style="margin-top:14px">
+          <p style="font-size:13px;margin:0 0 14px">
+            ${builderName ? `This site uses <strong>${esc(builderName)}</strong>, which stores content in postmeta and leaves
+            <code>post_content</code> empty — normal, by design.` : 'The content lives outside <code>post_content</code> (typical for page builders).'}
+            If something you own reads the REST API, the must-use plugin below fills in only the empty bodies and
+            never overwrites real content. It handles Elementor, Beaver Builder and Oxygen directly and falls back
+            to a generic <code>the_content</code> pass for every other builder. Test on staging first.</p>
+          <pre style="background:var(--bg-hover);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;margin:0 0 14px"><code>${esc(php)}</code></pre>
+          <p style="font-size:13px;margin:0 0 8px"><strong>Verify</strong> — this should return characters instead of <code>""</code>:</p>
+          <pre style="background:var(--bg-hover);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;margin:0"><code>curl -s "https://${esc(host)}/wp-json/wp/v2/${esc(restBase)}/${ex.id}?_fields=content" | head -c 300</code></pre>
+        </div>
+      </details>
     </div>`;
 }
 
@@ -3817,20 +3872,27 @@ function renderWpScan() {
   box.innerHTML = accessCard + `
     <div class="stats-grid">
       ${statCard('Items Checked', t.items || 0, 'info')}
-      ${statCard('Empty Body', t.empty || 0, t.empty > 0 ? 'danger' : 'success')}
+      ${statCard('Invisible to AI', t.invisible || 0, t.invisible > 0 ? 'danger' : 'success')}
+      ${statCard('Blocked for AI', t.blocked || 0, t.blocked > 0 ? 'danger' : 'success')}
       ${statCard('Thin (&lt;500 chars)', t.thin || 0, t.thin > 0 ? 'warning' : '')}
       ${statCard('Readable', t.ok || 0, 'success')}
     </div>
+    ${(t.invisible || 0) + (t.blocked || 0) === 0 ? `<div class="section-card" style="border:1px solid #22c55e;background:rgba(34,197,94,.08)">
+      <p style="font-size:13px;margin:0"><strong>✅ LLMs can read this site.</strong>
+      ${t.htmlChecked || 0} page(s) were fetched as GPTBot and every one returned its content text in the HTML.
+      ${t.apiEmpty ? `(${t.apiEmpty} item(s) are empty in the REST API channel — see the note below; that does not affect AI crawlers.)` : ''}</p>
+    </div>` : ''}
 
+    ${wpVisibilityRemediation(d)}
     ${wpRemediation(d)}
 
     <div class="section-card"><h3>Post Types</h3>
-      <table><thead><tr><th>Type</th><th>REST base</th><th>Items</th><th>Empty</th><th>Note</th></tr></thead>
+      <table><thead><tr><th>Type</th><th>REST base</th><th>Items</th><th>API empty</th><th>Note</th></tr></thead>
       <tbody>${(d.types || []).map(x => `<tr>
         <td>${esc(x.label)} <span style="color:var(--text-muted);font-size:12px">(${esc(x.slug)})</span></td>
         <td><code>wp/v2/${esc(x.restBase)}</code></td>
         <td>${x.count}</td>
-        <td>${x.empty > 0 ? `<span class="badge badge-danger">${x.empty}</span>` : '0'}</td>
+        <td style="color:var(--text-muted)">${x.empty}</td>
         <td style="font-size:12px;color:var(--text-muted)">${x.error ? esc(x.error) : '—'}</td>
       </tr>`).join('')}</tbody></table>
       ${typeErrors.length ? `<p style="font-size:12px;color:var(--text-muted);margin-top:8px">
@@ -3840,18 +3902,21 @@ function renderWpScan() {
     <div class="section-card">
       <h3>Characters returned per item</h3>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
-        ${['all', 'empty', 'thin', 'ok'].map(f => `<button class="btn wp-filter" data-filter="${f}" style="font-size:12px;${_wpFilter === f ? 'background:var(--accent);color:#fff' : ''}">${f === 'all' ? 'All' : f === 'ok' ? 'Readable' : f === 'empty' ? 'Empty only' : 'Thin only'}</button>`).join('')}
+        ${['all', 'invisible', 'blocked', 'thin', 'ok'].map(f => `<button class="btn wp-filter" data-filter="${f}" style="font-size:12px;${_wpFilter === f ? 'background:var(--accent);color:#fff' : ''}">${f === 'all' ? 'All' : f === 'ok' ? 'Readable' : f === 'invisible' ? 'Invisible' : f === 'blocked' ? 'Blocked' : 'Thin'}</button>`).join('')}
         <button class="btn" id="wpCsv" style="font-size:12px;margin-left:auto">Export CSV</button>
       </div>
       ${t.truncated ? `<p style="font-size:12px;color:var(--warning);margin-bottom:8px">Stopped at the ${esc(String($('#wpMax').value))}-item cap — raise "Max items" to scan the rest.</p>` : ''}
-      <table><thead><tr><th>ID</th><th>Type</th><th>Title / slug</th><th>Raw HTML</th><th>Text chars</th><th>Flag</th></tr></thead>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
+        <strong>HTML text</strong> is what an AI crawler receives at the page URL (fetched as GPTBot, site chrome stripped) — the number that decides the flag.
+        <strong>API text</strong> is what <code>/wp-json</code> returns — informational only.</p>
+      <table><thead><tr><th>ID</th><th>Type</th><th>Title / slug</th><th>HTML text</th><th>API text</th><th>Flag</th></tr></thead>
       <tbody>${items.map(i => `<tr>
         <td>${i.id}</td>
         <td style="font-size:12px">${esc(i.type)}</td>
         <td style="white-space:normal;max-width:340px">${i.link ? urlLink(i.link) : esc(i.slug)}
           ${i.title ? `<div style="font-size:11px;color:var(--text-muted)">${esc(i.title)}</div>` : ''}</td>
-        <td>${i.rawChars.toLocaleString()}</td>
-        <td${i.textChars === 0 ? ' style="color:var(--danger);font-weight:600"' : ''}>${i.textChars.toLocaleString()}</td>
+        <td${i.htmlTextChars != null && i.htmlTextChars < 150 ? ' style="color:var(--danger);font-weight:600"' : ''}>${i.htmlTextChars != null ? i.htmlTextChars.toLocaleString() : '<span style="color:var(--text-muted)">—</span>'}</td>
+        <td style="font-size:12px;color:var(--text-muted)">${i.textChars.toLocaleString()}${i.apiFlag === 'empty' ? ' <span title="Empty in the REST API — does not affect AI crawlers">(api empty)</span>' : ''}</td>
         <td>${wpFlagBadge(i.flag)}</td>
       </tr>`).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">Nothing in this bucket.</td></tr>'}</tbody></table>
     </div>`;
@@ -3862,9 +3927,9 @@ function renderWpScan() {
 
 function exportWpCsv() {
   if (!_wpScan) return;
-  const rows = [['id', 'type', 'slug', 'url', 'title', 'raw_html_chars', 'text_chars', 'excerpt_chars', 'flag']];
+  const rows = [['id', 'type', 'slug', 'url', 'title', 'html_text_chars', 'api_text_chars', 'api_flag', 'flag']];
   for (const i of _wpScan.items || []) {
-    rows.push([i.id, i.type, i.slug, i.link, i.title, i.rawChars, i.textChars, i.excerptChars, i.flag]);
+    rows.push([i.id, i.type, i.slug, i.link, i.title, i.htmlTextChars == null ? '' : i.htmlTextChars, i.textChars, i.apiFlag, i.flag]);
   }
   const csv = rows.map(r => r.map(v => {
     const s = String(v == null ? '' : v);

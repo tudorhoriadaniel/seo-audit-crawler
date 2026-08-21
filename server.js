@@ -1485,15 +1485,52 @@ app.get('/api/ai-visibility/job/:id', (req, res) => {
 // the API. This scans a WordPress site and counts what the API actually gives.
 const wpRest = require('./lib/wp-rest');
 
-app.post('/api/wp-rest/scan', async (req, res) => {
+// Job-based: the scan now also fetches up to a few hundred page URLs as GPTBot
+// to verify what an AI crawler actually receives, which takes longer than the
+// platform's reverse proxy allows a single request to run.
+const wpScanJobs = new Map();
+const WP_SCAN_JOB_TTL = 30 * 60 * 1000;
+
+function pruneWpScanJobs() {
+  const cutoff = Date.now() - WP_SCAN_JOB_TTL;
+  for (const [id, job] of wpScanJobs) {
+    if (job.status !== 'running' && (job.finishedAt || 0) < cutoff) wpScanJobs.delete(id);
+  }
+}
+
+app.post('/api/wp-rest/scan', (req, res) => {
   const site = String(req.body.site || '').trim();
   if (!site) return res.status(400).json({ error: 'Enter a WordPress site URL' });
-  try {
-    const result = await wpRest.scanSite(site, { maxItems: req.body.maxItems });
-    res.json(result);
-  } catch (e) {
-    res.status(400).json({ error: e.message || 'Scan failed' });
-  }
+
+  const job = {
+    id: uuidv4(), site, status: 'running', progress: 'Starting…',
+    result: null, error: null, startedAt: Date.now(), finishedAt: null
+  };
+  wpScanJobs.set(job.id, job);
+
+  wpRest.scanSite(site, {
+    maxItems: req.body.maxItems,
+    htmlChecks: req.body.htmlChecks,
+    onProgress: (msg) => { job.progress = msg; }
+  }).then(result => {
+    job.result = result;
+    job.status = 'done';
+  }).catch(e => {
+    job.status = 'error';
+    job.error = e.message || 'Scan failed';
+    console.error('wp-rest scan failed:', e);
+  }).finally(() => {
+    job.finishedAt = Date.now();
+    pruneWpScanJobs();
+  });
+
+  res.json({ jobId: job.id, site });
+});
+
+app.get('/api/wp-rest/job/:id', (req, res) => {
+  const job = wpScanJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'This scan has expired — run it again.' });
+  res.json({ jobId: job.id, site: job.site, status: job.status, progress: job.progress, result: job.result, error: job.error });
 });
 
 // ── Hacked: content-injection detection ─────────────────────────────────────
