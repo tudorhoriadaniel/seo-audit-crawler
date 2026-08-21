@@ -65,6 +65,7 @@ $$('.nav-link').forEach(link => {
     if (view === 'notfound') loadNotFoundView();
     if (view === 'aivisibility') loadAiVisibilityView();
     if (view === 'aicontent') loadWpContentView();
+    if (view === 'hacked') loadHackedView();
     if (view === 'genai') loadGenAiView();
   });
 });
@@ -3875,6 +3876,202 @@ function exportWpCsv() {
   a.download = `ai-content-visibility-${(_wpScan.site || 'site').replace(/^https?:\/\//, '').replace(/[^a-z0-9.-]/gi, '-')}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+// ── Hacked (content-injection detection) ──
+let _hackedResult = null;
+let _hackedPoll = null;
+
+function loadHackedView() {
+  const el = $('#hackedContent');
+  if (!el.dataset.ready) {
+    el.dataset.ready = '1';
+    el.innerHTML = `
+      <div class="section-card"><p style="color:var(--text-muted);font-size:13px;margin:0">
+        Hunts for <strong>injected spam content</strong> — the classic plugin-hack payload: casino / pharma /
+        replica-goods text, CSS-hidden link blocks, cloaked pages served only to Googlebot, obfuscated scripts,
+        and bursts of machine-generated posts. Reads the WordPress REST API (what's stored in the database),
+        fetches a sample of pages as a browser <em>and</em> as Googlebot (cloak check), then — when an Anthropic
+        key is configured in AI Visibility — has Claude compare every hit against what the site is actually about,
+        so a blog legitimately writing about gambling ads is not reported as hacked.
+        It also tries to <strong>name the origin</strong>: which layer the spam lives in and which installed plugin
+        has a documented injection exploit.</p></div>
+
+      <div class="section-card"><h3>Scan a Site</h3>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+          <label>Site URL</label>
+          <input type="text" id="hackedSite" placeholder="example.com" style="flex:1;min-width:220px">
+          <label title="Upper bound on REST items read across all post types">Max items</label>
+          <input type="number" id="hackedMax" value="400" min="10" max="2000" style="width:90px">
+          <label title="Pages fetched as browser + Googlebot for hidden-text, script and cloaking checks">HTML sample</label>
+          <input type="number" id="hackedSample" value="12" min="3" max="40" style="width:70px">
+        </div>
+        <button class="btn btn-primary" id="hackedRun">Run Scan</button>
+        <span id="hackedStatus" style="margin-left:10px;font-size:13px;color:var(--text-muted)"></span>
+      </div>
+
+      <div id="hackedResults"></div>`;
+
+    $('#hackedRun').addEventListener('click', runHackedScan);
+    $('#hackedSite').addEventListener('keydown', (e) => { if (e.key === 'Enter') runHackedScan(); });
+  }
+
+  const sEl = $('#hackedSite');
+  if (sEl && !sEl.value) {
+    const raw = $('#urlInput')?.value?.trim();
+    if (raw) { try { sEl.value = new URL(raw.startsWith('http') ? raw : 'https://' + raw).hostname; } catch { /* leave empty */ } }
+  }
+}
+
+async function runHackedScan() {
+  const site = $('#hackedSite').value.trim();
+  const status = $('#hackedStatus');
+  if (!site) return status.textContent = 'Enter a site URL.';
+
+  const btn = $('#hackedRun');
+  btn.disabled = true;
+  clearInterval(_hackedPoll);
+  status.textContent = 'Starting scan…';
+  try {
+    const res = await fetch('/api/hacked/scan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        site,
+        maxItems: parseInt($('#hackedMax').value, 10) || 400,
+        htmlSample: parseInt($('#hackedSample').value, 10) || 12
+      })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    _hackedPoll = setInterval(async () => {
+      try {
+        const jr = await fetch(`/api/hacked/job/${data.jobId}`);
+        const job = await jr.json();
+        if (job.error && !job.result) {
+          clearInterval(_hackedPoll);
+          status.textContent = 'Failed: ' + job.error;
+          btn.disabled = false;
+          return;
+        }
+        if (job.status === 'running') {
+          status.textContent = job.progress || 'Scanning…';
+          return;
+        }
+        clearInterval(_hackedPoll);
+        btn.disabled = false;
+        if (job.status === 'error') { status.textContent = 'Failed: ' + (job.error || 'scan failed'); return; }
+        status.textContent = 'Done ✓';
+        _hackedResult = job.result;
+        renderHackedResults();
+      } catch { /* transient poll failure — keep polling */ }
+    }, 2500);
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+    btn.disabled = false;
+  }
+}
+
+function hackedVerdictBanner(d) {
+  const styles = {
+    hacked:     { bg: 'rgba(239,68,68,.12)',  border: '#ef4444', label: '⚠️ INJECTED CONTENT DETECTED', text: 'This site shows strong signs of content injection. Review the findings below and treat the site as compromised until each one is explained.' },
+    suspicious: { bg: 'rgba(245,158,11,.12)', border: '#f59e0b', label: '🟡 SUSPICIOUS SIGNALS', text: 'Some signals warrant a manual look, but nothing conclusive was found.' },
+    clean:      { bg: 'rgba(34,197,94,.10)',  border: '#22c55e', label: '✅ NO INJECTION DETECTED', text: 'No spam content, hidden links, cloaking or suspicious scripts were found in the scanned sample. A clean scan lowers the odds of a hack — it cannot fully rule one out.' }
+  };
+  const s = styles[d.verdict] || styles.clean;
+  const cov = d.coverage || {};
+  return `<div class="section-card" style="background:${s.bg};border:1px solid ${s.border}">
+    <h3 style="margin-bottom:6px">${s.label}</h3>
+    <p style="font-size:13px;margin:0 0 8px">${s.text}</p>
+    <p style="font-size:12px;color:var(--text-muted);margin:0">
+      Coverage: ${cov.restAvailable ? `${cov.restItems} items read from the REST API` : 'REST API not readable (sitemap fallback used)'} ·
+      ${cov.htmlPages} pages fetched as browser · ${cov.cloakChecked} also fetched as Googlebot for cloak comparison.
+      ${d.ai?.used ? `Claude adjudicated ${d.ai.adjudicated} flagged item(s); ${d.ai.ruledLegitimate} ruled legitimate site content and removed.` : (d.ai?.error ? `AI adjudication unavailable (${esc(d.ai.error)}).` : '')}
+    </p>
+  </div>`;
+}
+
+function hackedSeverityBadge(sev) {
+  if (sev === 'high') return '<span class="badge badge-danger">HIGH</span>';
+  if (sev === 'medium') return '<span class="badge badge-warning">medium</span>';
+  return '<span class="badge">low</span>';
+}
+
+function hackedFindingCard(f) {
+  const rows = (f.pages || []).map(p => `
+    <tr>
+      <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        ${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a>` : '<span style="color:var(--text-muted)">no public URL</span>'}
+        ${p.title ? `<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis">${esc(p.title)}</div>` : ''}
+        ${p.gibberishSlug ? `<div style="font-size:11px;color:var(--warning)">gibberish slug: ${esc(p.gibberishSlug)}</div>` : ''}
+      </td>
+      <td style="font-size:12px">${(p.categories || []).map(c => `<span class="badge badge-warning" style="margin:1px">${esc(c)}</span>`).join(' ')}</td>
+      <td style="font-size:12px;color:var(--text-muted);max-width:420px">${esc(p.evidence || '')}
+        ${p.aiVerdict === 'injected' ? `<div style="color:#ef4444;margin-top:4px">Claude: injected — ${esc(p.aiReason || '')}</div>` : ''}
+        ${p.aiVerdict === 'unsure' ? `<div style="color:var(--warning);margin-top:4px">Claude: unsure — ${esc(p.aiReason || '')}</div>` : ''}
+      </td>
+    </tr>`).join('');
+  return `<div class="section-card">
+    <h3 style="margin-bottom:4px">${hackedSeverityBadge(f.severity)} ${esc(f.title)}</h3>
+    <p style="font-size:13px;color:var(--text-muted);margin:6px 0 10px">${esc(f.explanation)}${f.aiChecked ? ' <em>(Claude-verified against the site’s own topic profile)</em>' : ''}</p>
+    <div class="table-container" style="overflow-x:auto">
+      <table><thead><tr><th>Page</th><th>Spam categories</th><th>Evidence</th></tr></thead><tbody>${rows}</tbody></table>
+    </div>
+  </div>`;
+}
+
+function hackedConfidenceBadge(c) {
+  if (c === 'high') return '<span class="badge badge-danger">high confidence</span>';
+  if (c === 'medium') return '<span class="badge badge-warning">medium confidence</span>';
+  return '<span class="badge">low confidence</span>';
+}
+
+function hackedOriginCard(d) {
+  const o = d.origin || {};
+  const layerLabels = {
+    database: 'Database — the spam is stored in post_content itself (REST API returns it)',
+    render: 'Render-time — the spam is added by PHP while pages render (in HTML, not in stored content)',
+    cloak: 'Cloaking layer — different content is served to Googlebot than to browsers',
+    script: 'Script injection — suspicious/obfuscated scripts are being inserted into pages'
+  };
+
+  const candidates = (o.candidates || []).map(c => `
+    <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px">
+      <div style="margin-bottom:6px">${hackedConfidenceBadge(c.confidence)} <strong>${esc(c.name)}</strong>${c.slug ? ` <code style="font-size:12px">${esc(c.slug)}</code>` : ''}</div>
+      <ul style="font-size:13px;color:var(--text-muted);margin:0 0 0 18px">${c.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>
+    </div>`).join('');
+
+  const pluginList = (o.plugins || []).map(p =>
+    p.vulnerable
+      ? `<li><code>${esc(p.slug)}</code> <span class="badge badge-danger" style="margin-left:4px">known-exploited</span><div style="font-size:12px;color:var(--text-muted)">${esc(p.vulnerable)}</div></li>`
+      : `<li><code>${esc(p.slug)}</code></li>`
+  ).join('');
+
+  return `<div class="section-card">
+    <h3>Origin of the hack — where is it coming from?</h3>
+    ${(o.layers || []).length ? `
+      <h4 style="margin:12px 0 6px;font-size:14px">Injection layer${o.layers.length > 1 ? 's' : ''} detected</h4>
+      <ul style="font-size:13px;margin:0 0 0 18px">${o.layers.map(l => `<li>${esc(layerLabels[l] || l)}</li>`).join('')}</ul>` : ''}
+    ${candidates ? `<h4 style="margin:14px 0 8px;font-size:14px">Likely origin, ranked by evidence</h4>${candidates}` : '<p style="font-size:13px;color:var(--text-muted)">No findings — no origin to attribute.</p>'}
+    ${pluginList ? `
+      <h4 style="margin:14px 0 6px;font-size:14px">Detected plugins${o.theme ? ` · theme: <code>${esc(o.theme)}</code>` : ''}</h4>
+      <ul style="font-size:13px;margin:0 0 0 18px;columns:2">${pluginList}</ul>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:6px">Detected from public asset URLs and REST namespaces — plugin versions cannot be verified remotely.</p>` : ''}
+    ${(o.guidance || []).length ? `
+      <h4 style="margin:14px 0 6px;font-size:14px">Confirm on the server</h4>
+      <ul style="font-size:13px;margin:0 0 0 18px">${o.guidance.map(g => `<li>${esc(g)}</li>`).join('')}</ul>` : ''}
+  </div>`;
+}
+
+function renderHackedResults() {
+  const d = _hackedResult;
+  const el = $('#hackedResults');
+  if (!d) { el.innerHTML = ''; return; }
+  el.innerHTML = [
+    hackedVerdictBanner(d),
+    ...(d.findings || []).map(hackedFindingCard),
+    hackedOriginCard(d)
+  ].join('');
 }
 
 // ── GenAI Performance (GSC "Generative AI features" report analysis) ──

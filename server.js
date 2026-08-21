@@ -1496,6 +1496,67 @@ app.post('/api/wp-rest/scan', async (req, res) => {
   }
 });
 
+// ── Hacked: content-injection detection ─────────────────────────────────────
+// Detects SEO-spam injected via a compromised plugin (casino/pharma/replica
+// content, hidden links, cloaked doorways, malware scripts) and infers the
+// likely origin: which layer the spam lives in and which installed plugin has
+// a documented injection exploit. Runs as a background job — the scan fetches
+// dozens of pages twice (browser + Googlebot UA) and can take minutes, which
+// the platform's reverse proxy won't let a single request sit through.
+const hackedScan = require('./lib/hacked-scan');
+
+const hackedJobs = new Map();
+const HACKED_JOB_TTL = 30 * 60 * 1000;
+
+function pruneHackedJobs() {
+  const cutoff = Date.now() - HACKED_JOB_TTL;
+  for (const [id, job] of hackedJobs) {
+    if (job.status !== 'running' && (job.finishedAt || 0) < cutoff) hackedJobs.delete(id);
+  }
+}
+
+app.post('/api/hacked/scan', (req, res) => {
+  const site = String(req.body.site || '').trim();
+  if (!site) return res.status(400).json({ error: 'Enter a site URL' });
+
+  const job = {
+    id: uuidv4(), site, status: 'running', progress: 'Starting…',
+    result: null, error: null, startedAt: Date.now(), finishedAt: null
+  };
+  hackedJobs.set(job.id, job);
+
+  // Use the stored AI Visibility anthropic key if present, else the env key —
+  // the semantic adjudication layer is optional but is what tells "a blog post
+  // about gambling ads" apart from "injected casino spam".
+  const anthropicKey = getAiVisKeys().anthropic;
+  const anthropic = anthropicKey ? new Anthropic({ apiKey: anthropicKey }) : null;
+
+  hackedScan.scanForHack(site, {
+    maxItems: req.body.maxItems,
+    htmlSample: req.body.htmlSample,
+    anthropic,
+    onProgress: (msg) => { job.progress = msg; }
+  }).then(result => {
+    job.result = result;
+    job.status = 'done';
+  }).catch(e => {
+    job.status = 'error';
+    job.error = e.message || 'Scan failed';
+    console.error('hacked scan failed:', e);
+  }).finally(() => {
+    job.finishedAt = Date.now();
+    pruneHackedJobs();
+  });
+
+  res.json({ jobId: job.id, site });
+});
+
+app.get('/api/hacked/job/:id', (req, res) => {
+  const job = hackedJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'This scan has expired — run it again.' });
+  res.json({ jobId: job.id, site: job.site, status: job.status, progress: job.progress, result: job.result, error: job.error });
+});
+
 // ── GenAI Performance: analyze GSC's "Generative AI features" report ────────
 // GSC shows which pages get impressions in AI Overviews / AI Mode but hides
 // the queries. The user uploads/pastes that report; we join it with crawl data

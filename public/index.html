@@ -114,6 +114,10 @@
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h8l4 4v8a1 1 0 01-1 1H3a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M11 3v4h4"/><path d="M5 9h6M5 12h4"/></svg>
         AI Content Visibility
       </a>
+      <a href="#" class="nav-link" data-view="hacked">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2l6 2.5v4c0 3.8-2.6 6.4-6 7.5-3.4-1.1-6-3.7-6-7.5v-4L9 2z"/><path d="M9 6v3.5M9 12.5v.01"/></svg>
+        Hacked
+      </a>
       <a href="#" class="nav-link" data-view="genai">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 14l3-6 3 3 3-7 3 5 2-2"/><path d="M2 16h14"/></svg>
         GenAI Performance
@@ -439,6 +443,12 @@
       <div class="view" id="view-aicontent">
         <div class="view-header"><h2>AI Content Visibility — what the WordPress REST API returns</h2></div>
         <div id="aicontentContent"></div>
+      </div>
+
+      <!-- Hacked (content-injection detection) view -->
+      <div class="view" id="view-hacked">
+        <div class="view-header"><h2>Hacked — content-injection detection</h2></div>
+        <div id="hackedContent"></div>
       </div>
 
       <!-- GenAI Performance (GSC Generative AI report) view -->
