@@ -11,6 +11,7 @@ const CrawlDatabase = require('./lib/database');
 const Exporter = require('./lib/exporter');
 const gsc = require('./lib/gsc');
 const contentAnalyzer = require('./lib/content-analyzer');
+const keywordClusters = require('./lib/keyword-clusters');
 
 // Anthropic client for the in-app audit assistant chat. Optional — if
 // ANTHROPIC_API_KEY isn't set, /api/chat returns a friendly 503 and the
@@ -2559,6 +2560,54 @@ app.get('/api/gsc/sitemaps', async (req, res) => {
     res.json({ sitemaps });
   } catch (e) {
     res.status(500).json({ error: e.response?.data?.error?.message || e.message });
+  }
+});
+
+// ── Content Strategy: keyword clustering ──
+
+// GSC mode: cluster real Search Console queries semantically. The client
+// sends the page+query rows it already fetched from /api/gsc/query.
+app.post('/api/strategy/keyword-clusters', async (req, res) => {
+  const { siteUrl, rows } = req.body || {};
+  if (!Array.isArray(rows) || !rows.length) {
+    return res.status(400).json({ error: 'rows (query/page/impressions) are required' });
+  }
+  try {
+    const data = await keywordClusters.clusterGscKeywords(anthropicClient, { siteUrl, rows });
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Content mode (no GSC): build a strategy from the crawl's top discoverable
+// pages. Cached per crawl in kv_store — Claude runs once, reloads are free.
+app.post('/api/strategy/content-strategy', async (req, res) => {
+  const { crawlId, force } = req.body || {};
+  if (!crawlId) return res.status(400).json({ error: 'crawlId is required' });
+  const crawl = db.getCrawl(crawlId);
+  if (!crawl) return res.status(404).json({ error: 'Crawl not found' });
+
+  const cacheKey = `content-strategy:${crawlId}`;
+  if (!force) {
+    // kvGet JSON-parses stored values itself.
+    const cached = db.kvGet(cacheKey);
+    if (cached && typeof cached === 'object') {
+      return res.json({ ...cached, cached: true });
+    }
+  }
+
+  try {
+    const rows = db.getPagesForContentStrategy(crawlId, keywordClusters.MAX_PAGE_DEPTH);
+    const pages = keywordClusters.selectTopPages(rows);
+    if (!pages.length) {
+      return res.status(422).json({ error: 'No eligible pages found in this crawl (need indexable 200-status HTML pages within a few clicks of the homepage).' });
+    }
+    const data = await keywordClusters.buildContentStrategy(anthropicClient, { siteUrl: crawl.url, pages });
+    db.kvSet(cacheKey, JSON.stringify(data));
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 

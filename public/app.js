@@ -5864,20 +5864,9 @@ async function loadStrategyView() {
   }
 
   if (!status.configured || !status.connected) {
-    container.innerHTML = `
-      <div style="padding:40px;text-align:center;max-width:520px;margin:0 auto">
-        <div style="font-size:48px;margin-bottom:12px">📈</div>
-        <h3 style="margin-bottom:8px">Content Strategy needs Search Console</h3>
-        <p style="color:var(--text-muted);margin-bottom:20px">
-          This tab finds pages that already get search impressions but rank below position 1.
-          Connect Google Search Console first.
-        </p>
-        <a href="#" class="btn btn-primary" id="strategyGoToGsc" style="display:inline-block;padding:10px 22px;border-radius:8px;background:var(--primary);color:#fff;text-decoration:none;font-weight:600">Open Search Console tab</a>
-      </div>`;
-    document.getElementById('strategyGoToGsc').addEventListener('click', (e) => {
-      e.preventDefault();
-      document.querySelector('.nav-link[data-view="gsc"]').click();
-    });
+    // No Search Console — fall back to the crawl-based content strategy
+    // (top discoverable pages, clustered by topic with target keywords).
+    renderContentModeStrategy(container);
     return;
   }
 
@@ -5985,6 +5974,7 @@ function renderStrategyShell() {
           <label id="csQuickWinsLabel" title="Show only opportunities where at least one query is completely missing from the page" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted);opacity:.6">
             <input type="checkbox" id="csQuickWins" disabled> Quick wins only
           </label>
+          <button id="csClustersBtn" class="btn btn-secondary" title="Group the ranking queries into semantic keyword clusters, each assigned to the URL that should own it" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Build keyword clusters</button>
           <button id="csExport" class="btn btn-secondary" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export CSV</button>
           <select id="csExportLang" title="Deck language" style="padding:7px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer;font-size:13px">
             <option value="en">English</option>
@@ -6009,10 +5999,12 @@ function renderStrategyShell() {
       <div id="csExcludedHint"></div>
       <div id="csCoverageHint"></div>
       <div id="csTable"></div>
+      <div id="csClusters"></div>
     </div>
   `;
 
   document.getElementById('csRun').addEventListener('click', runStrategyQuery);
+  document.getElementById('csClustersBtn').addEventListener('click', buildKeywordClusters);
   document.getElementById('csExport').addEventListener('click', exportStrategyCsv);
   document.getElementById('csExportPpt').addEventListener('click', async () => {
     const btn = document.getElementById('csExportPpt');
@@ -6065,6 +6057,250 @@ function renderStrategyShell() {
   wireSelectFilter('csSiteFilter', 'csSite');
 }
 
+// ── Keyword clusters (GSC mode) ──────────────────────────────────────────
+// Groups the queries fetched by "Find opportunities" into semantic clusters
+// (Claude on the server, heuristic fallback), each assigned to the URL that
+// should own it.
+
+const CLUSTER_ACTION_STYLES = {
+  'optimize':        { label: 'Optimize page',   color: '#16A34A' },
+  'expand':          { label: 'Expand content',  color: '#D97706' },
+  'create-new-page': { label: 'Create new page', color: '#DC2626' },
+  'consolidate':     { label: 'Consolidate',     color: '#6366F1' },
+  'merge':           { label: 'Merge',           color: '#D97706' },
+  'keep':            { label: 'Keep as is',      color: '#6B7280' }
+};
+
+function clusterActionBadge(action) {
+  const s = CLUSTER_ACTION_STYLES[action] || CLUSTER_ACTION_STYLES.optimize;
+  return `<span style="display:inline-block;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:600;color:#fff;background:${s.color};white-space:nowrap">${escapeHtml(s.label)}</span>`;
+}
+
+function clusterLoadingCard(msg) {
+  return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:20px;display:flex;align-items:center;gap:12px">
+    <div class="cs-progress-bar" style="flex:0 0 120px"><div class="cs-progress-fill" style="width:100%"></div></div>
+    <span style="color:var(--text-muted)">${escapeHtml(msg)}</span>
+  </div>`;
+}
+
+async function buildKeywordClusters() {
+  const box = document.getElementById('csClusters');
+  if (!csState.rows.length) { alert('Run "Find opportunities" first — clustering uses those queries.'); return; }
+  const btn = document.getElementById('csClustersBtn');
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Clustering…';
+  box.innerHTML = clusterLoadingCard('Clustering keywords with AI — this can take up to a minute…');
+  try {
+    const rows = [];
+    for (const r of csState.rows) {
+      for (const q of r.topQueries) {
+        if (!q._band) continue;
+        rows.push({ query: q.query, page: r.page, impressions: q.impressions, clicks: q.clicks, position: q.position });
+      }
+    }
+    const resp = await fetch('/api/strategy/keyword-clusters', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteUrl: csState.selectedSite, rows })
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Clustering failed');
+    csState.clusters = data;
+    renderKeywordClusters(data);
+  } catch (e) {
+    box.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:20px;color:var(--danger)">Clustering failed: ${escapeHtml(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
+function renderKeywordClusters(data) {
+  const box = document.getElementById('csClusters');
+  const clusters = data.clusters || [];
+  if (!clusters.length) {
+    box.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:20px;color:var(--text-muted)">No clusters produced.</div>`;
+    return;
+  }
+  const sourceNote = data.source === 'heuristic'
+    ? `<span style="color:var(--warning)">Heuristic grouping (no AI key configured on the server) — clusters are grouped by ranking URL only.</span>`
+    : `AI-clustered from ${data.keywordCount} queries${data.truncated ? ' (highest-impression queries; long tail truncated)' : ''}.`;
+
+  const cards = clusters.map((c, i) => {
+    const kwChips = c.keywords.slice(0, 30).map(k =>
+      `<span title="pos ${k.bestPosition ?? '?'} · ${k.clicks} clicks" style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid var(--border);border-radius:999px;background:var(--bg-input);font-size:12px;margin:2px">${escapeHtml(k.query)} <b style="color:var(--text-muted);font-weight:600">${k.impressions.toLocaleString()}</b></span>`
+    ).join('');
+    const more = c.keywords.length > 30 ? `<span style="font-size:12px;color:var(--text-muted);margin-left:4px">+${c.keywords.length - 30} more</span>` : '';
+    const urlLine = c.assignedUrl
+      ? `<a href="${escapeHtml(c.assignedUrl)}" target="_blank" rel="noopener" style="color:var(--primary);word-break:break-all;font-size:13px">${escapeHtml(c.assignedUrl)}</a>`
+      : (c.suggestedNewUrl
+          ? `<span style="font-size:13px;color:var(--text-muted)">Suggested new page: <b style="color:var(--text)">${escapeHtml(c.suggestedNewUrl)}</b></span>`
+          : `<span style="font-size:13px;color:var(--text-muted)">No owning URL yet</span>`);
+    return `
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+          <b style="font-size:15px">${i + 1}. ${escapeHtml(c.name)}</b>
+          <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">${escapeHtml(c.intent)}</span>
+          ${clusterActionBadge(c.action)}
+          <span style="margin-left:auto;font-size:12px;color:var(--text-muted)"><b style="color:var(--text)">${c.totalImpressions.toLocaleString()}</b> impressions · ${c.totalClicks.toLocaleString()} clicks · ${c.keywords.length} keywords</span>
+        </div>
+        <div style="margin-bottom:8px">${urlLine}</div>
+        <div style="margin-bottom:${c.rationale ? '8px' : '0'}">${kwChips}${more}</div>
+        ${c.rationale ? `<div style="font-size:12px;color:var(--text-muted)">${escapeHtml(c.rationale)}</div>` : ''}
+      </div>`;
+  }).join('');
+
+  box.innerHTML = `
+    <div style="display:grid;gap:12px">
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-top:8px">
+        <h3 style="margin:0">Keyword clusters by URL</h3>
+        <span style="font-size:12px;color:var(--text-muted)">${sourceNote}</span>
+      </div>
+      ${cards}
+    </div>`;
+}
+
+// ── Content-based strategy (no GSC connected) ────────────────────────────
+// Builds the strategy from the loaded crawl: top 50 pages reachable within
+// 3 clicks of the homepage (ranked by internal links), clustered into
+// topics with per-page target keywords and actions.
+
+function renderContentModeStrategy(container) {
+  const hasCrawl = !!currentCrawlId;
+  container.innerHTML = `
+    <div style="display:grid;gap:16px;padding:20px">
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <h3 style="margin:0">Content Strategy from your crawl</h3>
+          <span style="font-size:11px;padding:2px 10px;border-radius:999px;background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted)">No Search Console</span>
+        </div>
+        <p style="color:var(--text-muted);font-size:13px;margin:10px 0 14px;max-width:760px">
+          Search Console isn't connected, so the strategy is built from the site's own content:
+          the top 50 pages a visitor can reach within 3 clicks of the homepage (ranked by internal
+          links pointing at them — lost/orphan URLs are excluded), grouped into topic clusters with
+          target keywords, per-page actions, and content gaps.
+          For a strategy based on real search queries, connect the
+          <a href="#" id="ctGoToGsc" style="color:var(--primary)">Search Console tab</a> first.
+        </p>
+        ${hasCrawl ? `
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <button id="ctBuild" class="btn btn-primary" style="padding:9px 18px;border-radius:6px;background:var(--primary);color:#fff;border:none;cursor:pointer;font-weight:600">Build content strategy</button>
+            <button id="ctRebuild" class="btn btn-secondary" title="Ignore the cached result and re-run the AI analysis" style="padding:9px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Rebuild</button>
+            <span style="font-size:12px;color:var(--text-muted)">First run takes ~30–60 s; the result is cached per crawl.</span>
+          </div>` : `
+          <p style="color:var(--warning);font-size:13px;margin:0">No crawl loaded — run a crawl (or open one from Saved Projects) first, then come back to this tab.</p>`}
+      </div>
+      <div id="ctResult"></div>
+      <style>
+        @keyframes csBarStripe { 0% { background-position: 0 0; } 100% { background-position: 40px 0; } }
+        @keyframes csBarPulse  { 0%, 100% { opacity: 1; } 50% { opacity: .85; } }
+        .cs-progress-bar { position: relative; height: 10px; border-radius: 999px; overflow: hidden; background: var(--bg-input); border: 1px solid var(--border); }
+        .cs-progress-fill { height: 100%; background: linear-gradient(135deg, #6366F1 0%, #8B5CF6 35%, #6366F1 70%, #4F46E5 100%); background-size: 40px 40px; animation: csBarStripe 1.4s linear infinite, csBarPulse 1.6s ease-in-out infinite; transition: width .35s ease-out; border-radius: 999px; }
+      </style>
+    </div>`;
+
+  document.getElementById('ctGoToGsc')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    document.querySelector('.nav-link[data-view="gsc"]').click();
+  });
+  if (hasCrawl) {
+    document.getElementById('ctBuild').addEventListener('click', () => runContentStrategy(false));
+    document.getElementById('ctRebuild').addEventListener('click', () => runContentStrategy(true));
+  }
+}
+
+async function runContentStrategy(force) {
+  const out = document.getElementById('ctResult');
+  const btn = document.getElementById('ctBuild');
+  const btn2 = document.getElementById('ctRebuild');
+  btn.disabled = true; btn2.disabled = true;
+  out.innerHTML = clusterLoadingCard(force
+    ? 'Rebuilding — analysing the top discoverable pages with AI…'
+    : 'Selecting the top discoverable pages and analysing them with AI — this can take up to a minute…');
+  try {
+    const resp = await fetch('/api/strategy/content-strategy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ crawlId: currentCrawlId, force: !!force })
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Strategy build failed');
+    renderContentStrategyResult(data);
+  } catch (e) {
+    out.innerHTML = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:20px;color:var(--danger)">Content strategy failed: ${escapeHtml(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn2.disabled = false;
+  }
+}
+
+function renderContentStrategyResult(data) {
+  const out = document.getElementById('ctResult');
+  const kwChip = k => `<span style="display:inline-block;padding:3px 9px;border:1px solid var(--border);border-radius:999px;background:var(--bg-input);font-size:12px;margin:2px">${escapeHtml(k)}</span>`;
+
+  const sourceNote = data.source === 'heuristic'
+    ? `<span style="color:var(--warning)">Heuristic grouping (no AI key configured on the server).</span>`
+    : `${data.cached ? 'Cached result — use Rebuild to re-analyse. ' : ''}AI analysis of the top ${data.pageCount} discoverable pages.`;
+
+  const clusterCards = (data.clusters || []).map(c => `
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:14px">
+      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+        <b>${escapeHtml(c.name)}</b>
+        <span style="font-size:12px;color:var(--text-muted)">${c.pageUrls.length} page${c.pageUrls.length === 1 ? '' : 's'}</span>
+      </div>
+      ${c.description ? `<div style="font-size:12px;color:var(--text-muted);margin:6px 0">${escapeHtml(c.description)}</div>` : ''}
+      ${c.targetKeywords.length ? `<div style="margin-top:4px">${c.targetKeywords.map(kwChip).join('')}</div>` : ''}
+    </div>`).join('');
+
+  const pageRows = (data.pages || []).map(p => `
+    <tr style="border-top:1px solid var(--border)">
+      <td style="padding:8px;max-width:320px">
+        <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener" style="color:var(--primary);word-break:break-all;font-size:12px">${escapeHtml(p.url)}</a>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">depth ${p.depth} · ${p.inboundLinks} links in · ${(p.wordCount || 0).toLocaleString()} words</div>
+      </td>
+      <td style="padding:8px;font-size:12px;white-space:nowrap">${escapeHtml(p.cluster || '—')}</td>
+      <td style="padding:8px">${(p.targetKeywords || []).map(kwChip).join('') || '<span style="color:var(--text-muted);font-size:12px">—</span>'}</td>
+      <td style="padding:8px">${clusterActionBadge(p.action)}</td>
+      <td style="padding:8px;font-size:12px;color:var(--text-muted)">${escapeHtml(p.recommendation || '')}</td>
+    </tr>`).join('');
+
+  const gapCards = (data.contentGaps || []).map(g => `
+    <div style="background:var(--bg-card);border:1px dashed var(--border);border-radius:8px;padding:14px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <b>${escapeHtml(g.topic)}</b> ${clusterActionBadge('create-new-page')}
+      </div>
+      <div style="font-size:13px;margin:6px 0 2px">${escapeHtml(g.suggestedTitle || '')}</div>
+      ${g.suggestedUrl ? `<div style="font-size:12px;color:var(--text-muted);word-break:break-all">${escapeHtml(g.suggestedUrl)}</div>` : ''}
+      ${(g.targetKeywords || []).length ? `<div style="margin-top:6px">${g.targetKeywords.map(kwChip).join('')}</div>` : ''}
+      ${g.why ? `<div style="font-size:12px;color:var(--text-muted);margin-top:6px">${escapeHtml(g.why)}</div>` : ''}
+    </div>`).join('');
+
+  out.innerHTML = `
+    <div style="display:grid;gap:16px">
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px">
+        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Site summary</div>
+        <div style="font-size:14px">${escapeHtml(data.siteSummary || '')}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:8px">${sourceNote}</div>
+      </div>
+
+      <h3 style="margin:4px 0 0">Topic clusters</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">${clusterCards}</div>
+
+      <h3 style="margin:4px 0 0">Pages & target keywords</h3>
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="text-align:left;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em">
+            <th style="padding:10px 8px">Page</th><th style="padding:10px 8px">Cluster</th>
+            <th style="padding:10px 8px">Target keywords</th><th style="padding:10px 8px">Action</th>
+            <th style="padding:10px 8px">Recommendation</th>
+          </tr></thead>
+          <tbody>${pageRows}</tbody>
+        </table>
+      </div>
+
+      ${gapCards ? `<h3 style="margin:4px 0 0">Content gaps — pages to create</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">${gapCards}</div>` : ''}
+    </div>`;
+}
+
 async function loadStrategySites() {
   const sel = document.getElementById('csSite');
   try {
@@ -6112,6 +6348,9 @@ async function runStrategyQuery() {
   btn.disabled = true; btn.textContent = 'Loading…';
   document.getElementById('csTable').innerHTML = '<p style="color:var(--text-muted);padding:20px">Querying Search Console for opportunities…</p>';
   document.getElementById('csSummary').style.display = 'none';
+  // Old clusters belong to the previous query's rows — clear them.
+  document.getElementById('csClusters').innerHTML = '';
+  csState.clusters = null;
 
   try {
     // Page + query dimension so we can classify each page by its best
