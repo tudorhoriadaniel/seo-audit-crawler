@@ -260,6 +260,14 @@ async function startCrawl() {
     if (!url) return;
   }
 
+  // A number input with invalid text (e.g. "800-1000") reports value === ''
+  // while flagging badInput — silently crawling with 0 delay then defeats the
+  // politeness setting the user thought they enabled. Refuse to start instead.
+  const delayEl = $('#optRequestDelay');
+  if (delayEl && delayEl.validity && delayEl.validity.badInput) {
+    return alert('Delay between requests must be a single number of milliseconds, e.g. 800.');
+  }
+
   const saveProject = $('#optSaveProject').checked;
   const botPreset = $('#optBotPreset').value || 'default';
   const body = {
