@@ -364,7 +364,7 @@ app.get('/api/bot-presets', (req, res) => {
 });
 
 app.post('/api/crawls', (req, res) => {
-  const { url, urls, maxPages, maxDepth, concurrency, respectRobots, userAgent, botPreset, saveProject } = req.body;
+  const { url, urls, maxPages, maxDepth, concurrency, requestDelay, respectRobots, userAgent, botPreset, saveProject } = req.body;
 
   const listMode = Array.isArray(urls) && urls.length > 0;
   if (!listMode && !url) return res.status(400).json({ error: 'URL is required' });
@@ -401,6 +401,7 @@ app.post('/api/crawls', (req, res) => {
     maxPages: Math.min(parseInt(maxPages) || 5000, 50000),
     maxDepth: Math.min(parseInt(maxDepth) || 10, 50),
     concurrency: Math.min(parseInt(concurrency) || 5, 20),
+    requestDelay: Math.min(Math.max(parseInt(requestDelay) || 0, 0), 10000),
     respectRobots: respectRobots !== false,
     userAgent: resolvedUa,
     robotsUserAgent: resolvedRobotsToken,

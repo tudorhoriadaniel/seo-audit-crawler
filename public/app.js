@@ -266,6 +266,7 @@ async function startCrawl() {
     maxPages: parseInt($('#optMaxPages').value) || 500,
     maxDepth: parseInt($('#optMaxDepth').value) || 10,
     concurrency: parseInt($('#optConcurrency').value) || 5,
+    requestDelay: parseInt($('#optRequestDelay').value) || 0,
     respectRobots: $('#optRobots').checked,
     botPreset,
     userAgent: botPreset === 'custom' ? ($('#optUserAgent').value || undefined) : undefined,
