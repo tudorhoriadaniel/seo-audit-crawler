@@ -2581,6 +2581,54 @@ app.post('/api/strategy/keyword-clusters', async (req, res) => {
   }
 });
 
+// Excel export of the keyword clusters. The client sends back the cluster
+// data it already holds (from /api/strategy/keyword-clusters) so nothing
+// is recomputed — this endpoint just shapes it into a workbook.
+app.post('/api/strategy/keyword-clusters/export-xlsx', (req, res) => {
+  const { siteUrl, clusters } = req.body || {};
+  if (!Array.isArray(clusters) || !clusters.length) {
+    return res.status(400).json({ error: 'clusters are required' });
+  }
+  const XLSX = require('xlsx');
+  let host = 'site';
+  try { host = new URL(String(siteUrl || '').replace(/^sc-domain:/, 'https://')).hostname.replace(/^www\./, ''); } catch { /* keep 'site' */ }
+  const stamp = new Date().toISOString().slice(0, 10);
+
+  // Sheet 1: one row per cluster — the strategy view.
+  const clusterRows = [['#', 'Cluster', 'Intent', 'Action', 'Target URL', 'Suggested new URL', 'Keywords', 'Impressions', 'Clicks', 'Why this URL should target this cluster']];
+  clusters.forEach((c, i) => clusterRows.push([
+    i + 1, c.name || '', c.intent || '', c.action || '',
+    c.assignedUrl || '', c.suggestedNewUrl || '',
+    (c.keywords || []).length, c.totalImpressions || 0, c.totalClicks || 0,
+    c.rationale || ''
+  ]));
+
+  // Sheet 2: one row per keyword — the working data.
+  const kwRows = [['Cluster', 'Target URL', 'Keyword', 'Impressions', 'Clicks', 'Best position']];
+  for (const c of clusters) {
+    for (const k of c.keywords || []) {
+      kwRows.push([
+        c.name || '', c.assignedUrl || c.suggestedNewUrl || '',
+        k.query || '', k.impressions || 0, k.clicks || 0,
+        k.bestPosition == null ? '' : k.bestPosition
+      ]);
+    }
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.aoa_to_sheet(clusterRows);
+  ws1['!cols'] = [{ wch: 4 }, { wch: 34 }, { wch: 14 }, { wch: 16 }, { wch: 60 }, { wch: 40 }, { wch: 10 }, { wch: 12 }, { wch: 9 }, { wch: 90 }];
+  XLSX.utils.book_append_sheet(wb, ws1, 'Clusters');
+  const ws2 = XLSX.utils.aoa_to_sheet(kwRows);
+  ws2['!cols'] = [{ wch: 34 }, { wch: 60 }, { wch: 45 }, { wch: 12 }, { wch: 9 }, { wch: 13 }];
+  XLSX.utils.book_append_sheet(wb, ws2, 'Keywords');
+
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="keyword-clusters_${host}_${stamp}.xlsx"`);
+  res.end(buf);
+});
+
 // Content mode (no GSC): build a strategy from the crawl's top discoverable
 // pages. Cached per crawl in kv_store — Claude runs once, reloads are free.
 app.post('/api/strategy/content-strategy', async (req, res) => {

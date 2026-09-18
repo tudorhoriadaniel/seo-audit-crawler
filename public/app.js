@@ -6131,7 +6131,7 @@ function renderKeywordClusters(data) {
     return;
   }
   const sourceNote = data.source === 'heuristic'
-    ? `<span style="color:var(--warning)">Heuristic grouping (no AI key configured on the server) — clusters are grouped by ranking URL only.</span>`
+    ? `<span style="color:var(--warning)">Heuristic grouping (${escapeHtml(data.fallbackReason || 'AI unavailable')}) — clusters are grouped by ranking URL only.</span>`
     : `AI-clustered from ${data.keywordCount} queries${data.truncated ? ' (highest-impression queries; long tail truncated)' : ''}.`;
 
   const cards = clusters.map((c, i) => {
@@ -6160,12 +6160,140 @@ function renderKeywordClusters(data) {
 
   box.innerHTML = `
     <div style="display:grid;gap:12px">
-      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-top:8px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px">
         <h3 style="margin:0">Keyword clusters by URL</h3>
         <span style="font-size:12px;color:var(--text-muted)">${sourceNote}</span>
+        <span style="margin-left:auto;display:inline-flex;gap:8px">
+          <button id="csClustersXlsx" class="btn btn-secondary" title="Download the clusters as an Excel workbook (Clusters + Keywords sheets)" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export Excel</button>
+          <button id="csClustersPdf" class="btn btn-secondary" title="Open a printable report; use your browser's Print → Save as PDF" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer">Export PDF</button>
+        </span>
       </div>
       ${cards}
     </div>`;
+
+  document.getElementById('csClustersXlsx').addEventListener('click', () => {
+    exportClustersXlsx().catch(e => alert('Excel export failed: ' + (e && e.message ? e.message : e)));
+  });
+  document.getElementById('csClustersPdf').addEventListener('click', () => {
+    try { exportClustersPdf(); } catch (e) { alert('PDF export failed: ' + (e && e.message ? e.message : e)); }
+  });
+}
+
+// Download the clusters as a real .xlsx — the server (which already ships
+// SheetJS for the crawl exports) shapes the data we send back to it.
+async function exportClustersXlsx() {
+  const data = csState.clusters;
+  if (!data || !data.clusters || !data.clusters.length) { alert('Build keyword clusters first.'); return; }
+  const btn = document.getElementById('csClustersXlsx');
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Exporting…';
+  try {
+    const resp = await fetch('/api/strategy/keyword-clusters/export-xlsx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteUrl: csState.selectedSite, clusters: data.clusters })
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || 'Export failed');
+    }
+    const blob = await resp.blob();
+    const cd = resp.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="([^"]+)"/);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = m ? m[1] : 'keyword-clusters.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
+// Printable cluster report — one section per cluster with the owning URL,
+// the why-this-URL explanation, and the keyword table. Opens in a new tab;
+// the user prints → Save as PDF (same pattern as the strategy PDF export).
+function exportClustersPdf() {
+  const data = csState.clusters;
+  if (!data || !data.clusters || !data.clusters.length) { alert('Build keyword clusters first.'); return; }
+  const siteUrl = csState.selectedSite || 'site';
+  const startDate = (document.getElementById('csStart') || {}).value || '';
+  const endDate = (document.getElementById('csEnd') || {}).value || '';
+  const esc = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  const clusters = data.clusters;
+  const totalKw = clusters.reduce((s, c) => s + c.keywords.length, 0);
+  const totalImpr = clusters.reduce((s, c) => s + (c.totalImpressions || 0), 0);
+  const totalClicks = clusters.reduce((s, c) => s + (c.totalClicks || 0), 0);
+
+  const actionStyle = (a) => (CLUSTER_ACTION_STYLES[a] || CLUSTER_ACTION_STYLES.optimize);
+  const sections = clusters.map((c, i) => {
+    const st = actionStyle(c.action);
+    const urlLine = c.assignedUrl
+      ? `<a href="${esc(c.assignedUrl)}">${esc(c.assignedUrl)}</a>`
+      : (c.suggestedNewUrl ? `<span class="muted">Create new page:</span> <b>${esc(c.suggestedNewUrl)}</b>` : '<span class="muted">No owning URL yet</span>');
+    const kwRows = c.keywords.map(k => `
+      <tr>
+        <td>${esc(k.query)}</td>
+        <td class="num">${(k.impressions || 0).toLocaleString()}</td>
+        <td class="num">${(k.clicks || 0).toLocaleString()}</td>
+        <td class="num">${k.bestPosition == null ? '—' : k.bestPosition}</td>
+      </tr>`).join('');
+    return `
+      <section>
+        <div class="cluster-head">
+          <h2>${i + 1}. ${esc(c.name)}</h2>
+          <span class="chip" style="background:${st.color}">${esc(st.label)}</span>
+          <span class="meta">${esc(c.intent)} · ${c.keywords.length} keywords · ${(c.totalImpressions || 0).toLocaleString()} impressions · ${(c.totalClicks || 0).toLocaleString()} clicks</span>
+        </div>
+        <div class="url">${urlLine}</div>
+        ${c.rationale ? `<p class="why"><b>Why this URL:</b> ${esc(c.rationale)}</p>` : ''}
+        <table>
+          <thead><tr><th>Keyword</th><th class="num">Impressions</th><th class="num">Clicks</th><th class="num">Best pos.</th></tr></thead>
+          <tbody>${kwRows}</tbody>
+        </table>
+      </section>`;
+  }).join('');
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Keyword clusters — ${esc(siteUrl)}</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1a1a2e; padding: 40px 48px; max-width: 900px; margin: 0 auto; }
+      .kicker { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #6366F1; font-weight: 700; }
+      h1 { font-size: 26px; margin: 6px 0 2px; }
+      .sub { color: #667; font-size: 13px; margin-bottom: 6px; }
+      .totals { font-size: 13px; color: #445; margin: 10px 0 26px; }
+      .totals b { color: #1a1a2e; }
+      section { margin-bottom: 28px; page-break-inside: avoid; border: 1px solid #e3e5ee; border-radius: 10px; padding: 18px 20px; }
+      .cluster-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+      h2 { font-size: 17px; }
+      .chip { color: #fff; font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 999px; white-space: nowrap; }
+      .meta { font-size: 12px; color: #667; }
+      .url { font-size: 13px; word-break: break-all; margin-bottom: 8px; }
+      .url a { color: #4F46E5; }
+      .why { font-size: 13px; color: #334; background: #f4f5fb; border-left: 3px solid #6366F1; padding: 8px 12px; border-radius: 0 6px 6px 0; margin-bottom: 12px; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      th { text-align: left; color: #667; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; padding: 6px 8px; border-bottom: 1px solid #e3e5ee; }
+      td { padding: 5px 8px; border-bottom: 1px solid #f0f1f7; }
+      .num { text-align: right; white-space: nowrap; }
+      .toolbar { position: fixed; top: 14px; right: 16px; }
+      .toolbar button { background: #6366F1; color: #fff; border: none; border-radius: 8px; padding: 10px 18px; font-weight: 600; cursor: pointer; font-size: 13px; }
+      @media print { .toolbar { display: none; } body { padding: 0; } section { border: none; border-bottom: 1px solid #e3e5ee; border-radius: 0; padding: 14px 0; } }
+    </style></head><body>
+    <div class="toolbar"><button onclick="window.print()">Print → Save as PDF</button></div>
+    <div class="kicker">Keyword clusters by URL</div>
+    <h1>${esc(siteUrl)}</h1>
+    <div class="sub">${esc(startDate)} → ${esc(endDate)} · generated ${new Date().toISOString().slice(0, 10)}</div>
+    <div class="totals"><b>${clusters.length}</b> clusters · <b>${totalKw.toLocaleString()}</b> keywords · <b>${totalImpr.toLocaleString()}</b> impressions · <b>${totalClicks.toLocaleString()}</b> clicks</div>
+    ${sections}
+  </body></html>`;
+
+  const w = window.open('', '_blank');
+  if (!w) { alert('Popup blocked — allow popups for this site to export the PDF.'); return; }
+  w.document.write(html);
+  w.document.close();
 }
 
 // ── Content-based strategy (no GSC connected) ────────────────────────────
@@ -6246,7 +6374,7 @@ function renderContentStrategyResult(data) {
   const kwChip = k => `<span style="display:inline-block;padding:3px 9px;border:1px solid var(--border);border-radius:999px;background:var(--bg-input);font-size:12px;margin:2px">${escapeHtml(k)}</span>`;
 
   const sourceNote = data.source === 'heuristic'
-    ? `<span style="color:var(--warning)">Heuristic grouping (no AI key configured on the server).</span>`
+    ? `<span style="color:var(--warning)">Heuristic grouping (${escapeHtml(data.fallbackReason || 'AI unavailable')}).</span>`
     : `${data.cached ? 'Cached result — use Rebuild to re-analyse. ' : ''}AI analysis of the top ${data.pageCount} discoverable pages.`;
 
   const clusterCards = (data.clusters || []).map(c => `
