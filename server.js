@@ -1802,7 +1802,7 @@ app.get('/api/genai/last', (req, res) => {
 const logAnalyzer = require('./lib/log-analyzer');
 const BOTLOGS_LAST_KEY = 'botlogs:last';
 
-app.post('/api/logs/analyze', express.raw({ type: '*/*', limit: '300mb' }), (req, res) => {
+app.post('/api/logs/analyze', express.raw({ type: () => true, limit: '300mb' }), (req, res) => {
   try {
     if (!req.body || !req.body.length) return res.status(400).json({ error: 'No file body' });
     const result = logAnalyzer.analyzeLog(req.body);

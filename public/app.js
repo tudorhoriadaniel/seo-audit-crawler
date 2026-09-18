@@ -4316,7 +4316,9 @@ async function botlogsHandleFile(e) {
     const buffers = await Promise.all(files.map(f => f.arrayBuffer()));
     const blob = new Blob(buffers);
     const res = await fetch('/api/logs/analyze?filename=' + encodeURIComponent(files.map(f => f.name).join(', ')), {
-      method: 'POST', body: blob
+      // Explicit Content-Type: a Blob built from ArrayBuffers has none, and
+      // without the header express.raw skips the body entirely.
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: blob
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
