@@ -4297,12 +4297,6 @@ function loadBotLogsView() {
     $('#botlogsFile').addEventListener('change', botlogsHandleFile);
     _botlogsLoaded = true;
   }
-  // Show the last analysis so the view isn't empty on revisit.
-  if (!_botlogsResult) {
-    fetch('/api/logs/last').then(r => r.json()).then(d => {
-      if (d.result && !_botlogsResult) { _botlogsResult = d.result; renderBotLogsResults(d.result, true); }
-    }).catch(() => {});
-  }
 }
 
 async function botlogsHandleFile(e) {
@@ -4325,7 +4319,7 @@ async function botlogsHandleFile(e) {
     status.textContent = data.totals.hits.toLocaleString() + ' requests analyzed ✓';
     _botlogsResult = data;
     _botlogsFilter = '';
-    renderBotLogsResults(data, false);
+    renderBotLogsResults(data);
   } catch (err) {
     status.textContent = 'Error: ' + err.message;
   }
@@ -4347,7 +4341,7 @@ function botlogsCatBadge(r, catKey) {
   return `<span class="badge" style="background:${color}22;color:${color};border:1px solid ${color}55">${esc(label)}</span>`;
 }
 
-function renderBotLogsResults(r, fromCache) {
+function renderBotLogsResults(r) {
   const el = $('#botlogsResults');
   const cats = r.categories || [];
   const catByKey = Object.fromEntries(cats.map(c => [c.key, c]));
@@ -4356,11 +4350,6 @@ function renderBotLogsResults(r, fromCache) {
     ? r.dateRange.from.slice(0, 10) + ' → ' + r.dateRange.to.slice(0, 10) : '—';
 
   let html = '';
-  if (fromCache) {
-    html += `<div class="section-card" style="border-left:4px solid var(--info,#3b82f6)"><p style="font-size:13px;margin:0;color:var(--text-muted)">
-      Showing the last analysis${r.filename ? ' of <strong>' + esc(r.filename) + '</strong>' : ''}
-      from ${esc(String(r.analyzedAt || '').slice(0, 16).replace('T', ' '))}. Upload a new log to refresh.</p></div>`;
-  }
 
   // ── Stat cards ──
   html += `<div class="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px">
@@ -4499,7 +4488,7 @@ function renderBotLogsResults(r, fromCache) {
     const btn = e.target.closest('button[data-cat] , button');
     if (!btn || btn.dataset.cat === undefined) return;
     _botlogsFilter = btn.dataset.cat;
-    renderBotLogsResults(_botlogsResult, fromCache);
+    renderBotLogsResults(_botlogsResult);
   });
   renderBotLogsBotTable(r);
 }

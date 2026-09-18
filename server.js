@@ -1800,7 +1800,11 @@ app.get('/api/genai/last', (req, res) => {
 // .gz) and get back who crawls the site: search bots, AI/LLM bots, SEO
 // tools, social previews, scrapers, humans — plus llms.txt/robots.txt hits.
 const logAnalyzer = require('./lib/log-analyzer');
-const BOTLOGS_LAST_KEY = 'botlogs:last';
+
+// Analyses are intentionally NOT stored: the app is shared behind one
+// password, so a saved "last analysis" would leak one user's log stats to
+// everyone. Results live only in the uploader's browser tab.
+try { db.kvSet('botlogs:last', null); } catch { /* nothing stored yet */ }
 
 app.post('/api/logs/analyze', express.raw({ type: () => true, limit: '300mb' }), (req, res) => {
   try {
@@ -1808,15 +1812,10 @@ app.post('/api/logs/analyze', express.raw({ type: () => true, limit: '300mb' }),
     const result = logAnalyzer.analyzeLog(req.body);
     result.filename = String(req.query.filename || '').slice(0, 200);
     result.analyzedAt = new Date().toISOString();
-    try { db.kvSet(BOTLOGS_LAST_KEY, result); } catch { /* keep serving the response even if persisting fails */ }
     res.json(result);
   } catch (e) {
     res.status(400).json({ error: 'Could not analyze log: ' + e.message });
   }
-});
-
-app.get('/api/logs/last', (req, res) => {
-  res.json({ result: db.kvGet(BOTLOGS_LAST_KEY) || null });
 });
 
 app.get('/api/ai-visibility/history', (req, res) => {
