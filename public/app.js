@@ -67,6 +67,7 @@ $$('.nav-link').forEach(link => {
     if (view === 'aicontent') loadWpContentView();
     if (view === 'hacked') loadHackedView();
     if (view === 'genai') loadGenAiView();
+    if (view === 'botlogs') loadBotLogsView();
   });
 });
 
@@ -4265,6 +4266,240 @@ async function genaiHandlePaste() {
   } catch (err) {
     $('#genaiParseStatus').textContent = 'Error: ' + err.message;
   }
+}
+
+// ═══════════════ Bot Log Analyzer ═══════════════
+// Upload a raw server access log (.log/.txt/.gz) → visualize which bots
+// crawl the site: search engines, AI/LLM bots, SEO tools, social previews,
+// scrapers and real browser traffic, plus llms.txt / robots.txt requests.
+let _botlogsResult = null;
+let _botlogsFilter = '';
+let _botlogsLoaded = false;
+
+function loadBotLogsView() {
+  const el = $('#botlogsContent');
+  if (!_botlogsLoaded) {
+    el.innerHTML = `
+      <div class="section-card">
+        <h3>Upload server access log</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">
+          Upload the raw access log from your hosting (Apache/Nginx <em>combined</em> format — cPanel's
+          <code>domain.com-ssl_log</code> works as-is). Accepts <code>.log</code>, <code>.txt</code> and gzipped <code>.gz</code> files;
+          you can select several files from the same site at once.
+        </p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <label class="btn btn-primary" for="botlogsFile">Upload log file…</label>
+          <input type="file" id="botlogsFile" accept=".log,.txt,.gz" multiple style="display:none">
+          <span id="botlogsStatus" style="font-size:13px;color:var(--text-muted)"></span>
+        </div>
+      </div>
+      <div id="botlogsResults"></div>`;
+    $('#botlogsFile').addEventListener('change', botlogsHandleFile);
+    _botlogsLoaded = true;
+  }
+  // Show the last analysis so the view isn't empty on revisit.
+  if (!_botlogsResult) {
+    fetch('/api/logs/last').then(r => r.json()).then(d => {
+      if (d.result && !_botlogsResult) { _botlogsResult = d.result; renderBotLogsResults(d.result, true); }
+    }).catch(() => {});
+  }
+}
+
+async function botlogsHandleFile(e) {
+  const files = [...e.target.files];
+  if (!files.length) return;
+  const status = $('#botlogsStatus');
+  status.textContent = 'Analyzing ' + files.map(f => f.name).join(', ') + '…';
+  try {
+    // Concatenating works for both plain text and .gz (multi-member gzip),
+    // as long as the user doesn't mix the two — the server rejects that.
+    const buffers = await Promise.all(files.map(f => f.arrayBuffer()));
+    const blob = new Blob(buffers);
+    const res = await fetch('/api/logs/analyze?filename=' + encodeURIComponent(files.map(f => f.name).join(', ')), {
+      method: 'POST', body: blob
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    status.textContent = data.totals.hits.toLocaleString() + ' requests analyzed ✓';
+    _botlogsResult = data;
+    _botlogsFilter = '';
+    renderBotLogsResults(data, false);
+  } catch (err) {
+    status.textContent = 'Error: ' + err.message;
+  }
+  e.target.value = '';
+}
+
+function fmtBytes(n) {
+  if (!n) return '0 B';
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + ' GB';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + ' MB';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + ' KB';
+  return n + ' B';
+}
+
+function botlogsCatBadge(r, catKey) {
+  const cat = (r.categories || []).find(c => c.key === catKey);
+  const color = cat ? cat.color : '#9ca3af';
+  const label = cat ? cat.label : catKey;
+  return `<span class="badge" style="background:${color}22;color:${color};border:1px solid ${color}55">${esc(label)}</span>`;
+}
+
+function renderBotLogsResults(r, fromCache) {
+  const el = $('#botlogsResults');
+  const cats = r.categories || [];
+  const catByKey = Object.fromEntries(cats.map(c => [c.key, c]));
+  const get = k => (catByKey[k] ? catByKey[k].hits : 0);
+  const range = r.dateRange && r.dateRange.from
+    ? r.dateRange.from.slice(0, 10) + ' → ' + r.dateRange.to.slice(0, 10) : '—';
+
+  let html = '';
+  if (fromCache) {
+    html += `<div class="section-card" style="border-left:4px solid var(--info,#3b82f6)"><p style="font-size:13px;margin:0;color:var(--text-muted)">
+      Showing the last analysis${r.filename ? ' of <strong>' + esc(r.filename) + '</strong>' : ''}
+      from ${esc(String(r.analyzedAt || '').slice(0, 16).replace('T', ' '))}. Upload a new log to refresh.</p></div>`;
+  }
+
+  // ── Stat cards ──
+  html += `<div class="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px">
+    <div class="stat-card"><div class="label">Total requests</div><div class="value">${r.totals.hits.toLocaleString()}</div></div>
+    <div class="stat-card"><div class="label">Period</div><div class="value" style="font-size:15px;line-height:1.9">${esc(range)}</div></div>
+    <div class="stat-card"><div class="label">Search engine bots</div><div class="value info">${get('search').toLocaleString()}</div></div>
+    <div class="stat-card"><div class="label">AI / LLM bots</div><div class="value" style="color:#a855f7">${get('ai').toLocaleString()}</div></div>
+    <div class="stat-card"><div class="label">Browser visitors</div><div class="value success">${get('human').toLocaleString()}</div></div>
+    <div class="stat-card"><div class="label">Unique IPs</div><div class="value">${r.totals.uniqueIps.toLocaleString()}</div></div>
+  </div>`;
+
+  // ── Traffic share pie ──
+  const pieData = cats.map(c => ({ label: c.label, count: c.hits, color: c.color, percentage: c.pct }));
+  html += `<div class="section-card"><h3>Traffic share by visitor type</h3>
+    <div class="pie-chart-container">
+      ${renderPieChart(pieData, 180)}
+      <div class="pie-legend">
+        ${cats.map(c => `<div class="pie-legend-item">
+          <div class="pie-legend-dot" style="background:${c.color}"></div>
+          <span class="pie-legend-label">${esc(c.label)}</span>
+          <span class="pie-legend-count">${c.hits.toLocaleString()} (${c.pct}%) · ${c.uniqueIps.toLocaleString()} IPs · ${fmtBytes(c.bytes)}</span>
+        </div>`).join('')}
+      </div>
+    </div>
+    <p style="font-size:12px;color:var(--text-muted);margin-top:10px">"Browser visitors" = requests with a normal browser user-agent. Vulnerability scanners often fake browser UAs, so this number can include disguised bots.</p>
+  </div>`;
+
+  // ── llms.txt & discovery files ──
+  const sf = r.specialFiles || {};
+  const llms = sf['llms.txt'] || [];
+  const llmsAi = llms.filter(x => x.cat === 'ai');
+  html += `<div class="section-card" style="border-left:4px solid #a855f7"><h3>llms.txt — are AI bots looking for it?</h3>`;
+  if (llms.length === 0) {
+    html += `<p style="color:var(--text-muted);font-size:13px">No requests to <code>/llms.txt</code> in this log — no AI bot (or anyone else) asked for it during this period.</p>`;
+  } else {
+    const ok = llms.some(x => x.lastStatus >= 200 && x.lastStatus < 300);
+    html += `<p style="font-size:13px;margin-bottom:10px">
+      <strong>${llms.reduce((s, x) => s + x.hits, 0)}</strong> request(s) to <code>/llms.txt</code>,
+      ${llmsAi.length > 0 ? `including <strong>${llmsAi.length}</strong> AI/LLM bot(s): ${llmsAi.map(x => esc(x.label)).join(', ')}.` : 'but none from a recognized AI/LLM bot.'}
+      ${ok ? '' : ' <span style="color:var(--danger)">The file returned an error status — it may not exist on the server.</span>'}
+    </p>
+    <table><thead><tr><th>Requested by</th><th>Type</th><th>Hits</th><th>Last status</th><th>Last seen</th></tr></thead>
+    <tbody>${llms.map(x => `<tr>
+      <td>${esc(x.label)}</td>
+      <td>${botlogsCatBadge(r, x.cat)}</td>
+      <td>${x.hits}</td>
+      <td>${statusBadge(x.lastStatus)}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${esc(x.lastSeen || '—')}</td>
+    </tr>`).join('')}</tbody></table>`;
+  }
+  for (const [key, title] of [['llms-full.txt', '/llms-full.txt'], ['robots.txt', '/robots.txt'], ['sitemaps', 'XML sitemaps']]) {
+    const rows = sf[key] || [];
+    if (rows.length === 0) continue;
+    html += `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;font-weight:600">${title} — ${rows.reduce((s, x) => s + x.hits, 0)} request(s) from ${rows.length} visitor type(s)</summary>
+      <table style="margin-top:8px"><thead><tr><th>Requested by</th><th>Type</th><th>Hits</th><th>Last status</th><th>Last seen</th></tr></thead>
+      <tbody>${rows.map(x => `<tr>
+        <td>${esc(x.label)}</td>
+        <td>${botlogsCatBadge(r, x.cat)}</td>
+        <td>${x.hits}</td>
+        <td>${statusBadge(x.lastStatus)}</td>
+        <td style="font-size:12px;color:var(--text-muted)">${esc(x.lastSeen || '—')}</td>
+      </tr>`).join('')}</tbody></table></details>`;
+  }
+  html += `</div>`;
+
+  // ── Daily timeline (stacked bars per category) ──
+  const days = r.timeline || [];
+  if (days.length > 1) {
+    const maxDay = Math.max(...days.map(d => d.total));
+    const order = cats.map(c => c.key); // stack in overall-size order
+    html += `<div class="section-card"><h3>Requests per day</h3>
+      <div style="display:flex;align-items:flex-end;gap:2px;height:180px;padding-top:8px">
+        ${days.map(d => {
+          const segs = order.map(k => {
+            const v = d.byCat[k] || 0;
+            if (!v) return '';
+            const h = Math.max(1, v / maxDay * 170);
+            return `<div style="height:${h.toFixed(1)}px;background:${catByKey[k].color}" title="${esc(d.date)} — ${esc(catByKey[k].label)}: ${v.toLocaleString()}"></div>`;
+          }).reverse().join('');
+          return `<div style="flex:1;min-width:4px;display:flex;flex-direction:column;justify-content:flex-end;border-radius:2px;overflow:hidden" title="${esc(d.date)}: ${d.total.toLocaleString()} requests">${segs}</div>`;
+        }).join('')}
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-top:4px">
+        <span>${esc(days[0].date)}</span><span>${esc(days[Math.floor(days.length / 2)].date)}</span><span>${esc(days[days.length - 1].date)}</span>
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px">
+        ${cats.map(c => `<span style="display:inline-flex;align-items:center;gap:5px;font-size:12px"><span style="width:10px;height:10px;border-radius:2px;background:${c.color};display:inline-block"></span>${esc(c.label)}</span>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  // ── Per-bot table with category filter chips ──
+  const bots = r.bots || [];
+  const usedCats = [...new Set(bots.map(b => b.cat))];
+  html += `<div class="section-card"><h3>Bots detected (${bots.length})</h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px" id="botlogsChips">
+      <button class="btn btn-secondary" data-cat="" style="font-size:12px;padding:5px 10px${_botlogsFilter === '' ? ';outline:2px solid var(--primary)' : ''}">All</button>
+      ${usedCats.map(k => `<button class="btn btn-secondary" data-cat="${k}" style="font-size:12px;padding:5px 10px${_botlogsFilter === k ? ';outline:2px solid var(--primary)' : ''}">${esc(catByKey[k] ? catByKey[k].label : k)}</button>`).join('')}
+    </div>
+    <div id="botlogsBotTable"></div>
+  </div>`;
+
+  el.innerHTML = html;
+  $('#botlogsChips').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-cat] , button');
+    if (!btn || btn.dataset.cat === undefined) return;
+    _botlogsFilter = btn.dataset.cat;
+    renderBotLogsResults(_botlogsResult, fromCache);
+  });
+  renderBotLogsBotTable(r);
+}
+
+function renderBotLogsBotTable(r) {
+  const bots = (r.bots || []).filter(b => !_botlogsFilter || b.cat === _botlogsFilter);
+  const total = r.totals.hits || 1;
+  $('#botlogsBotTable').innerHTML = bots.length === 0
+    ? '<p style="color:var(--text-muted);font-size:13px">No bots in this category.</p>'
+    : `<table><thead><tr><th>Bot</th><th>Type</th><th>Hits</th><th>% of traffic</th><th>Pages</th><th>IPs</th><th>2xx / 3xx / 4xx / 5xx</th><th>Data</th><th>Last seen</th></tr></thead>
+      <tbody>${bots.map((b, i) => `<tr style="cursor:pointer" onclick="botlogsToggleDetail(${i})">
+        <td style="font-weight:600">${esc(b.name)}</td>
+        <td>${botlogsCatBadge(r, b.cat)}</td>
+        <td>${b.hits.toLocaleString()}</td>
+        <td>${(b.hits / total * 100).toFixed(2)}%</td>
+        <td>${b.uniqueUrls.toLocaleString()}</td>
+        <td>${b.uniqueIps.toLocaleString()}</td>
+        <td style="font-size:12px"><span style="color:var(--success)">${b.status.s2xx}</span> / <span style="color:var(--info,#3b82f6)">${b.status.s3xx}</span> / <span style="color:var(--warning)">${b.status.s4xx}</span> / <span style="color:var(--danger)">${b.status.s5xx}</span></td>
+        <td>${fmtBytes(b.bytes)}</td>
+        <td style="font-size:12px;color:var(--text-muted)">${esc((b.lastSeen || '—').slice(0, 16))}</td>
+      </tr>
+      <tr id="botlogsDetail${i}" style="display:none"><td colspan="9" style="background:var(--bg-input)">
+        <div style="padding:10px 6px">
+          <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">User-agent: <code style="font-size:11px">${esc(b.ua)}</code>${b.assetHits ? ` · ${b.assetHits.toLocaleString()} static-asset request(s) not listed below` : ''}</p>
+          <strong style="font-size:12px">Top crawled pages</strong>
+          <table style="margin-top:6px"><tbody>${b.topPaths.map(p => `<tr><td style="font-size:12px;word-break:break-all">${esc(p.path)}</td><td style="font-size:12px;width:70px;text-align:right">${p.hits.toLocaleString()}</td></tr>`).join('') || '<tr><td style="font-size:12px;color:var(--text-muted)">Only static-asset requests</td></tr>'}</tbody></table>
+        </div>
+      </td></tr>`).join('')}</tbody></table>`;
+}
+
+function botlogsToggleDetail(i) {
+  const row = $('#botlogsDetail' + i);
+  if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
 }
 
 async function genaiRunAnalysis() {

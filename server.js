@@ -1795,6 +1795,30 @@ app.get('/api/genai/last', (req, res) => {
   res.json({ result: db.kvGet(GENAI_LAST_PREFIX + domain) || null });
 });
 
+// ─── Bot Log Analyzer ───
+// Upload a raw server access log (Apache/Nginx combined format, .log/.txt or
+// .gz) and get back who crawls the site: search bots, AI/LLM bots, SEO
+// tools, social previews, scrapers, humans — plus llms.txt/robots.txt hits.
+const logAnalyzer = require('./lib/log-analyzer');
+const BOTLOGS_LAST_KEY = 'botlogs:last';
+
+app.post('/api/logs/analyze', express.raw({ type: '*/*', limit: '300mb' }), (req, res) => {
+  try {
+    if (!req.body || !req.body.length) return res.status(400).json({ error: 'No file body' });
+    const result = logAnalyzer.analyzeLog(req.body);
+    result.filename = String(req.query.filename || '').slice(0, 200);
+    result.analyzedAt = new Date().toISOString();
+    try { db.kvSet(BOTLOGS_LAST_KEY, result); } catch { /* keep serving the response even if persisting fails */ }
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: 'Could not analyze log: ' + e.message });
+  }
+});
+
+app.get('/api/logs/last', (req, res) => {
+  res.json({ result: db.kvGet(BOTLOGS_LAST_KEY) || null });
+});
+
 app.get('/api/ai-visibility/history', (req, res) => {
   const domain = aiVisibility.normalizeDomain(req.query.domain);
   if (!domain) return res.status(400).json({ error: 'domain is required' });
