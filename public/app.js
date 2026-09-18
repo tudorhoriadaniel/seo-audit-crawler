@@ -4388,6 +4388,37 @@ function renderBotLogsResults(r, fromCache) {
     <p style="font-size:12px;color:var(--text-muted);margin-top:10px">"Browser visitors" = requests with a normal browser user-agent. Vulnerability scanners often fake browser UAs, so this number can include disguised bots.</p>
   </div>`;
 
+  // ── Countries ──
+  const countries = r.countries || [];
+  if (countries.length > 0) {
+    const maxC = countries[0].hits;
+    const regionNames = (() => { try { return new Intl.DisplayNames(['en'], { type: 'region' }); } catch { return null; } })();
+    const countryName = c => {
+      if (c === '??') return 'Unresolved IPs';
+      try { return (regionNames && regionNames.of(c)) || c; } catch { return c; }
+    };
+    const flag = c => c === '??' || c.length !== 2 ? '🌐'
+      : String.fromCodePoint(...[...c].map(ch => 0x1F1E6 + ch.charCodeAt(0) - 65));
+    html += `<div class="section-card"><h3>Countries — where the hits come from</h3>
+      <table><thead><tr><th>Country</th><th>Hits</th><th>%</th><th>IPs</th><th style="min-width:220px">Who (share of this country's hits)</th></tr></thead>
+      <tbody>${countries.slice(0, 25).map(c => {
+        const segs = cats.map(k => {
+          const v = c.byCat[k.key] || 0;
+          if (!v) return '';
+          return `<div style="width:${(v / c.hits * 100).toFixed(1)}%;background:${k.color}" title="${esc(k.label)}: ${v.toLocaleString()} (${(v / c.hits * 100).toFixed(1)}%)"></div>`;
+        }).join('');
+        return `<tr>
+          <td style="white-space:nowrap">${flag(c.code)} ${esc(countryName(c.code))}</td>
+          <td>${c.hits.toLocaleString()}</td>
+          <td>${c.pct}%</td>
+          <td>${c.uniqueIps.toLocaleString()}</td>
+          <td><div style="display:flex;height:14px;border-radius:3px;overflow:hidden;background:var(--bg-input);width:${Math.max(8, c.hits / maxC * 100).toFixed(1)}%">${segs}</div></td>
+        </tr>`;
+      }).join('')}</tbody></table>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:10px">Bar length = share of total traffic; colors = visitor types (same legend as the pie chart). GeoIP resolution runs on the server from an offline MaxMind database — IPs are never sent anywhere.</p>
+    </div>`;
+  }
+
   // ── llms.txt & discovery files ──
   const sf = r.specialFiles || {};
   const llms = sf['llms.txt'] || [];
