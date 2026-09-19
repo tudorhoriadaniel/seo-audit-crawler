@@ -49,10 +49,30 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
 
 // ── Navigation ──
+// Collapsible sidebar groups; collapsed set persists per browser.
+(function initNavGroups() {
+  let collapsed = [];
+  try { collapsed = JSON.parse(localStorage.getItem('seo-nav-collapsed') || '[]'); } catch (e) { /* ignore */ }
+  collapsed.forEach(name => {
+    const g = document.querySelector(`.nav-group[data-group="${name}"]`);
+    if (g && !g.querySelector('.nav-link.active')) g.classList.add('collapsed');
+  });
+  $$('.nav-group-header').forEach(header => {
+    header.addEventListener('click', () => {
+      header.parentElement.classList.toggle('collapsed');
+      const nowCollapsed = [...$$('.nav-group.collapsed')].map(g => g.dataset.group);
+      try { localStorage.setItem('seo-nav-collapsed', JSON.stringify(nowCollapsed)); } catch (e) { /* ignore */ }
+    });
+  });
+})();
+
 $$('.nav-link').forEach(link => {
   link.addEventListener('click', (e) => {
     e.preventDefault();
     const view = link.dataset.view;
+    // A programmatic .click() may target a link inside a collapsed group
+    const group = link.closest('.nav-group');
+    if (group) group.classList.remove('collapsed');
     $$('.nav-link').forEach(l => l.classList.remove('active'));
     link.classList.add('active');
     $$('.view').forEach(v => v.classList.remove('active'));

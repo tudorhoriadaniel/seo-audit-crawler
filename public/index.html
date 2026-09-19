@@ -23,6 +23,14 @@
       <span class="version">v2.0</span>
     </div>
     <div class="nav-links">
+
+      <div class="nav-group" data-group="overview">
+        <button type="button" class="nav-group-header">
+          <span class="nav-group-dot"></span>
+          Overview
+          <svg class="nav-group-chev" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4.5l3 3 3-3"/></svg>
+        </button>
+        <div class="nav-group-items">
       <a href="#" class="nav-link active" data-view="dashboard">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="7"/><path d="M9 5v4l2.5 2.5"/></svg>
         Dashboard
@@ -31,6 +39,16 @@
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h12v12H3z"/><path d="M3 7h12M7 3v12"/></svg>
         All Pages
       </a>
+        </div>
+      </div>
+
+      <div class="nav-group" data-group="seo">
+        <button type="button" class="nav-group-header">
+          <span class="nav-group-dot"></span>
+          SEO Audit
+          <svg class="nav-group-chev" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4.5l3 3 3-3"/></svg>
+        </button>
+        <div class="nav-group-items">
       <a href="#" class="nav-link" data-view="metatitles">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h12M6 3v12M12 3v12"/></svg>
         Meta Titles
@@ -91,6 +109,10 @@
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2l6 3v4c0 4-2.5 7-6 9-3.5-2-6-5-6-9V5l6-3z"/></svg>
         Security
       </a>
+      <a href="#" class="nav-link" data-view="hacked">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2l6 2.5v4c0 3.8-2.6 6.4-6 7.5-3.4-1.1-6-3.7-6-7.5v-4L9 2z"/><path d="M9 6v3.5M9 12.5v.01"/></svg>
+        Hacked
+      </a>
       <a href="#" class="nav-link" data-view="directives">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h12v2H3zM3 8h8v2H3zM3 13h5v2H3z"/><path d="M14 10l-3 3 3 3"/></svg>
         Directives
@@ -107,6 +129,16 @@
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="8" r="5"/><path d="M12 12l4 4"/></svg>
         Search Engines
       </a>
+        </div>
+      </div>
+
+      <div class="nav-group" data-group="ai">
+        <button type="button" class="nav-group-header">
+          <span class="nav-group-dot"></span>
+          AI &amp; GEO
+          <svg class="nav-group-chev" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4.5l3 3 3-3"/></svg>
+        </button>
+        <div class="nav-group-items">
       <a href="#" class="nav-link" data-view="aibots">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M4 10h10M4 14h6"/><circle cx="14" cy="14" r="2"/><path d="M9 2v2M5 3l1 1.5M13 3l-1 1.5"/></svg>
         AI Bots
@@ -123,36 +155,73 @@
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h8l4 4v8a1 1 0 01-1 1H3a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M11 3v4h4"/><path d="M5 9h6M5 12h4"/></svg>
         AI Content Visibility
       </a>
-      <a href="#" class="nav-link" data-view="hacked">
-        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2l6 2.5v4c0 3.8-2.6 6.4-6 7.5-3.4-1.1-6-3.7-6-7.5v-4L9 2z"/><path d="M9 6v3.5M9 12.5v.01"/></svg>
-        Hacked
-      </a>
       <a href="#" class="nav-link" data-view="genai">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 14l3-6 3 3 3-7 3 5 2-2"/><path d="M2 16h14"/></svg>
         GenAI Performance
       </a>
+        </div>
+      </div>
+
+      <div class="nav-group" data-group="logs">
+        <button type="button" class="nav-group-header">
+          <span class="nav-group-dot"></span>
+          Log Analyzer
+          <svg class="nav-group-chev" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4.5l3 3 3-3"/></svg>
+        </button>
+        <div class="nav-group-items">
       <a href="#" class="nav-link" data-view="botlogs">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h12v12H3z"/><path d="M6 12V8M9 12V6M12 12v-2"/></svg>
         Bot Log Analyzer
       </a>
-      <a href="#" class="nav-link" data-view="summary">
-        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2l2 4h4l-3 3 1 4-4-2-4 2 1-4-3-3h4z"/></svg>
-        Summary
-      </a>
-      <div style="border-top:1px solid var(--border);margin:8px 12px"></div>
+        </div>
+      </div>
+
+      <div class="nav-group" data-group="google">
+        <button type="button" class="nav-group-header">
+          <span class="nav-group-dot"></span>
+          Google
+          <svg class="nav-group-chev" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4.5l3 3 3-3"/></svg>
+        </button>
+        <div class="nav-group-items">
       <a href="#" class="nav-link" data-view="gsc">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="8" r="5"/><path d="M12 12l4 4"/><path d="M5 8h6M8 5v6" stroke-width="1.5"/></svg>
         Search Console
       </a>
+        </div>
+      </div>
+
+      <div class="nav-group" data-group="strategy">
+        <button type="button" class="nav-group-header">
+          <span class="nav-group-dot"></span>
+          Strategy
+          <svg class="nav-group-chev" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4.5l3 3 3-3"/></svg>
+        </button>
+        <div class="nav-group-items">
       <a href="#" class="nav-link" data-view="strategy">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 14l4-4 3 3 6-6"/><path d="M11 7h4v4"/></svg>
         Content Strategy
       </a>
-      <div style="border-top:1px solid var(--border);margin:8px 12px"></div>
+        </div>
+      </div>
+
+      <div class="nav-group" data-group="workspace">
+        <button type="button" class="nav-group-header">
+          <span class="nav-group-dot"></span>
+          Workspace
+          <svg class="nav-group-chev" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4.5l3 3 3-3"/></svg>
+        </button>
+        <div class="nav-group-items">
+      <a href="#" class="nav-link" data-view="summary">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2l2 4h4l-3 3 1 4-4-2-4 2 1-4-3-3h4z"/></svg>
+        Summary
+      </a>
       <a href="#" class="nav-link" data-view="saved-projects">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5a2 2 0 012-2h3l2 2h4a2 2 0 012 2v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5z"/><path d="M9 10v3M7.5 11.5L9 13l1.5-1.5"/></svg>
         Saved Projects
       </a>
+        </div>
+      </div>
+
     </div>
   </nav>
 
