@@ -880,6 +880,9 @@ async function loadPages() {
     return true;
   });
   renderPagesTable(pagesData);
+  // The Headings tab's H1 inventory reads pagesData, which arrives after
+  // loadCrawl already called renderHeadings() — re-render now that it's here.
+  if (_hdData) _renderHD();
 }
 
 // Sort state for All Pages table
@@ -4784,12 +4787,22 @@ function _renderHD() {
     const active = f === key ? 'border:2px solid #fff;' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
     return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterHD('${key}')">${statCardInner(label, count)}</div>`;
   };
+  // Full H1 inventory built from pagesData — the stored report only keeps
+  // problem pages, but the user also wants to review the H1 text of healthy
+  // single-H1 pages. Client-side so it works on already-saved crawls.
+  const inv = (pagesData || [])
+    .filter(p => p.status_code >= 200 && p.status_code < 300 && (p.h1_count || 0) > 0)
+    .map(p => { let h1; try { h1 = JSON.parse(p.h1 || '[]'); } catch { h1 = []; } return { url: p.url, h1, h1Count: p.h1_count || 0 }; });
   let html = `<div class="stats-grid">
     ${cb('all', 'Total Pages', r.total, '')}
+    ${cb('withH1', 'Pages with H1', inv.length, 'success')}
     ${cb('missingH1', 'Missing H1', r.missingH1.length, r.missingH1.length > 0 ? 'danger' : 'success')}
     ${cb('multipleH1', 'Multiple H1s', r.multipleH1.length, r.multipleH1.length > 0 ? 'warning' : 'success')}
     ${cb('missingH2', 'Missing H2', r.missingH2.length, r.missingH2.length > 0 ? 'warning' : 'success')}
   </div>`;
+  if (f === 'all' || f === 'withH1') {
+    if (inv.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--success)"><h3>H1 Values (${inv.length})</h3><table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th><th style="width:70px">H1 Count</th><th>H1</th></tr></thead><tbody>${inv.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td><td>${p.h1Count}</td><td style="font-size:12px">${p.h1.map(h=>esc(h)).join('<br>')}</td></tr>`).join('')}</tbody></table></div>`;
+  }
   if (f === 'all' || f === 'missingH1') {
     if (r.missingH1.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Missing H1 (${r.missingH1.length})</h3><table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th><th>H2 Count</th></tr></thead><tbody>${r.missingH1.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td><td>${p.h2Count}</td></tr>`).join('')}</tbody></table></div>`;
   }
