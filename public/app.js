@@ -1,4 +1,26 @@
 /* global io */
+
+// If the seo_auth cookie expires while the tab is open, every API call
+// starts failing with {error:'Unauthorized'} and the UI dead-ends in
+// alert() popups. Intercept that exact 401 (GSC routes have their own
+// 401s with reconnect info — those must not log the user out) and send
+// the user to the login page, preserving the current URL via ?next=.
+const _origFetch = window.fetch.bind(window);
+window.fetch = async (input, init) => {
+  const res = await _origFetch(input, init);
+  if (res.status === 401) {
+    try {
+      const body = await res.clone().json();
+      if (body && body.error === 'Unauthorized') {
+        const next = encodeURIComponent(window.location.pathname + window.location.search);
+        window.location.href = '/login?next=' + next;
+        return new Promise(() => {}); // navigating away — never settle
+      }
+    } catch (_) { /* non-JSON 401: fall through to normal handling */ }
+  }
+  return res;
+};
+
 const socket = io();
 
 // Re-join the active crawl's room after any (re)connect. A large crawl's

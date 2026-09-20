@@ -83,10 +83,10 @@ ${error}
 app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
   const next = safeNext(req.body.next);
   if (req.body.password === SITE_PASSWORD) {
-    // Set auth cookie (24h). SameSite=Lax so the cookie survives the
+    // Set auth cookie (7 days). SameSite=Lax so the cookie survives the
     // OAuth round-trip back from accounts.google.com to our callback;
     // Strict would drop it on any cross-site-initiated navigation.
-    res.setHeader('Set-Cookie', `seo_auth=1; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${req.secure ? '; Secure' : ''}`);
+    res.setHeader('Set-Cookie', `seo_auth=1; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${req.secure ? '; Secure' : ''}`);
     res.redirect(next);
   } else {
     res.redirect(`/login?error=1&next=${encodeURIComponent(next)}`);
