@@ -289,6 +289,7 @@ function renderAll(analysis) {
   renderMetaTitles(analysis);
   renderMetaDescriptions(analysis);
   renderHeadings(analysis);
+  renderUrlQuality(analysis);
   renderDirectives(analysis);
   renderSummary(analysis);
 }
@@ -2418,6 +2419,7 @@ window.loadCrawl = async function(id) {
   renderMetaTitles(analysis);
   renderMetaDescriptions(analysis);
   renderHeadings(analysis);
+  renderUrlQuality(analysis);
   renderDirectives(analysis);
   renderSummary(analysis);
 
@@ -4813,6 +4815,49 @@ function _renderHD() {
     if (r.missingH2.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Missing H2 (${r.missingH2.length})</h3><table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th><th>H1 Count</th></tr></thead><tbody>${r.missingH2.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td><td>${p.h1Count}</td></tr>`).join('')}</tbody></table></div>`;
   }
   $('#headingsContent').innerHTML = exportBtn('headings') + html;
+}
+
+// ── URL Quality ──
+let _uqData = null, _uqFilter = 'all';
+function renderUrlQuality(analysis) {
+  _uqData = analysis.urlQualityReport;
+  if (!_uqData) { $('#urlQualityContent').innerHTML = '<p style="color:var(--text-muted)">No data. Reload the report to compute this check.</p>'; return; }
+  _uqFilter = 'all';
+  _renderUQ();
+}
+function filterUQ(f) { _uqFilter = (_uqFilter === f) ? 'all' : f; _renderUQ(); }
+// The whole point of this tab is provenance: every flagged URL shows the
+// pages the crawler found it on (with anchor text) so the template or CMS
+// field emitting the broken URL can be located and fixed at the source.
+function _uqSources(list) {
+  if (!list || list.length === 0) return '<span style="color:var(--text-muted)">unknown (seed URL?)</span>';
+  const rows = list.slice(0, 5).map(s => `<div>${urlLink(s.from)}${s.anchor ? ` <span style="color:var(--text-muted)">— anchor: “${esc(s.anchor)}”</span>` : ''}</div>`).join('');
+  const more = list.length > 5 ? `<div style="color:var(--text-muted)">+${list.length - 5} more source pages</div>` : '';
+  return rows + more;
+}
+function _renderUQ() {
+  const r = _uqData, f = _uqFilter;
+  const cb = (key, label, count, color) => {
+    const active = f === key ? 'border:2px solid #fff;' : 'cursor:pointer;opacity:' + (f === 'all' || f === key ? '1' : '0.5') + ';';
+    return `<div class="stat-card${count > 0 && color ? ' stat-' + color : ''}" style="${active}" onclick="filterUQ('${key}')">${statCardInner(label, count)}</div>`;
+  };
+  let html = `<div class="stats-grid">
+    ${cb('all', 'URLs Checked', r.totalChecked, '')}
+    ${cb('placeholders', 'Placeholder / Variable URLs', r.placeholders.length, r.placeholders.length > 0 ? 'danger' : 'success')}
+    ${cb('misspellings', 'Suspected Misspellings', r.misspellings.length, r.misspellings.length > 0 ? 'warning' : 'success')}
+  </div>`;
+  if (f === 'all' || f === 'placeholders') {
+    if (r.placeholders.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--danger)"><h3>Placeholder / Variable URLs (${r.placeholders.length})</h3>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">URLs containing unresolved template syntax ({…}, [ ], {{var}}, undefined, null…). “Found on” lists the crawled pages linking to the ugly URL — that page's template is where the fix belongs.</p>
+      <table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th><th style="width:64px">Status</th><th>Problem</th><th>Found on</th></tr></thead><tbody>${r.placeholders.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td><td>${p.statusCode||''}</td><td style="font-size:12px">${p.issues.map(esc).join('<br>')}</td><td style="font-size:12px">${_uqSources(p.foundOn)}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  if (f === 'all' || f === 'misspellings') {
+    if (r.misspellings.length > 0) html += `<div class="section-card" style="border-left:4px solid var(--warning)"><h3>Suspected Misspellings (${r.misspellings.length})</h3>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">Tokens that look like words whose special character was deleted instead of transliterated (Zürich → “zrich”). Checked in the URL, meta title and H1.</p>
+      <table><thead><tr><th style="width:48px;text-align:right">#</th><th>URL</th><th style="width:64px">Where</th><th>Found → Suggested</th><th>Found on</th></tr></thead><tbody>${r.misspellings.slice(0,500).map((p,i)=>`<tr><td style="text-align:right;color:var(--text-muted)">${i+1}</td><td>${urlLink(p.url)}</td><td>${esc(p.where)}</td><td style="font-size:12px"><strong>${esc(p.token)}</strong> → ${esc(p.suggestion)}</td><td style="font-size:12px">${_uqSources(p.foundOn)}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  if (r.placeholders.length === 0 && r.misspellings.length === 0) html += '<div class="section-card"><h3 style="color:var(--success)">No ugly or misspelled URLs found 🎉</h3></div>';
+  $('#urlQualityContent').innerHTML = exportBtn('url-quality') + html;
 }
 
 // ── Directives ──

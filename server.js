@@ -2158,6 +2158,16 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       data = mapped.filter(p => p.statusCode < 300).map(p => ({ URL: p.url, 'H1 Count': p.h1Count || 0, 'H1 Tags': (p.h1 || []).join(' | '), 'H2 Count': p.h2Count || 0 }));
       sheetName = 'Headings';
       break;
+    case 'url-quality': {
+      const uq = analysis.urlQualityReport || {};
+      const src = l => (l || []).map(s => s.from + (s.anchor ? ` (anchor: ${s.anchor})` : '')).join(' | ');
+      data = [
+        ...(uq.placeholders || []).map(p => ({ Type: 'Placeholder/variable', URL: p.url, Status: p.statusCode || '', Problem: (p.issues || []).join(', '), 'Found On': src(p.foundOn) })),
+        ...(uq.misspellings || []).map(p => ({ Type: 'Suspected misspelling', URL: p.url, Status: p.statusCode || '', Problem: `${p.where}: ${p.token} → ${p.suggestion}`, 'Found On': src(p.foundOn) }))
+      ];
+      sheetName = 'URL Quality';
+      break;
+    }
     case 'directives':
       data = mapped.filter(p => p.statusCode < 300).map(p => ({ URL: p.url, 'Meta Robots': p.metaRobots || 'None' }));
       sheetName = 'Directives';
