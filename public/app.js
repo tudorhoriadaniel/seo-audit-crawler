@@ -1544,42 +1544,102 @@ function _renderConflicts() {
 // ── Redirects ──
 function renderRedirects(analysis) {
   const r = analysis.redirectChains;
-  const rp = analysis.redirectParamsReport || { tested: false, testedCount: 0, testedParams: [], activeResults: [], activeDrops: [], passiveDrops: [], totalDropping: 0 };
+  const rp = Object.assign(
+    { tested: false, testedCount: 0, testedParams: [], skippedOrigins: [], scenarios: {}, activeResults: [], activeDrops: [], activeBreaks: [], dropGroups: [], brokenLandings: [], passiveDrops: [], totalDropping: 0, totalBreaking: 0 },
+    analysis.redirectParamsReport || {}
+  );
+  const rpFailing = rp.totalDropping + rp.totalBreaking;
   let html = `<div class="stats-grid">
     ${statCard('Total Redirects', r.total, r.total > 0 ? 'warning' : 'success')}
     ${statCard('Long Chains (3+)', r.longChains, r.longChains > 0 ? 'danger' : 'success')}
-    ${statCard('Param-Loss Tests', rp.testedCount, '')}
+    ${statCard('Marketing-Param Tests', rp.testedCount, '')}
     ${statCard('Dropping Marketing Params', rp.totalDropping, rp.totalDropping > 0 ? 'danger' : 'success')}
+    ${statCard('Breaking With Params', rp.totalBreaking, rp.totalBreaking > 0 ? 'danger' : 'success')}
   </div>`;
 
+  const hostLabels = { canonical: 'Canonical host', 'alt-host': 'www / non-www alternate', https: 'https://', http: 'http://', 'http-alt-host': 'http:// + alternate host', crawled: 'Crawled redirects' };
+  const pathLabels = { homepage: 'Homepage', 'language-homepage': 'Language homepages', 'section-homepage': 'Section homepages', 'deep-page': 'Deep pages', 'crawled-redirect': 'Crawled redirects' };
+  const slashLabels = { 'trailing-slash': 'with trailing slash', 'no-trailing-slash': 'no trailing slash' };
+  const hostOf = t => t.hostVariant || (t.wasRedirect ? 'crawled' : 'canonical');
+  const pathOf = t => t.pathType || (t.wasRedirect ? 'crawled-redirect' : 'homepage');
+  const scenarioLabel = t => [hostLabels[hostOf(t)], pathOf(t) === 'crawled-redirect' ? '' : pathLabels[pathOf(t)].replace(/s$/, '').toLowerCase(), slashLabels[t.slash] || ''].filter(Boolean).join(' · ');
+
   // Marketing parameter preservation (UTM / gclid / fbclid …)
-  html += `<div class="section-card" ${rp.totalDropping > 0 ? 'style="border-left:4px solid var(--danger)"' : ''}>
+  html += `<div class="section-card" ${rpFailing > 0 ? 'style="border-left:4px solid var(--danger)"' : ''}>
     <h3>Marketing Parameter Preservation (UTM, gclid, fbclid…)</h3>
     <p style="margin-bottom:12px;color:var(--text-muted);font-size:13px">
-      After the crawl, each redirecting URL (plus the homepage) is re-requested with test marketing parameters appended
-      (${rp.testedParams.map(p => `<code>${esc(p)}</code>`).join(', ') || 'utm_*, gclid, fbclid…'}).
-      If a redirect drops these parameters, campaign traffic that passes through it loses attribution —
-      GA4 reports the session as <em>direct/none</em> and Google Ads / Meta / Microsoft click IDs never reach the landing page.
+      After the crawl, a matrix of URL variants is requested with test marketing parameters appended
+      (${rp.testedParams.map(p => `<code>${esc(p)}</code>`).join(', ') || 'utm_*, gclid, fbclid…'}):
+      the homepage, language / section homepages and deep pages, each on the canonical host, the www / non-www alternate and their
+      <code>http://</code> forms, with and without trailing slash — plus every redirect seen during the crawl.
+      A test fails if a redirect <strong>drops</strong> the parameters, or if the landing URL <strong>breaks</strong>
+      (4xx / 5xx) with parameters while it works without them. Either way campaign traffic loses attribution or lands on an error page.
     </p>`;
 
   if (!rp.tested && rp.passiveDrops.length === 0) {
     html += `<p style="color:var(--text-muted);font-size:13px">No parameter-preservation data for this crawl. Re-run the crawl to test redirects with marketing parameters.</p>`;
-  } else if (rp.totalDropping === 0) {
-    html += `<p style="font-size:13px"><span class="badge badge-success">All good</span> Marketing parameters survived redirects on all ${rp.testedCount} tested URL(s).</p>`;
+  } else if (rpFailing === 0) {
+    html += `<p style="font-size:13px"><span class="badge badge-success">All good</span> Marketing parameters survived and landing pages kept working on all ${rp.testedCount} tested URL variant(s).</p>`;
+  }
+
+  // Root causes — many variants funnel into the same faulty redirect / landing URL
+  if (rp.brokenLandings.length > 0 || rp.dropGroups.length > 0) {
+    html += `<h4 style="margin:16px 0 8px">Root causes (${rp.brokenLandings.length + rp.dropGroups.length})</h4>
+      <table><thead><tr><th>URL</th><th>Problem</th><th>Variants affected</th></tr></thead><tbody>
+      ${rp.brokenLandings.map(b => `<tr>
+        <td>${urlLink(b.url)}</td>
+        <td><span class="badge badge-danger">${esc(String(b.status))} with params</span> <span class="badge badge-success">${esc(String(b.baselineStatus))} without</span></td>
+        <td>${(b.entryUrls || []).length}</td>
+      </tr>`).join('')}
+      ${rp.dropGroups.map(g => `<tr>
+        <td>${urlLink(g.url)}</td>
+        <td><span class="badge badge-danger">Drops params</span>${g.to ? ` redirecting to ${urlLink(g.to)}` : ''}<br>${(g.dropped || []).map(p => `<span class="badge badge-danger" style="margin:1px">${esc(p)}</span>`).join(' ')}</td>
+        <td>${(g.entryUrls || []).length}</td>
+      </tr>`).join('')}
+      </tbody></table>`;
+  }
+
+  // Coverage matrix: path type × host variant
+  const hostCols = Object.keys(hostLabels).filter(h => Object.values(rp.scenarios).some(row => row[h]));
+  const pathRows = Object.keys(pathLabels).filter(pt => rp.scenarios[pt]);
+  if (hostCols.length > 0 && pathRows.length > 0) {
+    html += `<h4 style="margin:16px 0 8px">Scenario coverage</h4>
+      <table><thead><tr><th>Path type</th>${hostCols.map(h => `<th>${esc(hostLabels[h])}</th>`).join('')}</tr></thead><tbody>
+      ${pathRows.map(pt => `<tr><td>${esc(pathLabels[pt])}</td>${hostCols.map(h => {
+        const c = rp.scenarios[pt][h];
+        if (!c) return '<td>—</td>';
+        if (c.failing > 0) return `<td><span class="badge badge-danger">${c.failing} of ${c.tested} failing</span></td>`;
+        if (c.errors > 0) return `<td><span class="badge badge-warning">${c.errors} of ${c.tested} errored</span></td>`;
+        return `<td><span class="badge badge-success">${c.tested} OK</span></td>`;
+      }).join('')}</tr>`).join('')}
+      </tbody></table>`;
+  }
+  if (rp.skippedOrigins.length > 0) {
+    html += `<p style="margin-top:8px;color:var(--text-muted);font-size:12px">Not tested: ${rp.skippedOrigins.map(o => `<code>${esc(o.origin)}</code> — ${esc(o.reason)}`).join('; ')}.</p>`;
   }
 
   if (rp.activeResults.length > 0) {
-    html += `<table><thead><tr><th>URL Tested</th><th>Final URL</th><th>Result</th><th>Dropped Params</th></tr></thead>
-      <tbody>${rp.activeResults.map(t => {
-        let result;
-        if (t.error) result = `<span class="badge badge-warning">Error: ${esc(t.error)}</span>`;
-        else if (t.dropsParams) result = `<span class="badge badge-danger">Drops params</span>`;
-        else if (t.redirected) result = `<span class="badge badge-success">Preserved (${t.hops} hop${t.hops > 1 ? 's' : ''})</span>`;
-        else result = `<span class="badge badge-success">No redirect</span>`;
+    const rank = t => (t.breaksWithParams || t.dropsParams) ? 0 : t.error ? 1 : 2;
+    const sorted = rp.activeResults.map((t, i) => ({ t, i })).sort((a, b) => rank(a.t) - rank(b.t) || a.i - b.i).map(x => x.t);
+    html += `<h4 style="margin:16px 0 8px">All tests (${sorted.length})</h4>
+      <table><thead><tr><th>Scenario</th><th>URL Tested</th><th>Chain</th><th>Final URL</th><th>Result</th><th>Dropped Params</th></tr></thead>
+      <tbody>${sorted.map(t => {
+        const results = [];
+        if (t.error) results.push(`<span class="badge badge-warning">Error: ${esc(t.error)}</span>`);
+        if (t.dropsParams) results.push(`<span class="badge badge-danger">Drops params${t.dropHop ? ` at hop ${t.dropHop.hop}` : ''}</span>`);
+        if (t.breaksWithParams) results.push(`<span class="badge badge-danger">${esc(String(t.finalStatus))} with params, ${esc(String(t.baselineStatus))} without</span>`);
+        if (results.length === 0) {
+          if (t.finalStatus >= 400) results.push(`<span class="badge badge-warning">Not served (${esc(String(t.finalStatus))} with and without params)</span>`);
+          else if (t.redirected) results.push(`<span class="badge badge-success">Preserved (${t.hops} hop${t.hops > 1 ? 's' : ''})</span>`);
+          else results.push(`<span class="badge badge-success">No redirect</span>`);
+        }
+        const chain = (t.chain || []).concat(t.finalStatus ? [t.finalStatus] : []).join(' → ');
         return `<tr>
+          <td style="font-size:12px">${esc(scenarioLabel(t))}</td>
           <td>${urlLink(t.url)}</td>
+          <td style="font-size:11px;white-space:nowrap">${esc(chain) || '—'}</td>
           <td>${t.finalUrl ? urlLink(t.finalUrl) : '—'}</td>
-          <td>${result}</td>
+          <td>${results.join(' ')}</td>
           <td>${(t.dropped || []).map(p => `<span class="badge badge-danger" style="margin:1px">${esc(p)}</span>`).join(' ') || '—'}</td>
         </tr>`;
       }).join('')}</tbody></table>`;

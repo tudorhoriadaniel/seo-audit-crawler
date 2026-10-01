@@ -2006,27 +2006,7 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       sheetName = 'Redirects';
       break;
     case 'redirect-params': {
-      const rp = analysis.redirectParamsReport || {};
-      data = [
-        ...(rp.activeResults || []).map(r => ({
-          URL: r.url,
-          'Tested URL': r.testedUrl || '',
-          'Final URL': r.finalUrl || '',
-          Result: r.error ? `Error: ${r.error}` : (r.dropsParams ? 'DROPS PARAMS' : 'OK'),
-          'Dropped Params': (r.dropped || []).join(', '),
-          'Preserved Params': (r.preserved || []).join(', '),
-          Source: 'Active test'
-        })),
-        ...(rp.passiveDrops || []).map(r => ({
-          URL: r.url,
-          'Tested URL': '',
-          'Final URL': r.finalUrl,
-          Result: 'DROPS PARAMS',
-          'Dropped Params': r.dropped.join(', '),
-          'Preserved Params': '',
-          Source: 'Crawled redirect'
-        }))
-      ];
+      data = Analyzer.paramCheckRows(analysis.redirectParamsReport);
       sheetName = 'Redirect Param Loss';
       break;
     }
