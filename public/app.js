@@ -110,6 +110,7 @@ $$('.nav-link').forEach(link => {
     if (view === 'hacked') loadHackedView();
     if (view === 'genai') loadGenAiView();
     if (view === 'botlogs') loadBotLogsView();
+    if (view === 'mdrequests') loadMdRequestsView();
   });
 });
 
@@ -4628,6 +4629,366 @@ function renderBotLogsBotTable(r) {
 
 function botlogsToggleDetail(i) {
   const row = $('#botlogsDetail' + i);
+  if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
+}
+
+// ═══════════════ Markdown Requests ═══════════════
+// Upload the site's Markdown-negotiation log (ai-agent-requests.log) → see
+// which bots ask for the Markdown version of a page (Accept: text/markdown)
+// and which ones actually receive it instead of HTML. Like the Bot Log
+// Analyzer, results live only in this browser tab.
+let _mdreqResult = null;
+let _mdreqFilter = 'all';
+let _mdreqLoaded = false;
+const MDREQ_MD = '#a855f7';
+const MDREQ_HTML = '#94a3b8';
+
+// Example logger shown in the "how to get the data" help. String.raw keeps
+// the PHP backslashes ("\t", "\n") intact.
+const MDREQ_LOGGER_PHP = String.raw`<?php
+/**
+ * Plugin Name: AI Agent Request Logger
+ * Description: Logs which bots request a page and whether they got Markdown or HTML.
+ * Install: save as wp-content/mu-plugins/ai-agent-request-logger.php
+ */
+
+// The log contains visitor IPs — keep the file name hard to guess (or block it in .htaccess).
+define('AI_AGENT_LOG_FILE', WP_CONTENT_DIR . '/ai-agent-requests-CHANGE-ME.log');
+
+add_action('shutdown', function () {
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET' || is_admin() || wp_doing_ajax() || wp_doing_cron()) return;
+
+    $ua     = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
+    $bots   = 'GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|Claude-User|Claude-SearchBot|PerplexityBot|Perplexity-User'
+            . '|Google-Extended|GoogleOther|Googlebot|Bingbot|Amazonbot|meta-externalagent|Applebot|Bytespider|CCBot'
+            . '|DuckAssistBot|MistralAI|ExaSearchBot|curl';
+    $bot    = preg_match("/($bots)/i", $ua, $m) ? $m[1] : 'other';
+
+    // Ordinary visitors are not logged: only known bots and anyone asking for Markdown.
+    if ($bot === 'other' && stripos($accept, 'text/markdown') === false) return;
+
+    // What did the site actually send back?
+    $served = 'HTML';
+    foreach (headers_list() as $h) {
+        if (stripos($h, 'content-type:') === 0 && stripos($h, 'markdown') !== false) $served = 'MD';
+    }
+
+    $url   = (is_ssl() ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? '') . ($_SERVER['REQUEST_URI'] ?? '');
+    $clean = fn($v) => str_replace(["\t", "\r", "\n"], ' ', (string) $v);
+    $line  = implode("\t", array_map($clean, [
+        wp_date('Y-m-d H:i:s'), $served, $bot, $accept, $url, $_SERVER['REMOTE_ADDR'] ?? '', $ua,
+    ]));
+    @file_put_contents(AI_AGENT_LOG_FILE, $line . "\n", FILE_APPEND | LOCK_EX);
+});
+`;
+
+function loadMdRequestsView() {
+  const el = $('#mdrequestsContent');
+  if (_mdreqLoaded) return;
+  const muted = 'color:var(--text-muted);font-size:13px';
+  const pre = 'background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;overflow-x:auto;margin:8px 0';
+  el.innerHTML = `
+    <div class="section-card" style="border-left:4px solid ${MDREQ_MD}">
+      <h3>What this report shows</h3>
+      <p style="font-size:13px;margin-bottom:8px">
+        A site can offer AI agents a clean <strong>Markdown</strong> version of every page instead of the full HTML.
+        The agent asks for it by sending the HTTP header <code>Accept: text/markdown</code>; a site that supports it answers with
+        <code>Content-Type: text/markdown</code>, everyone else keeps getting HTML. Markdown is far smaller and easier for an
+        LLM to read, so more of your content fits into the agent's context.
+      </p>
+      <p style="${muted}">
+        Upload the site's request log and this report tells you <strong>which bots ask for Markdown</strong>,
+        <strong>which ones actually receive it</strong>, which pages they read that way, and who is still served HTML
+        (including agents that hide behind a browser user-agent).
+      </p>
+    </div>
+
+    <div class="section-card">
+      <h3>How to get the data</h3>
+      <ol style="font-size:13px;padding-left:20px;margin:0 0 12px">
+        <li style="margin:6px 0"><strong>Turn on Markdown delivery on the site.</strong> The site must answer
+          <code>Accept: text/markdown</code> requests with Markdown (a "Markdown for AI agents" plugin or snippet on
+          WordPress, or the equivalent on your platform / CDN). Without it every bot simply gets HTML and there is nothing to measure.</li>
+        <li style="margin:6px 0"><strong>Log the requests on the site.</strong> A normal Apache / Nginx access log does
+          <em>not</em> work here — it records neither the <code>Accept</code> header nor the format that was sent back.
+          The site needs a small logger that writes one line per bot request in the format below
+          (a ready-made WordPress example is included).</li>
+        <li style="margin:6px 0"><strong>Let it collect data</strong> for a few days, then download the log file from the
+          server (FTP / hosting File Manager) — typically <code>ai-agent-requests.log</code>.</li>
+        <li style="margin:6px 0"><strong>Upload it here.</strong> <code>.log</code>, <code>.txt</code> and gzipped
+          <code>.gz</code> files are accepted; you can select several files from the same site at once.</li>
+      </ol>
+
+      <details style="margin-bottom:8px"><summary style="cursor:pointer;font-size:13px;font-weight:600">Required log format</summary>
+        <p style="${muted};margin-top:8px">One request per line, 7 fields separated by <strong>tabs</strong>:</p>
+        <table style="margin:8px 0"><thead><tr><th>#</th><th>Field</th><th>Example</th></tr></thead><tbody>
+          <tr><td>1</td><td>Date &amp; time</td><td><code>2026-09-30 14:04:46</code></td></tr>
+          <tr><td>2</td><td>Format served — <code>MD</code> or <code>HTML</code></td><td><code>MD</code></td></tr>
+          <tr><td>3</td><td>Bot label (<code>other</code> if unknown)</td><td><code>ClaudeBot</code></td></tr>
+          <tr><td>4</td><td><code>Accept</code> request header</td><td><code>text/markdown,text/html;q=0.9</code></td></tr>
+          <tr><td>5</td><td>Full URL requested</td><td><code>https://example.com/pricing/</code></td></tr>
+          <tr><td>6</td><td>Client IP</td><td><code>203.0.113.7</code></td></tr>
+          <tr><td>7</td><td>User-agent</td><td><code>Mozilla/5.0 (compatible; ClaudeBot/1.0)</code></td></tr>
+        </tbody></table>
+        <pre style="${pre}">2026-09-30 14:04:46⇥MD⇥ClaudeBot⇥text/markdown,text/html;q=0.9⇥https://example.com/pricing/⇥203.0.113.7⇥Mozilla/5.0 (compatible; ClaudeBot/1.0)</pre>
+        <p style="font-size:12px;color:var(--text-muted)">(⇥ = tab character.) Bots are re-identified from the user-agent, so the label in field 3 only matters when the user-agent is not recognized.</p>
+      </details>
+
+      <details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;font-weight:600">Example logger for WordPress</summary>
+        <p style="${muted};margin-top:8px">
+          Save this as <code>wp-content/mu-plugins/ai-agent-request-logger.php</code> (create the <code>mu-plugins</code> folder if it
+          does not exist). It works alongside any Markdown plugin: it only looks at what the site sent back. The log is written to
+          <code>wp-content/</code> — change the file name first, it contains visitor IPs.
+        </p>
+        <div style="display:flex;justify-content:flex-end"><button class="btn btn-secondary" id="mdreqCopyLogger" style="font-size:12px;padding:5px 10px">Copy code</button></div>
+        <pre style="${pre};max-height:340px"><code id="mdreqLoggerCode">${esc(MDREQ_LOGGER_PHP)}</code></pre>
+        <p style="font-size:12px;color:var(--text-muted)">
+          <strong>Page cache:</strong> requests answered from a full-page cache (WP Rocket, LiteSpeed Cache, Cloudflare APO…) never reach PHP,
+          so they are not logged. Exclude bot user-agents and <code>Accept: text/markdown</code> requests from the cache — the Markdown
+          version needs that anyway, otherwise bots are handed the cached HTML.
+        </p>
+      </details>
+
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label class="btn btn-primary" for="mdreqFile">Upload log file…</label>
+        <input type="file" id="mdreqFile" accept=".log,.txt,.tsv,.gz" multiple style="display:none">
+        <span id="mdreqStatus" style="${muted}"></span>
+      </div>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:10px">Privacy: the file is analyzed and discarded — nothing is saved on the server, and the results disappear when you refresh this page.</p>
+    </div>
+    <div id="mdreqResults"></div>`;
+  $('#mdreqFile').addEventListener('change', mdreqHandleFile);
+  $('#mdreqCopyLogger').addEventListener('click', async (e) => {
+    try {
+      await navigator.clipboard.writeText(MDREQ_LOGGER_PHP);
+      e.target.textContent = 'Copied ✓';
+    } catch { e.target.textContent = 'Copy failed — select the code manually'; }
+    setTimeout(() => { e.target.textContent = 'Copy code'; }, 2500);
+  });
+  _mdreqLoaded = true;
+}
+
+async function mdreqHandleFile(e) {
+  const files = [...e.target.files];
+  if (!files.length) return;
+  const status = $('#mdreqStatus');
+  status.textContent = 'Analyzing ' + files.map(f => f.name).join(', ') + '…';
+  try {
+    const buffers = await Promise.all(files.map(f => f.arrayBuffer()));
+    const res = await fetch('/api/logs/markdown-requests?filename=' + encodeURIComponent(files.map(f => f.name).join(', ')), {
+      // Explicit Content-Type — see botlogsHandleFile.
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: new Blob(buffers)
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    status.textContent = data.totals.hits.toLocaleString() + ' requests analyzed ✓'
+      + (data.totals.skipped ? ` (${data.totals.skipped.toLocaleString()} unrecognized line(s) skipped)` : '');
+    _mdreqResult = data;
+    _mdreqFilter = 'all';
+    renderMdRequestsResults(data);
+  } catch (err) {
+    status.textContent = 'Error: ' + err.message;
+  }
+  e.target.value = '';
+}
+
+function mdreqCatBadge(r, catKey) {
+  const cat = (r.categories || {})[catKey] || { label: catKey, color: '#9ca3af' };
+  return `<span class="badge" style="background:${cat.color}22;color:${cat.color};border:1px solid ${cat.color}55">${esc(cat.label)}</span>`;
+}
+
+function mdreqModeBadge(mode) {
+  if (mode === 'preferred') return `<span class="badge" style="background:${MDREQ_MD}22;color:${MDREQ_MD};border:1px solid ${MDREQ_MD}55">Asks for Markdown</span>`;
+  if (mode === 'fallback') return '<span class="badge badge-warning">Markdown as fallback</span>';
+  return '<span class="badge badge-muted">HTML only</span>';
+}
+
+// Single-host logs show just the path; the link always goes to the full URL.
+function mdreqUrl(r, url) {
+  let shown = url;
+  if ((r.hosts || []).length === 1) {
+    try { const u = new URL(url); shown = u.pathname + u.search; } catch { /* keep as-is */ }
+  }
+  shown = prettyUrl(shown);
+  return `<a href="${esc(url)}" target="_blank" rel="noopener" style="display:inline-block;max-width:520px;white-space:normal;word-break:break-all">${esc(shown)}</a>`;
+}
+
+function mdreqIp(ip, country) {
+  const flag = country && country.length === 2
+    ? String.fromCodePoint(...[...country].map(ch => 0x1F1E6 + ch.charCodeAt(0) - 65)) + ' ' : '';
+  return `<span style="white-space:nowrap" title="${esc(country || 'Unknown country')}">${flag}${esc(ip)}</span>`;
+}
+
+function mdreqSplitBar(md, html, width) {
+  const total = md + html || 1;
+  return `<div style="display:flex;height:12px;border-radius:3px;overflow:hidden;background:var(--bg-input);width:${width || '100%'};min-width:80px" title="Markdown: ${md.toLocaleString()} · HTML: ${html.toLocaleString()}">
+    ${md ? `<div style="width:${(md / total * 100).toFixed(1)}%;background:${MDREQ_MD}"></div>` : ''}
+    ${html ? `<div style="width:${(html / total * 100).toFixed(1)}%;background:${MDREQ_HTML}"></div>` : ''}
+  </div>`;
+}
+
+function renderMdRequestsResults(r) {
+  const el = $('#mdreqResults');
+  const t = r.totals;
+  const bots = r.bots || [];
+  const mdBots = bots.filter(b => b.md > 0);
+  const fallbackBots = bots.filter(b => b.md === 0 && b.fallback > 0);
+  const range = r.dateRange && r.dateRange.from
+    ? r.dateRange.from.slice(0, 16) + ' → ' + r.dateRange.to.slice(0, 16) : '—';
+  const legend = `<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:12px">
+    <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:${MDREQ_MD};display:inline-block"></span>Served Markdown</span>
+    <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:${MDREQ_HTML};display:inline-block"></span>Served HTML</span>
+  </div>`;
+
+  let html = '';
+
+  // ── Stat cards ──
+  html += `<div class="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px">
+    <div class="stat-card"><div class="label">Logged requests</div><div class="value">${t.hits.toLocaleString()}</div></div>
+    <div class="stat-card"><div class="label">Period</div><div class="value" style="font-size:13px;line-height:2.2">${esc(range)}</div></div>
+    <div class="stat-card"><div class="label">Served as Markdown</div><div class="value" style="color:${MDREQ_MD}">${t.md.toLocaleString()} <span style="font-size:14px;font-weight:500">(${t.mdPct}%)</span></div></div>
+    <div class="stat-card"><div class="label">Served as HTML</div><div class="value">${t.html.toLocaleString()}</div></div>
+    <div class="stat-card"><div class="label">Bots receiving Markdown</div><div class="value" style="color:${MDREQ_MD}">${t.mdBots} <span style="font-size:14px;font-weight:500;color:var(--text-muted)">of ${bots.length}</span></div></div>
+    <div class="stat-card"><div class="label">Asked for Markdown, got HTML</div><div class="value ${t.preferredGotHtml > 0 ? 'danger' : 'success'}">${t.preferredGotHtml.toLocaleString()}</div></div>
+  </div>`;
+
+  // ── Plain-language summary ──
+  html += `<div class="section-card" style="border-left:4px solid ${MDREQ_MD}"><h3>Who gets the Markdown version${(r.hosts || []).length === 1 ? ' of ' + esc(r.hosts[0]) : ''}?</h3>`;
+  if (mdBots.length === 0) {
+    html += `<p style="font-size:13px">No request in this log was answered with Markdown — every bot received HTML. Either no agent asked for Markdown during this period, or Markdown delivery is not active on the site.</p>`;
+  } else {
+    html += `<p style="font-size:13px;margin-bottom:8px"><strong>${mdBots.length}</strong> requester(s) received Markdown instead of HTML:
+      ${mdBots.map(b => `<strong>${esc(b.name)}</strong> (${b.md.toLocaleString()}×)`).join(', ')}.</p>`;
+  }
+  if (t.preferredGotHtml > 0) {
+    html += `<p style="font-size:13px;color:var(--danger);margin-bottom:8px"><strong>${t.preferredGotHtml.toLocaleString()}</strong> request(s) put <code>text/markdown</code> first in the Accept header but were still served HTML — check the Markdown delivery for those pages (${bots.filter(b => b.preferredGotHtml > 0).map(b => esc(b.name)).join(', ')}).</p>`;
+  }
+  if (fallbackBots.length > 0) {
+    html += `<p style="font-size:13px;margin-bottom:8px">${fallbackBots.map(b => `<strong>${esc(b.name)}</strong>`).join(', ')} list${fallbackBots.length === 1 ? 's' : ''} <code>text/markdown</code> only as a lower-priority fallback (HTML ranked higher), so HTML was the correct answer.</p>`;
+  }
+  if (t.mdUnrequested > 0) {
+    html += `<p style="font-size:13px;margin-bottom:8px"><strong>${t.mdUnrequested.toLocaleString()}</strong> request(s) received Markdown without mentioning it in the Accept header (served by user-agent or URL rule).</p>`;
+  }
+  html += `<p style="font-size:12px;color:var(--text-muted)">Bots are identified by user-agent only — anyone can send a bot's user-agent (e.g. your own <code>curl</code> tests). Open a row below to check the IPs behind each name.</p></div>`;
+
+  // ── Per-bot table ──
+  const counts = { all: bots.length, md: mdBots.length, html: bots.length - mdBots.length };
+  const chip = (key, label) => `<button class="btn btn-secondary" data-filter="${key}" style="font-size:12px;padding:5px 10px${_mdreqFilter === key ? ';outline:2px solid var(--primary)' : ''}">${label} (${counts[key]})</button>`;
+  html += `<div class="section-card"><h3>Requesters (${bots.length})</h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px" id="mdreqChips">
+      ${chip('all', 'All')}${chip('md', 'Received Markdown')}${chip('html', 'HTML only')}
+    </div>
+    <div id="mdreqBotTable"></div>
+    ${legend}
+  </div>`;
+
+  // ── Timeline ──
+  const pts = (r.timeline && r.timeline.points) || [];
+  if (pts.length > 1) {
+    const max = Math.max(...pts.map(p => p.md + p.html));
+    html += `<div class="section-card"><h3>Requests per ${r.timeline.unit === 'hour' ? 'hour' : 'day'}</h3>
+      <div style="display:flex;align-items:flex-end;gap:2px;height:160px;padding-top:8px">
+        ${pts.map(p => `<div style="flex:1;min-width:4px;display:flex;flex-direction:column;justify-content:flex-end;border-radius:2px;overflow:hidden" title="${esc(p.label)} — Markdown: ${p.md}, HTML: ${p.html}">
+          ${p.html ? `<div style="height:${Math.max(1, p.html / max * 150).toFixed(1)}px;background:${MDREQ_HTML}"></div>` : ''}
+          ${p.md ? `<div style="height:${Math.max(2, p.md / max * 150).toFixed(1)}px;background:${MDREQ_MD}"></div>` : ''}
+        </div>`).join('')}
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-top:4px">
+        <span>${esc(pts[0].label)}</span><span>${esc(pts[Math.floor(pts.length / 2)].label)}</span><span>${esc(pts[pts.length - 1].label)}</span>
+      </div>
+      ${legend}
+    </div>`;
+  }
+
+  // ── Accept headers ──
+  html += `<div class="section-card"><h3>Accept headers — how each requester asks</h3>
+    <table><thead><tr><th>Accept header</th><th>Markdown?</th><th>Requests</th><th>Got Markdown</th><th>Sent by</th></tr></thead>
+    <tbody>${(r.accepts || []).map(a => `<tr>
+      <td style="font-size:12px"><div style="max-width:420px;white-space:normal;word-break:break-all"><code>${esc(a.accept || '(none sent)')}</code></div></td>
+      <td>${mdreqModeBadge(a.mode)}</td>
+      <td>${a.hits.toLocaleString()}</td>
+      <td>${a.md.toLocaleString()}</td>
+      <td style="font-size:12px"><div style="max-width:300px;white-space:normal">${a.bots.map(esc).join(', ')}</div></td>
+    </tr>`).join('')}</tbody></table>
+    <p style="font-size:12px;color:var(--text-muted);margin-top:10px">"Asks for Markdown" = <code>text/markdown</code> has the highest priority in the header. "Markdown as fallback" = it is listed, but HTML is ranked higher.</p>
+  </div>`;
+
+  // ── Pages served as Markdown ──
+  const mdPages = r.mdPages || [];
+  if (mdPages.length > 0) {
+    html += `<div class="section-card"><h3>Pages served as Markdown (${mdPages.length})</h3>
+      <table><thead><tr><th>Page</th><th>Markdown</th><th>HTML</th><th>Read as Markdown by</th></tr></thead>
+      <tbody>${mdPages.map(p => `<tr>
+        <td style="font-size:12px">${mdreqUrl(r, p.url)}</td>
+        <td>${p.md.toLocaleString()}</td>
+        <td>${p.html.toLocaleString()}</td>
+        <td style="font-size:12px"><div style="max-width:300px;white-space:normal">${p.bots.map(esc).join(', ')}</div></td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  // ── Latest Markdown requests ──
+  const recent = r.recentMd || [];
+  if (recent.length > 0) {
+    html += `<div class="section-card"><h3>Latest Markdown requests (${recent.length}${t.md > recent.length ? ' of ' + t.md.toLocaleString() : ''})</h3>
+      <div style="max-height:420px;overflow-y:auto">
+      <table><thead><tr><th>Time</th><th>Requester</th><th>Page</th><th>IP</th></tr></thead>
+      <tbody>${recent.map(x => `<tr>
+        <td style="font-size:12px;white-space:nowrap;color:var(--text-muted)">${esc(x.time)}</td>
+        <td style="font-size:12px;font-weight:600">${esc(x.bot)}</td>
+        <td style="font-size:12px">${mdreqUrl(r, x.url)}</td>
+        <td style="font-size:12px">${mdreqIp(x.ip, x.country)}</td>
+      </tr>`).join('')}</tbody></table></div></div>`;
+  }
+
+  el.innerHTML = html;
+  $('#mdreqChips').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-filter]');
+    if (!btn) return;
+    _mdreqFilter = btn.dataset.filter;
+    renderMdRequestsResults(_mdreqResult);
+  });
+  renderMdRequestsBotTable(r);
+}
+
+function renderMdRequestsBotTable(r) {
+  // Keep the original index so detail-row ids stay stable across filters.
+  const bots = (r.bots || []).map((b, i) => ({ b, i }))
+    .filter(({ b }) => _mdreqFilter === 'all' || (_mdreqFilter === 'md' ? b.md > 0 : b.md === 0));
+  const urlRows = (list) => list.map(p => `<tr><td style="font-size:12px">${mdreqUrl(r, p.url)}</td><td style="font-size:12px;width:70px;text-align:right">${p.hits.toLocaleString()}</td></tr>`).join('');
+  $('#mdreqBotTable').innerHTML = bots.length === 0
+    ? '<p style="color:var(--text-muted);font-size:13px">No requesters in this group.</p>'
+    : `<table><thead><tr><th>Requester</th><th>Type</th><th>Requests</th><th>Markdown</th><th>HTML</th><th style="min-width:120px">Served as</th><th>Accept header</th><th>Pages</th><th>IPs</th><th>Last Markdown</th></tr></thead>
+      <tbody>${bots.map(({ b, i }) => `<tr style="cursor:pointer" onclick="mdreqToggleDetail(${i})">
+        <td style="font-weight:600">${esc(b.name)}</td>
+        <td>${mdreqCatBadge(r, b.cat)}</td>
+        <td>${b.hits.toLocaleString()}</td>
+        <td style="font-weight:600${b.md ? ';color:' + MDREQ_MD : ''}">${b.md.toLocaleString()}</td>
+        <td>${b.html.toLocaleString()}</td>
+        <td>${mdreqSplitBar(b.md, b.html)}<div style="font-size:11px;color:var(--text-muted);margin-top:2px">${b.mdPct}% Markdown</div></td>
+        <td>${mdreqModeBadge(b.preferred ? 'preferred' : b.fallback ? 'fallback' : 'none')}${b.preferred && b.preferred < b.hits ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px">in ${b.preferred} of ${b.hits} requests</div>` : ''}</td>
+        <td>${b.uniqueUrls.toLocaleString()}</td>
+        <td>${b.uniqueIps.toLocaleString()}</td>
+        <td style="font-size:12px;color:var(--text-muted);white-space:nowrap">${esc((b.lastMd || '—').slice(0, 16))}</td>
+      </tr>
+      <tr id="mdreqDetail${i}" style="display:none"><td colspan="10" style="background:var(--bg-input)">
+        <div style="padding:10px 6px;width:0;min-width:100%;box-sizing:border-box;white-space:normal;word-break:break-word">
+          <strong style="font-size:12px">User-agent${b.uas.length > 1 ? 's' : ''}</strong>
+          ${b.uas.map(u => `<div style="font-size:11px;margin:4px 0"><code>${esc(u.ua || '(empty)')}</code> <span style="color:var(--text-muted)">× ${u.hits.toLocaleString()}</span></div>`).join('')}
+          <strong style="font-size:12px;display:block;margin-top:10px">Accept header${b.accepts.length > 1 ? 's' : ''} sent</strong>
+          ${b.accepts.map(a => `<div style="font-size:11px;margin:4px 0"><code>${esc(a.accept || '(none sent)')}</code> <span style="color:var(--text-muted)">× ${a.hits.toLocaleString()} → ${a.md.toLocaleString()} Markdown, ${(a.hits - a.md).toLocaleString()} HTML</span></div>`).join('')}
+          <strong style="font-size:12px;display:block;margin-top:10px">IPs (${b.uniqueIps.toLocaleString()})</strong>
+          <div style="font-size:12px;margin:4px 0;display:flex;gap:6px 14px;flex-wrap:wrap">${b.ips.map(x => `<span>${mdreqIp(x.ip, x.country)} <span style="color:var(--text-muted)">× ${x.hits.toLocaleString()}</span></span>`).join('')}${b.uniqueIps > b.ips.length ? `<span style="color:var(--text-muted)">+ ${(b.uniqueIps - b.ips.length).toLocaleString()} more</span>` : ''}</div>
+          ${b.mdUrls.length ? `<strong style="font-size:12px;display:block;margin-top:10px">Pages received as Markdown</strong>
+            <table style="margin-top:6px"><tbody>${urlRows(b.mdUrls)}</tbody></table>` : ''}
+          ${b.htmlUrls.length ? `<strong style="font-size:12px;display:block;margin-top:10px">Pages received as HTML</strong>
+            <table style="margin-top:6px"><tbody>${urlRows(b.htmlUrls)}</tbody></table>` : ''}
+        </div>
+      </td></tr>`).join('')}</tbody></table>`;
+}
+
+function mdreqToggleDetail(i) {
+  const row = $('#mdreqDetail' + i);
   if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
 }
 

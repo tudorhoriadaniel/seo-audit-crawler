@@ -1820,6 +1820,25 @@ app.post('/api/logs/analyze', express.raw({ type: () => true, limit: '300mb' }),
   }
 });
 
+// ─── Markdown Requests ───
+// Upload the site's Markdown-negotiation log (ai-agent-requests.log: time,
+// MD/HTML served, bot, Accept header, URL, IP, user-agent) and get back which
+// bots ask for — and receive — Markdown instead of HTML. Like the bot log
+// analysis above, nothing is stored server-side.
+const markdownLogAnalyzer = require('./lib/markdown-log-analyzer');
+
+app.post('/api/logs/markdown-requests', express.raw({ type: () => true, limit: '300mb' }), (req, res) => {
+  try {
+    if (!req.body || !req.body.length) return res.status(400).json({ error: 'No file body' });
+    const result = markdownLogAnalyzer.analyzeMarkdownLog(req.body);
+    result.filename = String(req.query.filename || '').slice(0, 200);
+    result.analyzedAt = new Date().toISOString();
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: 'Could not analyze log: ' + e.message });
+  }
+});
+
 app.get('/api/ai-visibility/history', (req, res) => {
   const domain = aiVisibility.normalizeDomain(req.query.domain);
   if (!domain) return res.status(400).json({ error: 'domain is required' });

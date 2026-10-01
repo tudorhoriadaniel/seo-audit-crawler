@@ -175,6 +175,7 @@ body {
 .nav-link[data-view="aivisibility"]    { --tab: #818cf8; }
 .nav-link[data-view="aicontent"]       { --tab: #d946ef; }
 .nav-link[data-view="genai"]           { --tab: #22d3ee; }
+.nav-link[data-view="mdrequests"]      { --tab: #a855f7; }
 .nav-link[data-view="botlogs"]         { --tab: #fb923c; }
 .nav-link[data-view="gsc"]             { --tab: #10b981; }
 .nav-link[data-view="strategy"]        { --tab: #ec4899; }
