@@ -36,6 +36,14 @@ const activeCrawls = new Map();
 
 app.use(express.json());
 
+// Private tool — keep every response (pages, redirects, API, exports) out of
+// search indexes. Deliberately no robots.txt Disallow: crawlers must be able
+// to fetch a URL to see the noindex.
+app.use((req, res, next) => {
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  next();
+});
+
 // ── Password protection ──
 const SITE_PASSWORD = process.env.SITE_PASSWORD || 'converta2026';
 const cookieParser = (req) => {
@@ -63,6 +71,7 @@ app.get('/login', (req, res) => {
   // Escape the next value for safe HTML attribute embedding.
   const nextAttr = next.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   res.send(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-DMBJN5L872"><\/script>
 <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-DMBJN5L872');<\/script>
 <title>Login - SEO Audit Crawler</title>
