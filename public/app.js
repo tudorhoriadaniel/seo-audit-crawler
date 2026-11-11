@@ -1190,38 +1190,34 @@ function sitemapDetailValue(inSitemap, url) {
   return 'Yes<div style="margin-top:6px;font-size:11px;color:var(--text-muted)">Found in:</div>' +
     sitemaps.map(s => `<div style="font-size:11px;word-break:break-all"><a href="${esc(s)}" target="_blank" rel="noopener" style="color:var(--primary)">${esc(s)}</a></div>`).join('');
 }
-function inspectUrl(url) {
+async function inspectUrl(url) {
   hideUrlMenu();
   if (!pagesData.length) return alert('No crawl data available');
-  const p = pagesData.find(pg => pg.url === url);
 
-  // Find pages linking TO this URL (deduplicated by source URL).
-  // Scan both <a href> and <img src> so image-asset URLs surface their
-  // host pages — otherwise the modal claims "no internal pages link
-  // here" even when the image is embedded on dozens of pages.
-  const inboundMap = new Map();
-  for (const page of pagesData) {
-    try {
-      const links = JSON.parse(page.links || '[]');
-      for (const link of links) {
-        if (link.href === url && link.isInternal && !inboundMap.has(page.url)) {
-          inboundMap.set(page.url, { from: page.url, anchor: link.anchor || '(no text)', nofollow: link.isNofollow, via: 'link' });
-        }
-      }
-    } catch {}
-    try {
-      const images = JSON.parse(page.images || '[]');
-      for (const img of images) {
-        if (img.src === url && !inboundMap.has(page.url)) {
-          inboundMap.set(page.url, { from: page.url, anchor: img.alt || '(no alt)', nofollow: false, via: 'image' });
-        }
-      }
-    } catch {}
-  }
-  const inboundLinks = [...inboundMap.values()];
-
+  // Show the modal at once so the click feels instant, then fill it in.
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
+  modal.innerHTML = `<div class="modal"><button class="modal-close">&times;</button>
+    <h3 style="word-break:break-all">${esc(url)}</h3>
+    <p style="color:var(--text-muted)">Loading…</p></div>`;
+  document.body.appendChild(modal);
+  modal.querySelector('.modal-close').addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+  // pagesData is the lite projection (no link/image/heading blobs), so the
+  // full row and the inbound links both come from the server. Inbound links
+  // = every <a href> / <img src> across the crawl pointing at this URL,
+  // deduplicated by source page, computed over the DB rows.
+  const [p, inboundLinks] = await Promise.all([
+    fetch(`/api/crawls/${currentCrawlId}/page?url=${encodeURIComponent(url)}`)
+      .then(r => r.ok ? r.json() : null)
+      .catch(() => null)
+      .then(row => row || pagesData.find(pg => pg.url === url) || null),
+    fetch(`/api/crawls/${currentCrawlId}/inlinks?url=${encodeURIComponent(url)}`)
+      .then(r => r.ok ? r.json() : [])
+      .catch(() => []),
+  ]);
+  if (!document.body.contains(modal)) return; // closed while loading
 
   if (!p) {
     // URL not crawled directly — just show inbound links
@@ -1295,9 +1291,7 @@ function inspectUrl(url) {
     </div>`;
   }
 
-  document.body.appendChild(modal);
   modal.querySelector('.modal-close').addEventListener('click', () => modal.remove());
-  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 }
 
 // ── Issues ──

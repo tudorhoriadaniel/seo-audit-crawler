@@ -568,6 +568,34 @@ app.get('/api/crawls/:id/page', (req, res) => {
   res.json(row);
 });
 
+// Pages that reference a URL: every <a href> and <img src> across the crawl
+// that points at it, deduplicated by source page. Matches the exact URL and
+// its trailing-slash twin so a link to /foo still shows up when the crawled
+// row is /foo/. Powers "Pages Referencing This URL" in the inspect modal.
+app.get('/api/crawls/:id/inlinks', (req, res) => {
+  const url = String(req.query.url || '');
+  if (!url) return res.status(400).json({ error: 'url query param required' });
+  const targets = new Set([url]);
+  if (url.endsWith('/')) targets.add(url.slice(0, -1)); else targets.add(url + '/');
+
+  const seen = new Map();
+  for (const row of db.getCrawlLinkBlobs(req.params.id)) {
+    if (seen.has(row.url)) continue;
+    let links = [];
+    try { links = JSON.parse(row.links || '[]'); } catch { /* malformed row */ }
+    const link = links.find(l => l && targets.has(l.href));
+    if (link) {
+      seen.set(row.url, { from: row.url, anchor: link.anchor || '(no text)', nofollow: !!link.isNofollow, via: 'link' });
+      continue;
+    }
+    let images = [];
+    try { images = JSON.parse(row.images || '[]'); } catch { /* malformed row */ }
+    const img = images.find(i => i && targets.has(i.src));
+    if (img) seen.set(row.url, { from: row.url, anchor: img.alt || '(no alt)', nofollow: false, via: 'image' });
+  }
+  res.json([...seen.values()]);
+});
+
 // Diagnostic: shows exactly what the hreflang return-link check compares, so we
 // can see whether a flagged row is a real asymmetry or a normalisation gap.
 // Recomputes from the live DB rows (not the cache) with the current analyzer.
