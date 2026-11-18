@@ -3223,88 +3223,158 @@ function renderPieChart(data, size) {
 }
 
 // ── AI Bots ──
+// Two independent layers decide whether an AI crawler gets in: robots.txt
+// rules, and what the server/firewall actually answers to its user agent.
+let _aiBotsRetesting = false;
+
+function aiBotServerCell(b) {
+  const s = b.server;
+  if (!s) return '<span style="color:var(--text-muted)">not run</span>';
+  const map = {
+    allowed: ['badge-success', 'Reachable'],
+    blocked: ['badge-danger', 'Blocked'],
+    challenged: ['badge-danger', 'Challenged'],
+    different: ['badge-warning', 'Different response'],
+    inconclusive: ['badge-warning', 'Inconclusive'],
+    not_tested: ['', 'Not tested'],
+    not_applicable: ['', 'n/a']
+  };
+  const [cls, label] = map[s.verdict] || ['', s.verdict];
+  const badge = cls ? `<span class="badge ${cls}">${label}</span>` : `<span style="color:var(--text-muted)">${label}</span>`;
+  return `${badge}<div style="font-size:11px;color:var(--text-muted);margin-top:3px;white-space:normal">${esc(s.detail || '')}</div>`;
+}
+
+function aiBotRobotsCell(b) {
+  const st = b.robotsStatus || b.status;
+  const cls = st === 'blocked' ? 'badge-danger' : st === 'partial' ? 'badge-warning' : 'badge-success';
+  const label = st === 'blocked' ? (b.robotsLabel || 'Blocked') : st === 'partial' ? 'Partially blocked' : st === 'allowed' ? 'Explicitly allowed' : 'Not mentioned';
+  const rules = (b.rules || []).map(r => `${r.type}: ${esc(r.path)}`).join('<br>');
+  return `<span class="badge ${cls}">${label}</span>${rules ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">${rules}</div>` : ''}`;
+}
+
+function aiBotsTable(bots) {
+  return `<table><thead><tr><th>Bot</th><th>Owner</th><th>Description</th><th>robots.txt</th><th>Live server test</th></tr></thead>
+    <tbody>${bots.map(b => `<tr>
+      <td><strong>${esc(b.name)}</strong></td>
+      <td>${esc(b.owner)}</td>
+      <td style="white-space:normal;max-width:260px">${esc(b.description)}</td>
+      <td style="white-space:normal">${aiBotRobotsCell(b)}</td>
+      <td style="white-space:normal;max-width:320px">${aiBotServerCell(b)}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+
+async function retestAiBots() {
+  if (_aiBotsRetesting || !currentCrawlId) return;
+  _aiBotsRetesting = true;
+  const btn = $('#aiBotsRetest'), status = $('#aiBotsRetestStatus');
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = 'Testing each bot user agent, one request per second — about a minute…';
+  try {
+    const res = await fetch('/api/crawls/' + currentCrawlId + '/ai-bot-access', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Test failed');
+    _aiBotsRetesting = false;
+    renderAiBots({ aiBotsReport: data.aiBotsReport });
+    if (data.warning && $('#aiBotsRetestStatus')) {
+      $('#aiBotsRetestStatus').style.color = 'var(--warning)';
+      $('#aiBotsRetestStatus').textContent = data.warning;
+    }
+  } catch (e) {
+    _aiBotsRetesting = false;
+    if (btn) btn.disabled = false;
+    if (status) status.textContent = 'Test failed: ' + e.message;
+  }
+}
+
 function renderAiBots(analysis) {
   const r = analysis.aiBotsReport;
-  if (!r || !r.hasRobotsTxt) {
+  if (!r || !r.bots || r.bots.length === 0) {
     $('#aibotsContent').innerHTML = `<div class="section-card" style="text-align:center;padding:40px">
       <div style="font-size:48px;margin-bottom:16px">🤖</div>
-      <h3>No robots.txt Found</h3>
-      <p style="color:var(--text-muted)">This site does not have a robots.txt file. All AI bots are allowed by default.</p>
+      <h3>No AI Bot Data</h3>
+      <p style="color:var(--text-muted)">No robots.txt was found and the live server test has not run for this crawl. Run a new crawl to test AI crawler access.</p>
     </div>`;
     return;
   }
 
+  const live = r.liveTest || { ran: false };
   const blocked = r.bots.filter(b => b.status === 'blocked');
   const partial = r.bots.filter(b => b.status === 'partial');
-  const allowed = r.bots.filter(b => b.status === 'allowed');
-  const notMentioned = r.bots.filter(b => b.status === 'not_mentioned');
+  const open = r.bots.filter(b => b.status === 'allowed' || b.status === 'not_mentioned');
+  const serverOnly = r.bots.filter(b => b.blockedBy === 'server');
+  const soft = r.bots.filter(b => b.server && b.server.verdict === 'different');
+  const unverified = open.filter(b => !b.server || ['not_tested', 'inconclusive'].includes(b.server.verdict));
+  // Did the live test actually compare anything?
+  const verified = !!live.ran && live.testedCount > 0;
+  const canRetest = !!currentCrawlId && !document.body.classList.contains('share-mode');
 
   let html = `<div class="stats-grid">
     ${statCard('AI Bots Checked', r.totalBots, '')}
     ${statCard('Blocked', blocked.length, blocked.length > 0 ? 'danger' : '')}
+    ${statCard('Blocked by Server Only', serverOnly.length, serverOnly.length > 0 ? 'danger' : '')}
     ${statCard('Partially Blocked', partial.length, partial.length > 0 ? 'warning' : '')}
-    ${statCard('Allowed / Not Mentioned', allowed.length + notMentioned.length, 'success')}
+    ${statCard(verified ? 'Not Blocked' : 'Allowed by robots.txt (server untested)', open.length, verified ? 'success' : '')}
   </div>`;
 
-  // Blocked bots
-  if (blocked.length > 0) {
+  // What was tested, and how far the result can be trusted
+  let liveNote;
+  if (!live.ran) {
+    liveNote = `<strong>Live server test not run for this crawl.</strong> The statuses below come from robots.txt only — a bot that robots.txt allows can still be refused by the server, a WAF or the hosting firewall. Run the live test to check.`;
+  } else {
+    liveNote = `<strong>Live server test:</strong> ${esc(live.url || '')} was requested once per bot user agent and compared with a normal browser request (${esc(live.baseline?.label || '')}). ${live.testedCount} bots tested${live.testedAt ? ' on ' + esc(new Date(live.testedAt).toLocaleString()) : ''}.
+      <br><span style="color:var(--text-muted)">Requests are simulations sent from this tool's server with the bot's user agent. They detect user-agent based blocking; rules that depend on the crawler's real IP address cannot be seen this way.</span>`;
+  }
+  html += `<div class="section-card" style="border-left:4px solid ${live.ran && !live.stoppedReason ? 'var(--primary, #4f46e5)' : 'var(--warning)'}">
+    <p style="font-size:13px;line-height:1.6;margin:0">${liveNote}</p>
+    ${live.stoppedReason ? `<p style="font-size:13px;line-height:1.6;margin:10px 0 0;color:var(--warning)"><strong>Test incomplete:</strong> ${esc(live.stoppedReason)}</p>` : ''}
+    ${canRetest ? `<div style="margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <button class="btn btn-primary" id="aiBotsRetest" onclick="retestAiBots()">${live.ran ? 'Re-run live test' : 'Run live test'}</button>
+      <span id="aiBotsRetestStatus" style="font-size:12px;color:var(--text-muted)"></span>
+    </div>` : ''}
+  </div>`;
+
+  if (serverOnly.length > 0) {
     html += `<div class="section-card" style="border-left:4px solid var(--danger)">
-      <h3 style="color:var(--danger)">Blocked AI Bots (${blocked.length})</h3>
-      <table><thead><tr><th>Bot</th><th>Owner</th><th>Description</th><th>Status</th><th>Rules</th></tr></thead>
-      <tbody>${blocked.map(b => `<tr>
-        <td><strong>${esc(b.name)}</strong></td>
-        <td>${esc(b.owner)}</td>
-        <td style="white-space:normal;max-width:300px">${esc(b.description)}</td>
-        <td><span class="badge badge-danger">${esc(b.statusLabel)}</span></td>
-        <td style="font-size:11px">${b.rules.map(r => `${r.type}: ${esc(r.path)}`).join('<br>')}</td>
-      </tr>`).join('')}</tbody></table></div>`;
+      <h3 style="color:var(--danger)">Blocked by the server, not by robots.txt (${serverOnly.length})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px;white-space:normal">robots.txt does not block ${serverOnly.length === 1 ? 'this bot' : 'these bots'}, but the server refuses requests carrying ${serverOnly.length === 1 ? 'its' : 'their'} user agent. The rule lives in the WAF, hosting firewall (e.g. Imunify360, ModSecurity, Cloudflare bot rules) or a security plugin — editing robots.txt will not change it.</p>
+      ${aiBotsTable(serverOnly)}</div>`;
   }
 
-  // Partially blocked
+  const robotsBlocked = blocked.filter(b => b.blockedBy !== 'server');
+  if (robotsBlocked.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--danger)">
+      <h3 style="color:var(--danger)">Blocked in robots.txt (${robotsBlocked.length})</h3>
+      ${aiBotsTable(robotsBlocked)}</div>`;
+  }
+
   if (partial.length > 0) {
     html += `<div class="section-card" style="border-left:4px solid var(--warning)">
-      <h3 style="color:var(--warning)">Partially Blocked AI Bots (${partial.length})</h3>
-      <table><thead><tr><th>Bot</th><th>Owner</th><th>Description</th><th>Status</th><th>Rules</th></tr></thead>
-      <tbody>${partial.map(b => `<tr>
-        <td><strong>${esc(b.name)}</strong></td>
-        <td>${esc(b.owner)}</td>
-        <td style="white-space:normal;max-width:300px">${esc(b.description)}</td>
-        <td><span class="badge badge-warning">${esc(b.statusLabel)}</span></td>
-        <td style="font-size:11px">${b.rules.map(r => `${r.type}: ${esc(r.path)}`).join('<br>')}</td>
-      </tr>`).join('')}</tbody></table></div>`;
+      <h3 style="color:var(--warning)">Partially Blocked in robots.txt (${partial.length})</h3>
+      ${aiBotsTable(partial)}</div>`;
   }
 
-  // Allowed / explicitly mentioned
-  if (allowed.length > 0) {
-    html += `<div class="section-card" style="border-left:4px solid var(--success)">
-      <h3 style="color:var(--success)">Explicitly Allowed AI Bots (${allowed.length})</h3>
-      <table><thead><tr><th>Bot</th><th>Owner</th><th>Description</th><th>Status</th></tr></thead>
-      <tbody>${allowed.map(b => `<tr>
-        <td><strong>${esc(b.name)}</strong></td>
-        <td>${esc(b.owner)}</td>
-        <td style="white-space:normal;max-width:300px">${esc(b.description)}</td>
-        <td><span class="badge badge-success">${esc(b.statusLabel)}</span></td>
-      </tr>`).join('')}</tbody></table></div>`;
+  if (soft.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(--warning)">
+      <h3 style="color:var(--warning)">Served a different response (${soft.length})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">Not refused outright, but these bots got a noticeably different answer than a browser — worth a manual look.</p>
+      ${aiBotsTable(soft)}</div>`;
   }
 
-  // Not mentioned
-  if (notMentioned.length > 0) {
-    html += `<div class="section-card">
-      <h3>Not Mentioned in robots.txt (${notMentioned.length})</h3>
-      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">These bots are not specifically referenced in robots.txt and are allowed by default.</p>
-      <table><thead><tr><th>Bot</th><th>Owner</th><th>Description</th><th>Status</th></tr></thead>
-      <tbody>${notMentioned.map(b => `<tr>
-        <td><strong>${esc(b.name)}</strong></td>
-        <td>${esc(b.owner)}</td>
-        <td style="white-space:normal;max-width:300px">${esc(b.description)}</td>
-        <td><span class="badge badge-success">Allowed</span></td>
-      </tr>`).join('')}</tbody></table></div>`;
+  const openRest = open.filter(b => !soft.includes(b));
+  if (openRest.length > 0) {
+    html += `<div class="section-card" style="border-left:4px solid var(${verified ? '--success' : '--border'})">
+      <h3${verified ? ' style="color:var(--success)"' : ''}>${verified ? 'Not blocked' : 'Allowed by robots.txt — server access not verified'} (${openRest.length})</h3>
+      <p style="color:var(--text-muted);margin-bottom:12px;font-size:13px">${verified
+        ? `Allowed by robots.txt${unverified.length ? `; ${unverified.length} of them could not be verified against the live server (see the last column)` : ' and reachable in the live test'}.`
+        : 'robots.txt does not block these bots, but that says nothing about the server or its firewall — the live test has not produced a result for them.'}</p>
+      ${aiBotsTable(openRest)}</div>`;
   }
 
-  // Raw robots.txt
   html += `<div class="section-card">
     <h3>Raw robots.txt</h3>
-    <pre style="background:var(--bg);padding:16px;border-radius:8px;overflow-x:auto;font-size:12px;max-height:400px;overflow-y:auto;white-space:pre-wrap">${esc(r.rawRobotsTxt)}</pre>
+    ${r.rawRobotsTxt
+      ? `<pre style="background:var(--bg);padding:16px;border-radius:8px;overflow-x:auto;font-size:12px;max-height:400px;overflow-y:auto;white-space:pre-wrap">${esc(r.rawRobotsTxt)}</pre>`
+      : '<p style="color:var(--text-muted);font-size:13px">No robots.txt found — nothing is disallowed at the robots.txt level.</p>'}
   </div>`;
 
   $('#aibotsContent').innerHTML = html;

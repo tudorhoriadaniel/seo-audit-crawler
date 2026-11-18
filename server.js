@@ -262,6 +262,7 @@ function buildCrawlAnalysis(crawlId, summary) {
     sitemapData: summary.sitemapData,
     paramCheck: summary.paramCheck,
     botParity: summary.botParity,
+    aiBotAccess: summary.aiBotAccess,
     botLabel: summary.botLabel,
     crawlStats: summary.stats
   });
@@ -292,6 +293,7 @@ function buildCrawlAnalysis(crawlId, summary) {
     sitemapData: summary.sitemapData || null,
     paramCheck: summary.paramCheck || null,
     botParity: summary.botParity || null,
+    aiBotAccess: summary.aiBotAccess || null,
     botLabel: summary.botLabel || null
   };
   return { analysis, issueMetrics, statsWithExtra };
@@ -678,6 +680,50 @@ app.get('/api/crawls/:id/analysis', (req, res) => {
   const analysis = analyzer.analyze();
   try { db.saveAnalysis(req.params.id, analysis); } catch { /* non-fatal back-fill */ }
   res.json(analysis);
+});
+
+// Re-run the live AI-crawler access test for a crawl on demand (also the way
+// to get it for crawls made before the test existed). The result is stored in
+// the crawl's stats like every other post-crawl check, and patched into the
+// cached analysis so reloads show it.
+const aiBotAccessRunning = new Set();
+app.post('/api/crawls/:id/ai-bot-access', async (req, res) => {
+  const id = req.params.id;
+  const crawl = db.getCrawl(id);
+  if (!crawl) return res.status(404).json({ error: 'Crawl not found' });
+  if (aiBotAccessRunning.has(id)) return res.status(409).json({ error: 'A test is already running for this crawl' });
+
+  let stats = {};
+  try { stats = JSON.parse(crawl.stats || '{}'); } catch { /* keep empty */ }
+  let target = (stats.aiBotAccess && stats.aiBotAccess.url) || String(crawl.url || '').trim();
+  if (target && !/^https?:\/\//i.test(target)) target = 'https://' + target;
+  try { target = new URL(target).href; } catch { return res.status(400).json({ error: 'This crawl has no testable start URL' }); }
+
+  aiBotAccessRunning.add(id);
+  try {
+    const { probeAiBotAccess } = require('./lib/ai-bots');
+    const access = await probeAiBotAccess(target, {
+      detectChallenge: (r, html) => CrawlerEngine.prototype._detectBotChallenge(r, html)
+    });
+    // A run where even the browser request is refused (this server's IP is
+    // greylisted, often by an earlier run's blocked-bot requests) tells us
+    // nothing — never let it replace an earlier conclusive result.
+    const prev = stats.aiBotAccess;
+    if (!access.baseline.ok && prev && prev.baseline && prev.baseline.ok) {
+      const kept = new Analyzer([], { robotsTxt: stats.robotsTxt, aiBotAccess: prev })._aiBotsReport();
+      return res.json({ aiBotsReport: kept, warning: `${access.stoppedReason} The previous results were kept — try again in 10–15 minutes.` });
+    }
+    stats.aiBotAccess = access;
+    db.updateCrawlStats(id, stats);
+    const report = new Analyzer([], { robotsTxt: stats.robotsTxt, aiBotAccess: access })._aiBotsReport();
+    const cached = db.getAnalysis(id);
+    if (cached) { cached.aiBotsReport = report; try { db.saveAnalysis(id, cached); } catch { /* non-fatal */ } }
+    res.json({ aiBotsReport: report });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Test failed' });
+  } finally {
+    aiBotAccessRunning.delete(id);
+  }
 });
 
 // ── Public share endpoints ──────────────────────────────────────────────
@@ -2346,6 +2392,13 @@ app.get('/api/crawls/:id/export-section/:section', (req, res) => {
       }));
       if (secRows.length > 0) addSheet(wb2, secRows, 'Security Headers');
 
+      // AI bot access: robots.txt + live server test
+      if (_aib.bots?.length > 0) addSheet(wb2, _aib.bots.map(b => ({
+        Bot: b.name, Owner: b.owner, Status: b.statusLabel,
+        'robots.txt': b.robotsLabel || '',
+        'Live server test': b.server ? (b.server.verdict === 'not_applicable' ? 'n/a' : b.server.verdict.replace('_', ' ')) : 'not run',
+        'Server response': b.server?.detail || ''
+      })), 'AI Bot Access');
       const buf2 = XLSX.write(wb2, { type: 'buffer', bookType: 'xlsx' });
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename=full-seo-audit.xlsx');
